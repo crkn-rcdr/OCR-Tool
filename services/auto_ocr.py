@@ -1,0 +1,58 @@
+import cv2
+from utils.image_checks import analyze_quality
+from services.ocr_vl import run_paddlevl_job
+from services.ocr_pp import run_ocr_job
+from services.constants import IMAGE_EXTENSIONS
+from pathlib import Path
+
+def iter_image_files(input_path):
+    for file in input_path.iterdir():
+        if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS:
+            yield file
+        elif file.is_dir():
+            yield from iter_image_files(file)
+
+def run_auto_job(image_input_folder, output_root, opt):
+    input_path = Path(image_input_folder)
+    output_root = Path(output_root)
+  
+    output_base = output_root / input_path.name
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    messages = []
+    found = False
+
+    for file in iter_image_files(input_path):
+        found = True
+        select = "PP-StructureV3"
+
+        img = cv2.imread(str(file))
+        quality_result = analyze_quality(img)
+
+        relative_path = file.parent.relative_to(input_path)
+
+        if relative_path == Path("."):
+            file_output_folder = output_base / file.stem
+        else:
+            file_output_folder = output_base / relative_path / file.stem
+
+        file_output_folder.mkdir(parents=True, exist_ok=True)
+
+        if quality_result.has_skew or quality_result.has_warping or quality_result.has_illumination_problem:
+            select = "PaddleVL"
+            messages.append(f"{file.name} using PaddleVL for OCR.")
+            yield "\n".join(messages)
+            for msg in run_paddlevl_job(file, file_output_folder, opt,select):
+                messages.append(msg)
+                yield "\n".join(messages)
+           
+        else:
+            messages.append(f"{file.name} using Paddle Structure for OCR.")
+            yield "\n".join(messages)
+            for msg in run_ocr_job(file,file_output_folder, opt,select):
+                messages.append(msg)
+                yield "\n".join(messages)
+
+    if not found:
+        yield "No supported image files found in the selected folder. "
+           
