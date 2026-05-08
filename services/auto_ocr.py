@@ -32,9 +32,9 @@ def run_auto_job(image_input_folder, output_root, opt):
         relative_path = file.parent.relative_to(input_path)
 
         if relative_path == Path("."):
-            file_output_folder = output_base / file.stem
+            file_output_folder = output_base 
         else:
-            file_output_folder = output_base / relative_path / file.stem
+            file_output_folder = output_base / relative_path 
 
         file_output_folder.mkdir(parents=True, exist_ok=True)
 

@@ -65,6 +65,8 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
                     yield "\n".join(messages)
 
+                    generate_pdf_and_alto(json_path, input_path, method, select)
+           
             except Exception as e: 
                 error_logger.error(
                     f"Error processing {input_path.name}:{str(e)}",
@@ -109,6 +111,8 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         messages.append(f"{img.name} created and saved in {out_dir}")
                         yield "\n".join(messages)
 
+                        generate_pdf_and_alto(json_path, img, method, select)
+
                 except Exception as e: 
                     error_logger.error(
                         f"Error processing {img.name}:{str(e)}",
@@ -126,7 +130,7 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Successful JSON files: {success_count}")
         summary_logger.info(f"Total Failed JSON files: {failure_count}")
 
-        generate_pdf_and_alto(output_base, input_path, method,select)
+        #generate_pdf_and_alto(output_base, input_path, method,select)
       
 
         yield "OCR job completed successfully."

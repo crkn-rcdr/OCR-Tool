@@ -10,11 +10,12 @@ from services.ocr_logger import OCRLoggerManger
 
 RUN_LOCK = threading.Lock()
 
+
 def run_ocr_job(input_path, output_root, opt,select=None):
-    
+
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
-    
+
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
         return
@@ -30,7 +31,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             if input_path.suffix.lower() not in IMAGE_EXTENSIONS:
                 yield f"Input path is a file but not a supported image type: {input_path}"
                 return
-            
+
             input_base = input_path.parent
             output_base = output_root
 
@@ -40,24 +41,30 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                # Running pp-structureV3 inference on the single file input
                 output = engine.infer(str(input_path), opt)
 
                 for res in output:
                     res.save_to_json(save_path=str(out_dir))
 
                 json_file = out_dir / f"{input_path.stem}_res.json"
-                json_file.rename(out_dir / f"{input_path.stem}.json")
+                final_json = out_dir / f"{input_path.stem}.json"  
+                json_file.rename(final_json)  
+                #json_file.rename(out_dir / f"{input_path.stem}.json")
 
                 success_count += 1
                 messages.append(f"{input_path.name} created and saved in {out_dir}")
 
+                # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
+                generate_pdf_and_alto(final_json, input_path, method, select)
+
+                yield "\n".join(messages)
+
             except Exception as e:
                 error_logger.error(
-                    f"Error processing {input_path.name}:{str(e)}",
+                    f"Error processing {input_path.name}: {str(e)}",
                     exc_info=True
                 )
-                failure_count += 1  
+                failure_count += 1
                 messages.append(f"Error processing {input_path.name}: {str(e)}")
                 yield "\n".join(messages)
 
@@ -65,35 +72,70 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             input_base = input_path
             output_base = output_root / input_path.name
 
+            # Group by the subfolder where the images are located.
+            folders = {}
+
             for img in input_path.rglob("*"):
-                if not (img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS):
-                    continue
-                try:
-                    rel = img.relative_to(input_base)
+                if img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS:
+                    folders.setdefault(img.parent, []).append(img)
 
-                    out_dir = output_base / rel.parent
-                    out_dir.mkdir(parents=True, exist_ok=True)
+            # OCR for each subfolder
+            for folder, images in folders.items():
+                rel_folder = folder.relative_to(input_base)
+                out_dir = output_base / rel_folder
+                out_dir.mkdir(parents=True, exist_ok=True)
 
-                    output = engine.infer(str(img), opt)
+                folder_success = 0
+                folder_failure = 0
 
-                    for res in output:
-                        res.save_to_json(save_path=str(out_dir))
-                    
-                    json_file = out_dir / f"{img.stem}_res.json"
-                    json_file.rename(out_dir / f"{img.stem}.json")
+                messages.append(f"Start processing folder: {folder}")
+                yield "\n".join(messages)
 
-                    success_count += 1
-                    messages.append(f"{img.name} created and saved in {out_dir}")
-                    yield "\n".join(messages)
+                for img in images:
+                    try:
+                        output = engine.infer(str(img), opt)
 
-                except Exception as e:
-                    error_logger.error(
-                        f"Error processing {img.name}:{str(e)}",
-                        exc_info=True
-                    )
-                    failure_count += 1  
-                    messages.append(f"Error processing {img.name}: {str(e)}")
-                    yield "\n".join(messages)   
+                        for res in output:
+                            res.save_to_json(save_path=str(out_dir))
+
+                        json_file = out_dir / f"{img.stem}_res.json"
+                        json_file.rename(out_dir / f"{img.stem}.json")
+
+                        success_count += 1
+                        folder_success += 1
+
+                        messages.append(f"{img.name} created and saved in {out_dir}")
+                        yield "\n".join(messages)
+
+                    except Exception as e:
+                        error_logger.error(
+                            f"Error processing {img.name}: {str(e)}",
+                            exc_info=True
+                        )
+                        failure_count += 1
+                        folder_failure += 1
+
+                        messages.append(f"Error processing {img.name}: {str(e)}")
+                        yield "\n".join(messages)
+
+                # Once the OCR process in the current subfolder is complete, immediately generate PDF/ALTO.
+                if folder_success > 0:
+                    try:
+                        generate_pdf_and_alto(out_dir, folder, method,select)
+
+                        messages.append(f"PDF/ALTO generated for folder: {folder.name}")
+                        yield "\n".join(messages)
+
+                    except Exception as e:
+                        error_logger.error(
+                            f"Error generating PDF/ALTO for folder {folder}: {str(e)}",
+                            exc_info=True
+                        )
+                        messages.append(
+                            f"Error generating PDF/ALTO for folder {folder.name}: {str(e)}"
+                        )
+                        yield "\n".join(messages)
+
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
             return
@@ -102,15 +144,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Successful JSON files: {success_count}")
         summary_logger.info(f"Total Failed JSON files: {failure_count}")
 
-        generate_pdf_and_alto(output_base, input_path, method,select)
-
-
         yield "OCR job completed successfully."
 
     finally:
         RUN_LOCK.release()
-            
-       
-      
-
-        
