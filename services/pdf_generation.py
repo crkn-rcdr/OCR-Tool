@@ -494,10 +494,10 @@ def fit_textbox(
             text,
             fontname=fontname,
             fontsize=fontsize,
-            render_mode=0,
+            render_mode=3,
             overlay=True,
             align=0,
-            color=(1, 0, 0)
+           
         )
 
         if rc is not None and rc >= 0:
@@ -514,9 +514,9 @@ def fit_textbox(
         text=text,
         fontname=fontname,
         fontsize=min_fontsize,
-        render_mode=0,
+        render_mode=3,
         overlay=True,
-        color=(1, 0, 0)
+      
     )
 
     return True
@@ -668,9 +668,9 @@ def fit_paragraph_textbox(
             text=line,
             fontname=fontname,
             fontsize=fontsize,
-            render_mode=0,
+            render_mode=3,
             overlay=True,
-            color=(1, 0, 0)
+            
         )
 
         written_count += 1

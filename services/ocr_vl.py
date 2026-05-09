@@ -8,12 +8,14 @@ import requests
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
+from services.txt_generation import generate_txt_file 
 
 RUN_LOCK = threading.Lock()
 BASE_URL = "http://127.0.0.1:8080"
 
 def run_paddlevl_job(input_path, output_root, opt,select=None):
     payload = {}
+    generate_text_file = opt.get("generate_text_file", False)
    
     for key,value in opt.items():
         if key != "method" and value is not None:
@@ -64,8 +66,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                     success_count += 1
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
                     yield "\n".join(messages)
-
-                    generate_pdf_and_alto(json_path, input_path, method, select)
+        
+                    if generate_text_file:
+                        txt_path = generate_txt_file(json_path)
+                        messages.append(f"Text file created: {txt_path}")
+                        yield "\n".join(messages)
+                    else:
+                        generate_pdf_and_alto(json_path, input_path, method, select)
+                        yield "\n".join(messages)
            
             except Exception as e: 
                 error_logger.error(
@@ -111,7 +119,13 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         messages.append(f"{img.name} created and saved in {out_dir}")
                         yield "\n".join(messages)
 
-                        generate_pdf_and_alto(json_path, img, method, select)
+                        if generate_text_file:
+                            txt_path = generate_txt_file(json_path)
+                            messages.append(f"Text file created: {txt_path}")
+                            yield "\n".join(messages)
+                        else:
+                            generate_pdf_and_alto(json_path, img, method, select)
+                            yield "\n".join(messages)
 
                 except Exception as e: 
                     error_logger.error(

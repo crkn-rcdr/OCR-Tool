@@ -7,6 +7,7 @@ import traceback
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
+from services.txt_generation import generate_txt_file 
 
 RUN_LOCK = threading.Lock()
 
@@ -15,6 +16,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
+    generate_text_file = opt.get("generate_text_file", False)
+    lang = opt.get("lang", "None")
 
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
@@ -49,15 +52,19 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 json_file = out_dir / f"{input_path.stem}_res.json"
                 final_json = out_dir / f"{input_path.stem}.json"  
                 json_file.rename(final_json)  
-                #json_file.rename(out_dir / f"{input_path.stem}.json")
 
                 success_count += 1
                 messages.append(f"{input_path.name} created and saved in {out_dir}")
 
-                # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
-                generate_pdf_and_alto(final_json, input_path, method, select)
+                if generate_text_file:
+                    txt_path = generate_txt_file(final_json)
+                    messages.append(f"Text file created: {txt_path}")
+                    yield "\n".join(messages)
 
-                yield "\n".join(messages)
+                else:
+                    # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
+                    generate_pdf_and_alto(final_json, input_path, method, select)
+                    yield "\n".join(messages)
 
             except Exception as e:
                 error_logger.error(
@@ -67,6 +74,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 failure_count += 1
                 messages.append(f"Error processing {input_path.name}: {str(e)}")
                 yield "\n".join(messages)
+
+                summary_logger.info(f"{folder.name} failed during PDF/ALTO generation")
 
         elif input_path.is_dir():
             input_base = input_path
@@ -121,10 +130,15 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 # Once the OCR process in the current subfolder is complete, immediately generate PDF/ALTO.
                 if folder_success > 0:
                     try:
-                        generate_pdf_and_alto(out_dir, folder, method,select)
-
-                        messages.append(f"PDF/ALTO generated for folder: {folder.name}")
-                        yield "\n".join(messages)
+                        if generate_text_file:
+                            for json_file in out_dir.glob("*.json"):
+                                txt_path = generate_txt_file(json_file)
+                                messages.append(f"Text file created: {txt_path}")
+                                yield "\n".join(messages)
+                        else:
+                            generate_pdf_and_alto(out_dir, folder, method, select)
+                            messages.append(f"PDF/ALTO generated for folder: {folder.name}")
+                            yield "\n".join(messages)
 
                     except Exception as e:
                         error_logger.error(
@@ -136,6 +150,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         )
                         yield "\n".join(messages)
 
+                        summary_logger.info(f"{folder.name} failed during PDF/ALTO generation")
+
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
             return
@@ -144,7 +160,10 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Successful JSON files: {success_count}")
         summary_logger.info(f"Total Failed JSON files: {failure_count}")
 
-        yield "OCR job completed successfully."
+        if generate_text_file:
+            yield "OCR Completed, please check json and text files at your output folder"
+        else:
+            yield "OCR Completed, please check pdf and alto files at your output folder"
 
     finally:
         RUN_LOCK.release()

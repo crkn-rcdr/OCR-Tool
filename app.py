@@ -128,7 +128,8 @@ def submit_config(
     use_doc_orientation_classify,
     use_doc_unwarping,
     use_textline_orientation,
-    use_layout_detection
+    use_layout_detection,
+    generate_text_file
 ):
     if not image_input_folder:
         yield "Please select an image input folder."
@@ -145,6 +146,7 @@ def submit_config(
         "method": method,
         "use_doc_orientation_classify": use_doc_orientation_classify,
         "use_doc_unwarping": use_doc_unwarping,
+        "generate_text_file": generate_text_file
     }
 
     yield "Downloading models... OCR will start after the download is complete."
@@ -212,6 +214,11 @@ with gr.Blocks() as demo:
             value=False
         )
 
+        generate_text_file = gr.Checkbox(
+            label='Generate a text file with OCR results for each image.',
+            value=False
+        )
+
     with gr.Column(visible=False) as paddlevl_options:
         use_layout_detection = gr.Checkbox(
             label='Use layout detection during inference.',
@@ -249,6 +256,7 @@ with gr.Blocks() as demo:
     use_doc_unwarping,
     use_textline_orientation,
     use_layout_detection,
+    generate_text_file,
     ]
 
     method_radio.change(
@@ -283,7 +291,8 @@ with gr.Blocks() as demo:
         use_doc_orientation_classify,
         use_doc_unwarping,
         use_textline_orientation,
-        use_layout_detection
+        use_layout_detection,
+        generate_text_file
     ],
     outputs=output
     ).then(
