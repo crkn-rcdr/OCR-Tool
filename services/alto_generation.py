@@ -63,6 +63,7 @@ def generate_alto(
     image: Path,
     dpi: int,
     output_dir: Path = Path("."),
+    lang: str | None = None
 ) -> Path:
     """
     Generate an ALTO XML file from OCR JSON and an image file.
@@ -100,6 +101,7 @@ def generate_alto(
     Raises:
         SystemExit: If OCR data is missing or saving fails.
     """
+
     with open(json_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -158,7 +160,7 @@ def generate_alto(
                 {
                     "text": text,
                     "box": poly, 
-                   
+                    
                 }
                 )
      
@@ -255,7 +257,7 @@ def generate_alto(
             "WIDTH": str(block_width),
             "HEIGHT": str(block_height),
             "{http://www.w3.org/1999/xlink}type": "simple",
-            #"language": "zh",
+            
         },
     )
 
@@ -307,6 +309,7 @@ def generate_alto(
             string_vpos = min(ys) * scale
             string_width = (max(xs) - min(xs)) * scale
             string_height = (max(ys) - min(ys)) * scale
+
         attrs = {
             "CONTENT": text,
             "HPOS": str(string_hpos),
@@ -315,6 +318,9 @@ def generate_alto(
             "HEIGHT": str(string_height),
         }
 
+        if lang:
+            attrs["LANG"] = lang
+            
         if wc is not None:
             attrs["WC"] = str(wc)
 

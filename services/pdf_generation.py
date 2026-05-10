@@ -912,7 +912,7 @@ def write_block(page, block, font_objects):
     return False
 
 
-def build_pdf(json_path, input_dir, method, select):
+def build_pdf(json_path, input_dir, method, lang, select):
     """Build one searchable PDF and one ALTO XML file from one OCR JSON."""
     json_path = Path(json_path)
 
@@ -1007,6 +1007,7 @@ def build_pdf(json_path, input_dir, method, select):
             image=image_path,
             dpi=300,
             output_dir=json_path.parent,
+            lang=lang,
         )
 
         output_xml = json_path.parent / f"{json_path.stem}.xml"
@@ -1023,8 +1024,9 @@ def build_pdf(json_path, input_dir, method, select):
     return result
 
 
-def main(output_dir, input_dir, method, select=None, log_dir="logs", recursive=True):
+def main(output_dir, input_dir, method, lang, select=None, log_dir="logs", recursive=True):
     """Process all OCR JSON files and generate PDFs plus ALTO XML files."""
+
     summary_logger, error_logger, summary_log_path, error_log_path = (
         OCRLoggerManger.setup(method)
     )
@@ -1040,6 +1042,7 @@ def main(output_dir, input_dir, method, select=None, log_dir="logs", recursive=T
         build_pdf,
         input_dir=input_dir,
         method=method,
+        lang=lang,
         select=select,
     )
 

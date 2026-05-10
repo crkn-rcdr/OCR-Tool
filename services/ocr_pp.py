@@ -18,7 +18,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
     generate_text_file = opt.get("generate_text_file", False)
     lang = opt.get("lang", "None")
-
+   
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
         return
@@ -63,7 +63,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                 else:
                     # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
-                    generate_pdf_and_alto(final_json, input_path, method, select)
+                    generate_pdf_and_alto(final_json, input_path, method, lang,select)
                     yield "\n".join(messages)
 
             except Exception as e:
@@ -136,7 +136,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 messages.append(f"Text file created: {txt_path}")
                                 yield "\n".join(messages)
                         else:
-                            generate_pdf_and_alto(out_dir, folder, method, select)
+                            generate_pdf_and_alto(out_dir, folder, method, lang,select)
                             messages.append(f"PDF/ALTO generated for folder: {folder.name}")
                             yield "\n".join(messages)
 
