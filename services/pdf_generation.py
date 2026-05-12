@@ -1008,6 +1008,7 @@ def build_pdf(json_path, input_dir, method, lang, select):
             dpi=300,
             output_dir=json_path.parent,
             lang=lang,
+            method=method,
         )
 
         output_xml = json_path.parent / f"{json_path.stem}.xml"
@@ -1024,7 +1025,7 @@ def build_pdf(json_path, input_dir, method, lang, select):
     return result
 
 
-def main(output_dir, input_dir, method, lang, select=None, log_dir="logs", recursive=True):
+def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recursive=True):
     """Process all OCR JSON files and generate PDFs plus ALTO XML files."""
 
     summary_logger, error_logger, summary_log_path, error_log_path = (

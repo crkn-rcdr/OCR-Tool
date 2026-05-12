@@ -10,10 +10,14 @@ from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
 
+import services.ocr_pp as ocr_pp
+
 RUN_LOCK = threading.Lock()
 BASE_URL = "http://127.0.0.1:8080"
 
+
 def run_paddlevl_job(input_path, output_root, opt,select=None):
+    ocr_pp.STOP_FLAG = False
     payload = {}
     generate_text_file = opt.get("generate_text_file", False)
    
@@ -91,6 +95,9 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
             for img in input_path.rglob("*"):
                 if not (img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS):
                     continue
+
+                if ocr_pp.STOP_FLAG:
+                    return
                 
                 try:
                     rel = img.relative_to(input_base)

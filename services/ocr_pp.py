@@ -10,7 +10,13 @@ from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
 
 RUN_LOCK = threading.Lock()
+# Global flag to signal stopping the OCR process
+STOP_FLAG = False
 
+def stop_ocr():
+    global STOP_FLAG
+    STOP_FLAG = True
+   
 
 def run_ocr_job(input_path, output_root, opt,select=None):
 
@@ -24,6 +30,9 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         return
 
     try:
+        global STOP_FLAG
+        STOP_FLAG = False
+
         output_root.mkdir(parents=True, exist_ok=True)
 
         success_count = 0
@@ -101,6 +110,9 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 yield "\n".join(messages)
 
                 for img in images:
+                    if STOP_FLAG:
+                        return
+
                     try:
                         output = engine.infer(str(img), opt)
 
@@ -163,6 +175,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         if generate_text_file:
             yield "OCR Completed, please check json and text files at your output folder"
         else:
+            
             yield "OCR Completed, please check pdf and alto files at your output folder"
 
     finally:

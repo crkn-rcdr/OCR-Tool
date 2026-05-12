@@ -4,7 +4,7 @@ from tkinter import filedialog
 
 from pathlib import Path
 
-from services.ocr_pp import run_ocr_job  
+from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
 
@@ -239,8 +239,9 @@ with gr.Blocks() as demo:
 
         
            
-
-    submit_btn = gr.Button("Run OCR")
+    with gr.Row():
+        submit_btn = gr.Button("Run OCR")
+        stop_btn = gr.Button("Stop OCR",interactive=False)
 
     output = gr.Textbox(label="OCR Result", lines=20)
 
@@ -277,10 +278,27 @@ with gr.Blocks() as demo:
         outputs=output_folder
     )
 
+
+    def before_run():
+        return [
+            *[gr.update(interactive=False) for _ in ui_components],
+            gr.update(interactive=True)
+        ]
+
+    def after_run():
+        return [
+            *[gr.update(interactive=True) for _ in ui_components],
+            gr.update(interactive=False)
+        ]
+
+    def stop_clicked():
+        stop_ocr()
+        return "Stopping OCR after current image finishes..."
+
     submit_btn.click(
-    fn=lambda: set_ui_interactive(False),
+    fn=before_run,
     inputs=None,
-    outputs=ui_components
+    outputs=[*ui_components, stop_btn]
 ).then(
     fn=submit_config,
     inputs=[
@@ -296,9 +314,19 @@ with gr.Blocks() as demo:
     ],
     outputs=output
     ).then(
-    fn=lambda: set_ui_interactive(True),
+    fn=after_run,
     inputs=None,
-    outputs=ui_components
+    outputs=[*ui_components, stop_btn]
+    )
+
+    stop_btn.click(
+        fn=stop_clicked,
+        inputs=None,
+        outputs=output
+    ).then(
+        fn=lambda: gr.update(interactive=False),
+        inputs=None,
+        outputs=stop_btn
     )
 
 demo.launch(

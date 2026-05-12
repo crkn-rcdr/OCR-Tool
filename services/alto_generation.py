@@ -63,7 +63,8 @@ def generate_alto(
     image: Path,
     dpi: int,
     output_dir: Path = Path("."),
-    lang: str | None = None
+    lang: str | None = None,
+    method: str | None = None,
 ) -> Path:
     """
     Generate an ALTO XML file from OCR JSON and an image file.
@@ -106,6 +107,7 @@ def generate_alto(
         data = json.load(f)
 
     items = []
+    select_paddlevl = False
 
     # OCR items are stored in the "data" field.
     if "overall_ocr_res" in data:
@@ -150,6 +152,7 @@ def generate_alto(
 
     else:
         parsing_list =  data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
+        select_paddlevl =  True
         items = []
 
         for block in  parsing_list:
@@ -318,7 +321,7 @@ def generate_alto(
             "HEIGHT": str(string_height),
         }
 
-        if lang:
+        if lang and not select_paddlevl:
             attrs["LANG"] = lang
             
         if wc is not None:
