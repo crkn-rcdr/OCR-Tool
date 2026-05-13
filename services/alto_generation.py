@@ -117,9 +117,6 @@ def generate_alto(
         rec_scores = ocr.get("rec_scores", [])
         rec_polys = ocr.get("rec_polys", [])
 
-        if not (len(rec_texts) == len(rec_scores) == len(rec_polys)):
-            raise ValueError("OCR arrays length mismatch in overall_ocr_res.")
-
         items = []
 
         for text, score, poly in zip(rec_texts, rec_scores, rec_polys):
@@ -137,9 +134,9 @@ def generate_alto(
                 }
             )
     elif "rec_texts" in data:
-        rec_texts = data.get("rec_texts")
-        rec_scores = data.get("rec_scores")
-        rec_polys = data.get("rec_polys")
+        rec_texts = data.get("rec_texts", [])
+        rec_scores = data.get("rec_scores", [])
+        rec_polys = data.get("rec_polys", [])
 
         for text, score, poly in zip(rec_texts, rec_scores, rec_polys):
             items.append(
@@ -151,28 +148,26 @@ def generate_alto(
             )
 
     else:
-        parsing_list =  data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
-        select_paddlevl =  True
-        items = []
+        parsing_res_list =  data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
+        if len(parsing_res_list) == 0:
+            items = []
+        else:
+            select_paddlevl =  True
+            for block in  parsing_res_list:
+                text = block.get("block_content","")
+                poly = block.get("block_bbox")
 
-        for block in  parsing_list:
-            text = block.get("block_content","")
-            poly = block.get("block_bbox")
-
-            items.append(
-                {
-                    "text": text,
-                    "box": poly, 
-                    
-                }
-                )
-     
+                items.append(
+                    {
+                        "text": text,
+                        "box": poly, 
+                        
+                    }
+                    )
+        
 
     # Use fileName from JSON if available; otherwise fall back to image name.
     file_name = data.get("fileName", image.name)
-
-    if not items:
-        raise ValueError("No OCR items found in JSON data.")
 
     # Get original image dimensions in pixels.
     width, height = get_image_dimensions(image)
@@ -184,15 +179,21 @@ def generate_alto(
 
     # Extract all OCR boxes for calculating the global text block.
     boxes = [item["box"] for item in items]
+    if boxes:
+        # Calculate the overall text block that contains all OCR strings.
+        hpos, vpos, block_width, block_height = calculate_textblock(boxes)
 
-    # Calculate the overall text block that contains all OCR strings.
-    hpos, vpos, block_width, block_height = calculate_textblock(boxes)
+        # Convert page and text block coordinates from pixels to inch1200.
+        hpos *= scale
+        vpos *= scale
+        block_width *= scale
+        block_height *= scale
+    else:
+        hpos = 0
+        vpos = 0
+        block_width = 0
+        block_height = 0
 
-    # Convert page and text block coordinates from pixels to inch1200.
-    hpos *= scale
-    vpos *= scale
-    block_width *= scale
-    block_height *= scale
     page_width = width * scale
     page_height = height * scale
 

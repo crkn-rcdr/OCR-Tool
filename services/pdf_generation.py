@@ -183,9 +183,10 @@ def extract_ocr_data(data):
     polys = []
 
     if "overall_ocr_res" in data:
-        ocr_res = data["overall_ocr_res"]
-        texts = ocr_res["rec_texts"]
-        polys = ocr_res["rec_polys"]
+        ocr_res = data.get("overall_ocr_res") or {}
+
+        texts = ocr_res.get("rec_texts") or []
+        polys = ocr_res.get("rec_polys") or []
 
     elif "result" in data:
         parsing_res_list = data["result"]["layoutParsingResults"][0][
@@ -203,8 +204,8 @@ def extract_ocr_data(data):
             polys.append(poly)
 
     elif "rec_texts" in data:
-        texts = data.get("rec_texts")
-        polys = data.get("rec_polys")
+        texts = data.get("rec_texts") or []
+        polys = data.get("rec_polys") or []
 
     if len(texts) != len(polys):
         raise ValueError(
