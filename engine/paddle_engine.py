@@ -27,15 +27,20 @@ class PaddleEngine:
             tuple: A tuple of OCR initialization parameters.
         """
        
-        return (
-            opt.get("method"),
-            opt.get("use_doc_orientation_classify", False),
-            opt.get("use_doc_unwarping", False),
-            opt.get("use_textline_orientation", False),
-            opt.get("lang"),
-            
-            
-        )
+        return {
+            "method": opt.get("method"),
+            "use_doc_orientation_classify": opt.get(
+                "use_doc_orientation_classify", False
+            ),
+            "use_doc_unwarping": opt.get(
+                "use_doc_unwarping", False
+            ),
+            "use_textline_orientation": opt.get(
+                "use_textline_orientation", False
+            ),
+            "lang": opt.get("lang"),
+            "text_det_thresh": opt.get("text_det_thresh"),
+        }
 
     def single_instance_engine(self,opt:dict):
         """
@@ -48,22 +53,21 @@ class PaddleEngine:
             opt (dict): OCR configuration options.
         """
         params = self._create_params(opt)
-        method = params[0]
+        method = params["method"]
 
         with self._lock:
             if self.pipeline is not None and params == self._init_params:
                 return False
         
         kwargs = {
-            "use_doc_orientation_classify": params[1],
-            "use_doc_unwarping": params[2],
-            "use_textline_orientation": params[3],
-           
-            #"use_chart_recognition": False,
+            "use_doc_orientation_classify": params["use_doc_orientation_classify"],
+            "use_doc_unwarping": params["use_doc_unwarping"],
+            "use_textline_orientation": params["use_textline_orientation"],
+            "text_det_thresh": params["text_det_thresh"],
         }
 
-        if params[4]:
-            kwargs["lang"] = params[4]
+        if params["lang"] is not None:
+            kwargs["lang"] = params["lang"]
         print("[DEBUG] init kwargs:", kwargs, flush=True)
         
         if method == "PP-OCRv5":

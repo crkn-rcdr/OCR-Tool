@@ -129,7 +129,8 @@ def submit_config(
     use_doc_unwarping,
     use_textline_orientation,
     use_layout_detection,
-    generate_text_file
+    generate_text_file,
+    text_det_thresh,
 ):
     if not image_input_folder:
         yield "Please select an image input folder."
@@ -151,10 +152,12 @@ def submit_config(
 
     yield "Downloading models... OCR will start after the download is complete."
 
+    # Start to run the OCR job based on the selected method and options
     if method in ["PP-StructureV3","PP-OCRv5"]:
         opt.update({
             "lang": language,
             "use_textline_orientation": use_textline_orientation,
+            "text_det_thresh": text_det_thresh
         })
       
         for message in run_ocr_job(input_path, output_root, opt):
@@ -173,6 +176,7 @@ def submit_config(
             "use_layout_detection": use_layout_detection,
             "lang": language,
             "use_textline_orientation": use_textline_orientation,
+            "text_det_thresh": text_det_thresh
         })
         for message in run_auto_job(input_path, output_root, opt):
             yield message
@@ -232,6 +236,14 @@ with gr.Blocks() as demo:
             value=None
         )
         
+        text_det_thresh = gr.Slider(
+        minimum=0.0,
+        maximum=1.0,
+        value=0.3,
+        step=0.01,
+        label="Text Detection Threshold"
+        )
+
         use_textline_orientation = gr.Checkbox(
             label='Use textline orientation classification during inference.',
             value=False
@@ -258,6 +270,7 @@ with gr.Blocks() as demo:
     use_textline_orientation,
     use_layout_detection,
     generate_text_file,
+    text_det_thresh,
     ]
 
     method_radio.change(
@@ -310,7 +323,8 @@ with gr.Blocks() as demo:
         use_doc_unwarping,
         use_textline_orientation,
         use_layout_detection,
-        generate_text_file
+        generate_text_file,
+        text_det_thresh,
     ],
     outputs=output
     ).then(
