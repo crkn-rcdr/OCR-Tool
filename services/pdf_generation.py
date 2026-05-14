@@ -1078,7 +1078,7 @@ def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recurs
                 if result["alto_traceback"]:
                     error_logger.error(result["alto_traceback"])
 
-    summary_logger.info("========== PDF AND ALTO SUMMARY ==========")
+    summary_logger.info(f"==========PDF AND ALTO SUMMARY FOR FOLDER: {input_dir.name} ==========")
     summary_logger.info(f"PDF success: {pdf_success}, fail: {pdf_fail}")
     summary_logger.info(f"ALTO success: {alto_success}, fail: {alto_fail}")
     summary_logger.info(f"Summary log path: {summary_log_path}")

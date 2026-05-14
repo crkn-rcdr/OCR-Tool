@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 from engine import engine
 import traceback
+import time
 
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
@@ -38,6 +39,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         success_count = 0
         failure_count = 0
         messages = []
+
+        start_time = time.perf_counter()
 
         if input_path.is_file():
             if input_path.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -84,7 +87,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 messages.append(f"Error processing {input_path.name}: {str(e)}")
                 yield "\n".join(messages)
 
-                summary_logger.info(f"{folder.name} failed during PDF/ALTO generation")
+                summary_logger.info(f"{input_path.name} failed during PDF/ALTO generation")
 
         elif input_path.is_dir():
             input_base = input_path
@@ -130,9 +133,11 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                     except Exception as e:
                         error_logger.error(
-                            f"Error processing {img.name}: {str(e)}",
+                            f"Error ocr processing {img.name}: {str(e)}",
                             exc_info=True
                         )
+                        summary_logger.info(f"ERROR: OCR processing failed for {img.name}")
+
                         failure_count += 1
                         folder_failure += 1
 
@@ -162,20 +167,31 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         )
                         yield "\n".join(messages)
 
-                        summary_logger.info(f"{folder.name} failed during PDF/ALTO generation")
+                        summary_logger.info(f"ERROR:{folder.name} failed during PDF/ALTO generation")
 
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
             return
+    
+        end_time = time.perf_counter()
+        total_time = end_time - start_time
+        total_files = success_count + failure_count
+
+        avg_time = total_time / total_files if total_files > 0 else 0
 
         summary_logger.info(f"========== {method} SUMMARY ==========")
         summary_logger.info(f"Total Successful JSON files: {success_count}")
         summary_logger.info(f"Total Failed JSON files: {failure_count}")
+        summary_logger.info(f"Total Processing Time: {total_time:.2f} seconds")
+        summary_logger.info(f"Average Time per File: {avg_time:.2f} seconds")
 
-        if generate_text_file:
-            yield "OCR Completed, please check json and text files at your output folder"
-        else:
+        if generate_text_file and failure_count == 0:
+            yield "OCR Completed, please check json and text files at your output folder."
+
+        elif not generate_text_file and failure_count > 0:
+             yield "OCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
             
+        elif not generate_text_file and failure_count == 0:
             yield "OCR Completed, please check pdf and alto files at your output folder"
 
     finally:

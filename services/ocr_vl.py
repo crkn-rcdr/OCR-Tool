@@ -2,6 +2,7 @@ import json
 import base64
 import threading
 from pathlib import Path
+import time
 
 import requests
 
@@ -35,6 +36,8 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
         return
+
+    start_time = time.perf_counter()
 
     try:
         if input_path.is_file():
@@ -136,9 +139,11 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
                 except Exception as e: 
                     error_logger.error(
-                        f"Error processing {img.name}:{str(e)}",
+                        f"ERROR processing {img.name}:{str(e)}",
                         exc_info=True
                     )
+                    summary_logger.info(f"ERROR:{img.name} during OCR request or PDF/ALTO generation")
+
                     failure_count += 1  
                     messages.append(f"Error processing {img.name}: {str(e)}")
                     yield "\n".join(messages)
@@ -146,15 +151,27 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
             return
+
+        end_time = time.perf_counter()
+        total_time = end_time - start_time
+        total_files = success_count + failure_count
+
+        avg_time = total_time / total_files if total_files > 0 else 0
         
-        summary_logger.info("========== PP-StructureV3 SUMMARY ==========")
+        summary_logger.info(f"========== {method} SUMMARY ==========")
         summary_logger.info(f"Total Successful JSON files: {success_count}")
         summary_logger.info(f"Total Failed JSON files: {failure_count}")
+        summary_logger.info(f"Total Processing Time: {total_time:.2f} seconds")
+        summary_logger.info(f"Average Time per File: {avg_time:.2f} seconds")
 
-        #generate_pdf_and_alto(output_base, input_path, method,select)
-      
+        if generate_text_file and failure_count == 0:
+            yield "OCR Completed, please check json and text files at your output folder."
 
-        yield "OCR job completed successfully."
+        elif not generate_text_file and failure_count > 0:
+             yield "OCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
+            
+        elif not generate_text_file and failure_count == 0:
+            yield "OCR Completed, please check pdf and alto files at your output folder"
 
     finally:
         RUN_LOCK.release()
