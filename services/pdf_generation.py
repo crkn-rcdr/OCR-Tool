@@ -1027,7 +1027,32 @@ def build_pdf(json_path, input_dir, method, lang, select):
 
 
 def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recursive=True):
-    """Process all OCR JSON files and generate PDFs plus ALTO XML files."""
+    """
+    Generate searchable PDF and ALTO XML files
+    from OCR JSON results.
+
+    Args:
+        output_dir (Path):
+            Directory containing OCR JSON files.
+
+        input_dir (Path):
+            Directory containing source images.
+
+        method (str):
+            OCR method name.
+
+        lang (str):
+            OCR language code.
+
+        select (str, optional):
+            OCR engine identifier.
+
+        log_dir (str, optional):
+            Directory for log files.
+
+        recursive (bool, optional):
+            Whether to scan subdirectories recursively.
+    """
 
     summary_logger, error_logger, summary_log_path, error_log_path = (
         OCRLoggerManger.setup(method)

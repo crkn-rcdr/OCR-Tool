@@ -13,11 +13,44 @@ from services.txt_generation import generate_txt_file
 
 import services.ocr_pp as ocr_pp
 
+# Thread synchronization lock used to prevent
+# multiple PaddleVL OCR jobs from running simultaneously.
+#
+# Why this is needed:
+# - Prevents concurrent OCR requests to the PaddleVL service
+# - Avoids GPU/CPU resource conflicts
+# - Prevents race conditions when writing output files
+# - Ensures stable OCR processing
+#
+# Example:
+# If one PaddleVL OCR task is already running,
+# another task attempting to start will be rejected
+# until the current task finishes.
 RUN_LOCK = threading.Lock()
+
 BASE_URL = "http://127.0.0.1:8080"
 
-
 def run_paddlevl_job(input_path, output_root, opt,select=None):
+    """
+    Run OCR processing using the PaddleVL API service.
+
+    Args:
+        input_path (Path):
+            Input image file or folder.
+
+        output_root (Path):
+            Output directory for OCR results.
+
+        opt (dict):
+            OCR configuration options.
+
+        select (str, optional):
+            OCR engine identifier.
+
+    Yields:
+        str:
+            OCR progress and status messages.
+    """
     ocr_pp.STOP_FLAG = False
     payload = {}
     generate_text_file = opt.get("generate_text_file", False)

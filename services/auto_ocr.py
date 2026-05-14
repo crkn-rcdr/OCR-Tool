@@ -6,6 +6,17 @@ from services.constants import IMAGE_EXTENSIONS
 from pathlib import Path
 
 def iter_image_files(input_path):
+    """
+    Recursively iterate through all supported image files.
+
+    Args:
+        input_path (Path):
+            Root directory containing image files or subfolders.
+
+    Yields:
+        Path:
+            Path object for each supported image file.
+    """
     for file in input_path.iterdir():
         if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS:
             yield file
@@ -13,6 +24,34 @@ def iter_image_files(input_path):
             yield from iter_image_files(file)
 
 def run_auto_job(image_input_folder, output_root, opt):
+    """
+    Automatically select the OCR engine based on image quality analysis.
+
+    The function scans all supported image files in the input folder,
+    analyzes image quality issues such as skew, warping, and illumination,
+    and selects the appropriate OCR engine:
+
+    - PaddleVL:
+        Used for images with quality issues.
+    - PP-StructureV3:
+        Used for clean and well-structured images.
+
+    OCR results are saved while preserving the original folder structure.
+
+    Args:
+        image_input_folder (str | Path):
+            Input folder containing images.
+
+        output_root (str | Path):
+            Root folder for OCR output results.
+
+        opt:
+            OCR configuration/options object passed to OCR services.
+
+    Yields:
+        str:
+            Progress and status messages during processing.
+    """
     input_path = Path(image_input_folder)
     output_root = Path(output_root)
   

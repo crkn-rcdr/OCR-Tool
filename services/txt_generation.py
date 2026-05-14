@@ -1,6 +1,20 @@
 from pathlib import Path
 import json
 def generate_txt_file(json_path:Path):
+    """
+    Generate a TXT file from OCR JSON results.
+
+    Supports multiple OCR JSON formats and extracts
+    recognized text content into a plain text file.
+
+    Args:
+        json_path (Path):
+            Path to the OCR JSON file.
+
+    Returns:
+        Path:
+            Path to the generated TXT file.
+    """
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     

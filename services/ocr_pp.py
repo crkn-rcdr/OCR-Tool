@@ -10,16 +10,62 @@ from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
 
+# Thread synchronization lock used to ensure that
+# only one OCR job can run at the same time.
+#
+# This prevents:
+# - Multiple OCR tasks from running concurrently
+# - GPU/CPU resource conflicts
+# - Duplicate file writing
+# - Race conditions during OCR processing
+#
+# Example:
+# If one OCR task is already running,
+# another task attempting to start will be rejected.
 RUN_LOCK = threading.Lock()
+
 # Global flag to signal stopping the OCR process
 STOP_FLAG = False
 
 def stop_ocr():
+    """
+    Stop the currently running OCR job.
+
+    Sets the global STOP_FLAG to True so that the OCR loop
+    can terminate gracefully.
+    """
     global STOP_FLAG
     STOP_FLAG = True
    
 
 def run_ocr_job(input_path, output_root, opt,select=None):
+    """
+    Run OCR processing on either a single image or a folder of images.
+
+    This function:
+    - Performs OCR using the configured OCR engine
+    - Saves OCR JSON results
+    - Optionally generates TXT files
+    - Generates PDF and ALTO XML outputs
+    - Logs summary and error information
+
+    Args:
+        input_path (Path):
+            Input image file or folder containing images.
+
+        output_root (Path):
+            Root output directory.
+
+        opt (dict):
+            OCR configuration options.
+
+        select (str, optional):
+            OCR engine name (e.g., PaddleVL or PP-StructureV3).
+
+    Yields:
+        str:
+            Progress and status messages during OCR execution.
+    """
 
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
