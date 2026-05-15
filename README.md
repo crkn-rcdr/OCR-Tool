@@ -6,9 +6,9 @@ This project is an OCR tool for internal CRKN staff, built on the PaddleOCR prod
 1. PP-OCRv5 was installed on the PaddleOCR server using pip. For installation details, please refer to:
 https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL-MetaX-GPU.html#12-method-2-manually-install-paddlepaddle-and-paddleocr
 
-After installation, both PP-OCRv5 and PP-StructureV3 are available for use.
+- After installation, both PP-OCRv5 and PP-StructureV3 are available for use.
 
-PaddleOCR-VL was deployed using the official Docker Compose setup. For deployment details, please refer to:
+- PaddleOCR-VL was deployed using the official Docker Compose setup. For deployment details, please refer to:
 https://www.paddleocr.ai/latest/version3.x/pipeline_usage/PaddleOCR-VL.html#4
 
 2. Dependency Installation
