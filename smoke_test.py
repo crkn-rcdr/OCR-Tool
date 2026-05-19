@@ -1,6 +1,16 @@
 import argparse
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_INPUT = (
+    REPO_ROOT
+    / "testdata"
+    / "source"
+    / "aeu.00037_19470820"
+    / "aeu.00037_19470820.1.jpg"
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a headless OCR smoke test without launching Gradio."
@@ -13,8 +23,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input",
-        required=True,
-        help="Input image file or folder.",
+        default=str(DEFAULT_INPUT),
+        help=(
+            "Input image file or folder. Defaults to a bundled repo-local "
+            "sample under testdata/source."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -86,6 +99,10 @@ def build_options(args: argparse.Namespace) -> dict:
 def main() -> int:
     args = parse_args()
     input_path = Path(args.input)
+
+    if not input_path.is_absolute():
+        input_path = (REPO_ROOT / input_path).resolve()
+
     output_path = Path(args.output)
 
     if not input_path.exists():

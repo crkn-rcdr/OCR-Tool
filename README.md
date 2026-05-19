@@ -59,11 +59,19 @@ You can also use `python launcher.py` or a PyInstaller build of `launcher.py` fr
 5. Stop the application with `Ctrl+C`. Stop the VL service with `docker compose down`.
 
 ## Smoke Test
+The repo now includes the `source` corpus under `testdata/source`, so the smoke test works without any machine-specific path.
+
 To test the OCR pipeline in WSL without the Gradio UI, run:
+```bash
+python smoke_test.py
+```
+That defaults to `testdata/source/aeu.00037_19470820/aeu.00037_19470820.1.jpg`.
+
+To target a different bundled folder or image, use a repo-relative path:
 ```bash
 python smoke_test.py \
   --method PP-OCRv5 \
-  --input /mnt/c/Users/BrittnyLapierre/Documents/source/oocihm.N_00219_18600707 \
+  --input testdata/source/oocihm.N_00219_18600707 \
   --output output-smoke
 ```
 Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
@@ -91,12 +99,15 @@ Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
 - `requirements-wsl.txt` avoids the Windows-only `safetensors` wheel and uses a headless OpenCV build that is friendlier in WSL.
 - The engine includes a small PaddleX compatibility patch so `opencv-contrib-python-headless` is accepted in WSL.
 - The Gradio app now starts even if `tkinter` is unavailable; in that case, paste `/mnt/c/...` paths manually instead of using the browse buttons.
+- The bundled test corpus lives under `testdata/source`, so smoke tests are portable across machines.
   
 ## Project Structure
 
 ```text
 paddle_pipeline/
 ├── app.py                               # Main application entry point
+├── testdata/
+│   └── source/                          # Bundled OCR smoke-test corpus
 ├── .env                                 # Environment variables
 ├── .gitignore                           # Git ignore configuration
 │
