@@ -11,6 +11,7 @@ from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
 from services.tile_ocr import (
     DEFAULT_CONTENT_BOX_PADDING_PX,
+    DEFAULT_DOCLAYOUT_PADDING_PX,
     run_tiled_local_ocr,
     supports_tiled_ocr,
 )
@@ -45,6 +46,16 @@ def describe_tiling(opt):
         )
         padding_label = f", {padding}px padding" if padding > 0 else ""
         return f"content-box tiled OCR{padding_label}"
+
+    if strategy == "doclayout_v3":
+        padding_value = opt.get("tile_doclayout_padding_px")
+        padding = int(
+            DEFAULT_DOCLAYOUT_PADDING_PX
+            if padding_value is None
+            else padding_value
+        )
+        padding_label = f", {padding}px padding" if padding > 0 else ""
+        return f"PP-DocLayoutV3 tiled OCR{padding_label}"
 
     overlap = int(opt.get("tile_overlap_px", 0) or 0)
     overlap_label = f", {overlap}px overlap" if overlap > 0 else ""

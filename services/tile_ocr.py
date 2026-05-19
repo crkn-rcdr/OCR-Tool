@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
@@ -21,9 +22,46 @@ DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
 DEFAULT_TILE_OVERLAP_PX = 48
 DEFAULT_CONTENT_BOX_PADDING_PX = 8
+DEFAULT_DOCLAYOUT_PADDING_PX = 16
+DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
 TILE_STRATEGY_GRID = "grid"
 TILE_STRATEGY_CONTENT_BOXES = "content_boxes"
-SUPPORTED_TILE_STRATEGIES = {TILE_STRATEGY_GRID, TILE_STRATEGY_CONTENT_BOXES}
+TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
+SUPPORTED_TILE_STRATEGIES = {
+    TILE_STRATEGY_GRID,
+    TILE_STRATEGY_CONTENT_BOXES,
+    TILE_STRATEGY_DOCLAYOUT_V3,
+}
+DOCLAYOUT_TEXT_LABELS = {
+    "abstract",
+    "aside_text",
+    "content",
+    "doc_title",
+    "footer",
+    "footnote",
+    "header",
+    "paragraph_title",
+    "reference",
+    "reference_content",
+    "table",
+    "table_caption",
+    "text",
+    "vertical_text",
+    "vision_footnote",
+}
+DOCLAYOUT_EXCLUDED_LABELS = {
+    "chart",
+    "display_formula",
+    "figure",
+    "figure_title",
+    "footer_image",
+    "formula_number",
+    "header_image",
+    "image",
+    "inline_formula",
+    "number",
+    "seal",
+}
 EXTRA_STRUCTURE_KEYS = ("table_res_list", "seal_res_list", "formula_res_list")
 GEOMETRY_KEYS = {
     "bbox",
@@ -67,6 +105,13 @@ class TileSpec:
     nominal_right: int
     nominal_bottom: int
     path: Path
+    label: str | None = None
+    score: float | None = None
+    order: int | None = None
+
+
+_doclayout_model: Any | None = None
+_doclayout_model_lock = threading.Lock()
 
 
 def get_effective_method(method: str | None, select: str | None = None) -> str | None:
@@ -111,10 +156,33 @@ def run_tiled_local_ocr(
             else content_padding_value
         ),
     )
+    doclayout_padding_value = opt.get("tile_doclayout_padding_px")
+    doclayout_padding_px = max(
+        0,
+        int(
+            DEFAULT_DOCLAYOUT_PADDING_PX
+            if doclayout_padding_value is None
+            else doclayout_padding_value
+        ),
+    )
     overlap_px = grid_overlap_px
 
     with tempfile.TemporaryDirectory(prefix="ocr_tiles_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
+        if tile_strategy == TILE_STRATEGY_DOCLAYOUT_V3:
+            overlap_px = doclayout_padding_px
+            doclayout_tiles = build_doclayout_tiles(
+                image_path,
+                temp_dir,
+                padding_px=doclayout_padding_px,
+            )
+            if doclayout_tiles:
+                tiles = doclayout_tiles
+                grid_rows = max(1, len(tiles))
+                grid_cols = 1
+            else:
+                tile_strategy = TILE_STRATEGY_GRID
+
         if tile_strategy == TILE_STRATEGY_CONTENT_BOXES:
             overlap_px = content_padding_px
             content_tiles = build_content_box_tiles(
@@ -177,6 +245,14 @@ def resolve_tile_grid(
 def resolve_tile_strategy(opt: dict) -> str:
     strategy = str(opt.get("tile_strategy") or TILE_STRATEGY_GRID)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
+    strategy_aliases = {
+        "pp_doclayoutv3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "pp_doclayout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "pp_doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+    }
+    strategy = strategy_aliases.get(strategy, strategy)
     return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
 
 
@@ -273,6 +349,288 @@ def build_content_box_tiles(
             )
 
     return tiles
+
+
+def build_doclayout_tiles(
+    image_path: Path,
+    temp_dir: Path,
+    padding_px: int = DEFAULT_DOCLAYOUT_PADDING_PX,
+) -> list[TileSpec]:
+    boxes = detect_doclayout_boxes(image_path)
+    tiles = []
+
+    with Image.open(image_path) as image:
+        image_width, image_height = image.size
+        padding_px = max(0, int(padding_px))
+
+        for index, item in enumerate(boxes):
+            x0, y0, x1, y1 = item["bbox"]
+            nominal_left = clamp_int(x0, 0, image_width - 1)
+            nominal_top = clamp_int(y0, 0, image_height - 1)
+            nominal_right = clamp_int(x1, nominal_left + 1, image_width)
+            nominal_bottom = clamp_int(y1, nominal_top + 1, image_height)
+            left = max(0, nominal_left - padding_px)
+            top = max(0, nominal_top - padding_px)
+            right = min(image_width, nominal_right + padding_px)
+            bottom = min(image_height, nominal_bottom + padding_px)
+            tile_path = temp_dir / f"{image_path.stem}__doclayout_{index:03d}.png"
+
+            image.crop((left, top, right, bottom)).save(tile_path)
+            tiles.append(
+                TileSpec(
+                    row=index,
+                    col=0,
+                    left=left,
+                    top=top,
+                    right=right,
+                    bottom=bottom,
+                    nominal_left=nominal_left,
+                    nominal_top=nominal_top,
+                    nominal_right=nominal_right,
+                    nominal_bottom=nominal_bottom,
+                    path=tile_path,
+                    label=item.get("label"),
+                    score=item.get("score"),
+                    order=item.get("order"),
+                )
+            )
+
+    return tiles
+
+
+def detect_doclayout_boxes(image_path: Path) -> list[dict[str, Any]]:
+    try:
+        model = get_doclayout_model()
+        output = model.predict(str(image_path), batch_size=1)
+    except Exception as exc:
+        print(
+            f"[WARN] PP-DocLayoutV3 layout analysis failed for {image_path}: {exc}",
+            flush=True,
+        )
+        return []
+
+    boxes: list[dict[str, Any]] = []
+    with Image.open(image_path) as image:
+        image_width, image_height = image.size
+
+    for result in output:
+        boxes.extend(extract_doclayout_boxes(result, image_width, image_height))
+
+    boxes = dedupe_doclayout_boxes(boxes)
+    boxes.sort(
+        key=lambda item: (
+            item["order"] if item.get("order") is not None else 10_000,
+            item["bbox"][1],
+            item["bbox"][0],
+        )
+    )
+    return boxes
+
+
+def get_doclayout_model() -> Any:
+    global _doclayout_model
+
+    with _doclayout_model_lock:
+        if _doclayout_model is None:
+            from paddlex import create_model
+
+            _doclayout_model = create_model(model_name=DEFAULT_DOCLAYOUT_MODEL)
+
+    return _doclayout_model
+
+
+def extract_doclayout_boxes(
+    result: Any,
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]]:
+    payload = getattr(result, "json", result)
+    if callable(payload):
+        payload = payload()
+
+    if isinstance(payload, dict) and isinstance(payload.get("res"), dict):
+        payload = payload["res"]
+
+    raw_boxes = find_doclayout_box_lists(payload)
+    boxes: list[dict[str, Any]] = []
+
+    for raw_box in raw_boxes:
+        parsed = parse_doclayout_box(raw_box, image_width, image_height)
+        if parsed is not None:
+            boxes.append(parsed)
+
+    return boxes
+
+
+def find_doclayout_box_lists(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        boxes = value.get("boxes") or value.get("layout_boxes")
+        if isinstance(boxes, list) and all(isinstance(item, dict) for item in boxes):
+            return boxes
+
+        collected: list[dict[str, Any]] = []
+        for child in value.values():
+            collected.extend(find_doclayout_box_lists(child))
+        return collected
+
+    if isinstance(value, list):
+        collected: list[dict[str, Any]] = []
+        for item in value:
+            collected.extend(find_doclayout_box_lists(item))
+        return collected
+
+    return []
+
+
+def parse_doclayout_box(
+    item: dict[str, Any],
+    image_width: int,
+    image_height: int,
+) -> dict[str, Any] | None:
+    label = str(
+        item.get("label")
+        or item.get("category_name")
+        or item.get("class_name")
+        or ""
+    ).strip()
+    normalized_label = label.lower()
+
+    if normalized_label in DOCLAYOUT_EXCLUDED_LABELS:
+        return None
+    if DOCLAYOUT_TEXT_LABELS and normalized_label and normalized_label not in DOCLAYOUT_TEXT_LABELS:
+        return None
+
+    coordinate = first_present(
+        item,
+        "coordinate",
+        "coordinates",
+        "bbox",
+        "box",
+        "polygon_points",
+    )
+    bbox = normalize_doclayout_bbox(coordinate, image_width, image_height)
+    if bbox is None:
+        return None
+
+    min_area = max(64, int(image_width * image_height * 0.00002))
+    if content_box_width(bbox) * content_box_height(bbox) < min_area:
+        return None
+
+    order = parse_optional_int(
+        first_present(item, "order", "read_order", "reading_order", "order_index")
+    )
+    score = parse_optional_float(first_present(item, "score", "confidence"))
+
+    return {
+        "bbox": bbox,
+        "label": label or None,
+        "score": score,
+        "order": order,
+    }
+
+
+def normalize_doclayout_bbox(
+    coordinate: Any,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int] | None:
+    if not isinstance(coordinate, (list, tuple)) or len(coordinate) < 4:
+        return None
+
+    if isinstance(coordinate[0], (list, tuple)):
+        points = [
+            (float(point[0]), float(point[1]))
+            for point in coordinate
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        ]
+        if not points:
+            return None
+        x_values = [point[0] for point in points]
+        y_values = [point[1] for point in points]
+        values = [min(x_values), min(y_values), max(x_values), max(y_values)]
+    else:
+        values = [float(value) for value in coordinate[:4]]
+
+    x0, y0, x1, y1 = values
+
+    if x1 <= x0 or y1 <= y0:
+        x1 = x0 + max(0.0, values[2])
+        y1 = y0 + max(0.0, values[3])
+
+    left = clamp_int(round(x0), 0, image_width - 1)
+    top = clamp_int(round(y0), 0, image_height - 1)
+    right = clamp_int(round(x1), left + 1, image_width)
+    bottom = clamp_int(round(y1), top + 1, image_height)
+
+    return (left, top, right, bottom)
+
+
+def dedupe_doclayout_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+
+    for box in sorted(
+        boxes,
+        key=lambda item: (
+            float(item.get("score") or 0.0),
+            content_box_width(item["bbox"]) * content_box_height(item["bbox"]),
+        ),
+        reverse=True,
+    ):
+        if any(
+            content_bbox_overlap_ratio(box["bbox"], existing["bbox"]) > 0.9
+            for existing in kept
+        ):
+            continue
+        kept.append(box)
+
+    return kept
+
+
+def content_bbox_intersection(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> int:
+    return content_box_horizontal_overlap(left, right) * content_box_vertical_overlap(
+        left,
+        right,
+    )
+
+
+def content_bbox_overlap_ratio(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> float:
+    intersection = content_bbox_intersection(left, right)
+    smaller_area = min(
+        content_box_width(left) * content_box_height(left),
+        content_box_width(right) * content_box_height(right),
+    )
+    return intersection / smaller_area if smaller_area > 0 else 0.0
+
+
+def parse_optional_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_optional_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def first_present(item: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in item and item[key] is not None:
+            return item[key]
+    return None
 
 
 def detect_content_boxes(image_path: Path, max_boxes: int = 96) -> list[tuple[int, int, int, int]]:
@@ -1520,6 +1878,9 @@ def build_tile_metadata(
                     tile_result["tile"].nominal_right,
                     tile_result["tile"].nominal_bottom,
                 ],
+                "label": tile_result["tile"].label,
+                "score": tile_result["tile"].score,
+                "order": tile_result["tile"].order,
             }
             for tile_result in tile_results
         ],

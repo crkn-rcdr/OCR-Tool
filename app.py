@@ -176,12 +176,14 @@ def update_options(method, tile_strategy):
         else gr.update(interactive=False, value=False)
     )
     tile_strategy_update = gr.update(interactive=supports_tiling)
+    tile_overlap_update = update_grid_overlap_control(method, tile_strategy)
 
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
         tile_checkbox_update,
         tile_strategy_update,
+        tile_overlap_update,
     )
 
 
@@ -197,6 +199,7 @@ def submit_config(
     generate_text_file,
     tile_source_images,
     tile_strategy,
+    tile_overlap_px,
     text_det_thresh,
 ):
     """
@@ -222,6 +225,7 @@ def submit_config(
         "tile_strategy": tile_strategy or "grid",
         "tile_rows": 3,
         "tile_cols": 1,
+        "tile_overlap_px": int(tile_overlap_px) if tile_overlap_px is not None else 48,
     }
 
     if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
@@ -316,13 +320,24 @@ with gr.Blocks(css=APP_CSS) as demo:
             choices=[
                 ("Fixed grid", "grid"),
                 ("Content boxes (CV)", "content_boxes"),
+                ("PP-DocLayoutV3 Layout", "doclayout_v3"),
             ],
             value="grid",
             label="Tile Strategy",
-            info="Use fixed grid tiles or detect content boxes from foreground vs whitespace.",
+            info=(
+                "Use fixed 3x1 tiles, OpenCV content boxes, or PaddleX "
+                "PP-DocLayoutV3 layout regions with reading order."
+            ),
         )
 
-
+        tile_overlap_px = gr.Slider(
+            minimum=0,
+            maximum=256,
+            value=48,
+            step=4,
+            label="Tile Overlap (px)",
+            info="Overlap for fixed 3x1 grid tiles before deduping.",
+        )
 
     # PaddleVL-specific OCR options.
     with gr.Column(visible=False) as paddlevl_options:
@@ -380,6 +395,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         generate_text_file,
         tile_source_images,
         tile_strategy,
+        tile_overlap_px,
         text_det_thresh,
     ]
 
@@ -393,7 +409,14 @@ with gr.Blocks(css=APP_CSS) as demo:
             paddlevl_options,
             tile_source_images,
             tile_strategy,
+            tile_overlap_px,
         ]
+    )
+
+    tile_strategy.change(
+        fn=update_grid_overlap_control,
+        inputs=[method_radio, tile_strategy],
+        outputs=tile_overlap_px,
     )
 
 
@@ -459,6 +482,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         generate_text_file,
         tile_source_images,
         tile_strategy,
+        tile_overlap_px,
         text_det_thresh,
     ],
     outputs=output
