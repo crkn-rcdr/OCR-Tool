@@ -1,13 +1,30 @@
 import gradio as gr
 import os
-import tkinter as tk
-from tkinter import filedialog
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+except ModuleNotFoundError:
+    tk = None
+    filedialog = None
 
 from pathlib import Path
 
 from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
+
+APP_CSS = """
+#fixed-header {
+    position: fixed;
+    top: 0;
+    background: white;
+    z-index: 1000;
+    padding: 10px 0;
+}
+.gradio-container {
+    padding-top: 100px !important;
+}
+"""
 
 # Define the list of supported languages for the dropdown menu
 LANGUAGE_CHOICES = [
@@ -115,16 +132,30 @@ def enable_run_button():
     """
     return gr.update(interactive=True)
 
-def choose_folder():
+def choose_folder(current_value=""):
     """
     Open a folder selection dialog and return the selected folder path.
     """
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    folder = filedialog.askdirectory()
-    root.destroy()
-    return folder
+    if tk is None or filedialog is None:
+        gr.Info(
+            "Folder browsing is unavailable in this WSL environment. "
+            "Paste the folder path manually."
+        )
+        return current_value
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory()
+        root.destroy()
+        return folder or current_value
+    except Exception:
+        gr.Info(
+            "Folder browsing is unavailable in this environment. "
+            "Paste the folder path manually."
+        )
+        return current_value
 
 
 def update_options(method):
@@ -205,7 +236,7 @@ def submit_config(
     yield " OCR Completed, please check pdf and alto files at your output folder"
 
 # Create the main Gradio application interface.
-with gr.Blocks() as demo:
+with gr.Blocks(css=APP_CSS) as demo:
 
     # Create a fixed header section for the application title
     # and OCR method selection.
@@ -319,14 +350,14 @@ with gr.Blocks() as demo:
     # Open a folder selection dialog for the input folder.
     image_input_btn.click(
         fn=choose_folder,
-        inputs=None,
+        inputs=image_input_folder,
         outputs=image_input_folder
     )
 
     # Open a folder selection dialog for the output folder.
     output_folder_btn.click(
         fn=choose_folder,
-        inputs=None,
+        inputs=output_folder,
         outputs=output_folder
     )
 
@@ -401,20 +432,7 @@ def launch_app():
     demo.launch(
     server_name=os.getenv("OCR_TOOL_HOST", "0.0.0.0"),
     server_port=int(os.getenv("OCR_TOOL_PORT", "7860")),
-    css="""
-    #fixed-header {
-        position: fixed;
-        top: 0;
-        background: white;
-        z-index: 1000;
-        padding: 10px 0;
-   
-    }
-     .gradio-container {
-        padding-top: 100px !important;
-    }
-  
-    """)
+    )
 
 
 if __name__ == "__main__":

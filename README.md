@@ -32,6 +32,15 @@ py -3 -m venv .venv
 ```bash
 pip install -r requirements.txt
 ```
+WSL:
+Install PaddlePaddle first, then install the WSL-friendly app requirements.
+```bash
+bash setup_wsl.sh cpu
+# or
+bash setup_wsl.sh gpu
+```
+The WSL setup script intentionally uses a Python 3.10-friendly Gradio pin and replaces the GUI OpenCV wheel with the headless build.
+The repo now installs `paddlex[ocr]==3.5.2`, because the plain `paddlex` package is not enough for the OCR pipelines used by this app.
 3. Start the PaddleOCR-VL service for `PaddleVL` and `Auto Routing`.
 ```bash
 # Optional: copy .env.example to .env if you want to override the defaults.
@@ -48,6 +57,16 @@ py app.py
 ```
 You can also use `python launcher.py` or a PyInstaller build of `launcher.py` from the repo root.
 5. Stop the application with `Ctrl+C`. Stop the VL service with `docker compose down`.
+
+## Smoke Test
+To test the OCR pipeline in WSL without the Gradio UI, run:
+```bash
+python smoke_test.py \
+  --method PP-OCRv5 \
+  --input /mnt/c/Users/BrittnyLapierre/Documents/source/oocihm.N_00219_18600707 \
+  --output output-smoke
+```
+Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
 
 ## Client Usage
 1. Click the Windows Start icon.
@@ -69,6 +88,9 @@ You can also use `python launcher.py` or a PyInstaller build of `launcher.py` fr
 - The launcher now resolves the repo directory dynamically, so it no longer depends on `C:\CRKN Projects\paddle_pipeline`.
 - `compose.yaml` now has default image tags and mounts the repo-local `pipeline_config_vllm.yaml` and `pipeline_config_fastdeploy.yaml`.
 - If the VL API is not local, set `PADDLE_VL_API_URL`, for example `http://127.0.0.1:8080`.
+- `requirements-wsl.txt` avoids the Windows-only `safetensors` wheel and uses a headless OpenCV build that is friendlier in WSL.
+- The engine includes a small PaddleX compatibility patch so `opencv-contrib-python-headless` is accepted in WSL.
+- The Gradio app now starts even if `tkinter` is unavailable; in that case, paste `/mnt/c/...` paths manually instead of using the browse buttons.
   
 ## Project Structure
 

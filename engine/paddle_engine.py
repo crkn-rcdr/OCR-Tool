@@ -1,5 +1,8 @@
-from paddleocr import PPStructureV3
 import threading
+from .paddlex_compat import apply_headless_opencv_patch
+
+apply_headless_opencv_patch()
+from paddleocr import PPStructureV3
 from paddleocr import PaddleOCR  
 
 class PaddleEngine:
