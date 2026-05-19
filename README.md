@@ -14,25 +14,40 @@ https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL-MetaX-
     pip install -r requirements.txt
 
   ```
+  The repo is currently pinned to `paddleocr==3.5.0` and `paddlex==3.5.2`.
 
-## Accessing the Development Environment
-1. Navigate to the Development Directory
+## Quick Start
+1. Create and activate a virtual environment.
+WSL:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
-  cd "C:\CRKN Projects\paddle_pipeline"
-
+Windows:
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
-2. Activate Virtual Environment
+2. Install dependencies.
+```bash
+pip install -r requirements.txt
 ```
-  venv\Scripts\activate
-
+3. Start the PaddleOCR-VL service for `PaddleVL` and `Auto Routing`.
+```bash
+# Optional: copy .env.example to .env if you want to override the defaults.
+docker compose up -d
 ```
-3. Start the Application
+4. Start the Gradio app from the repo root.
+WSL:
+```bash
+python3 app.py
 ```
-  gradio app.py  
-
+Windows:
+```powershell
+py app.py
 ```
-4. Stop the Application
-  Press Ctrl + C directly to terminate the application.
+You can also use `python launcher.py` or a PyInstaller build of `launcher.py` from the repo root.
+5. Stop the application with `Ctrl+C`. Stop the VL service with `docker compose down`.
 
 ## Client Usage
 1. Click the Windows Start icon.
@@ -49,6 +64,11 @@ https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL-MetaX-
 ```
 5. Stop the Application
  Close the launcher window opened in Step 3.
+
+## Environment Notes
+- The launcher now resolves the repo directory dynamically, so it no longer depends on `C:\CRKN Projects\paddle_pipeline`.
+- `compose.yaml` now has default image tags and mounts the repo-local `pipeline_config_vllm.yaml` and `pipeline_config_fastdeploy.yaml`.
+- If the VL API is not local, set `PADDLE_VL_API_URL`, for example `http://127.0.0.1:8080`.
   
 ## Project Structure
 

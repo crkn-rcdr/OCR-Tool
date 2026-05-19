@@ -1,4 +1,5 @@
 import gradio as gr
+import os
 import tkinter as tk
 from tkinter import filedialog
 
@@ -393,10 +394,13 @@ with gr.Blocks() as demo:
         outputs=stop_btn
     )
 
-# Launch the Gradio application with a fixed header layout.
-demo.launch(
-    server_name="0.0.0.0",
-    server_port=7860,
+def launch_app():
+    """
+    Launch the Gradio application.
+    """
+    demo.launch(
+    server_name=os.getenv("OCR_TOOL_HOST", "0.0.0.0"),
+    server_port=int(os.getenv("OCR_TOOL_PORT", "7860")),
     css="""
     #fixed-header {
         position: fixed;
@@ -411,3 +415,7 @@ demo.launch(
     }
   
     """)
+
+
+if __name__ == "__main__":
+    launch_app()

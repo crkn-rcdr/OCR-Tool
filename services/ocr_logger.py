@@ -14,20 +14,32 @@ class OCRLoggerManger:
     _run_timestamp = None
 
     @classmethod
-    def setup(cls,methond:str,log_dir:str="logs"):
+    def _reset(cls):
+        for logger in (cls._summary_logger, cls._error_logger):
+            if logger is None:
+                continue
+
+            for handler in logger.handlers[:]:
+                handler.close()
+                logger.removeHandler(handler)
+
+        cls._initialized = False
+        cls._summary_logger = None
+        cls._error_logger = None
+        cls._summary_log_path = None
+        cls._error_log_path = None
+        cls._run_timestamp = None
+
+    @classmethod
+    def setup(cls,method:str,log_dir:str="logs"):
         if cls._initialized:
-            return(
-                cls._summary_logger,
-                cls._error_logger,
-                cls._summary_log_path,  
-                cls._error_log_path
-            )
+            cls._reset()
 
         log_dir_path = Path(log_dir)
         log_dir_path.mkdir(parents=True, exist_ok=True)
 
         cls._run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        method_sanitized = methond.replace("-", "_")
+        method_sanitized = method.replace("-", "_")
 
         summary_log_path = log_dir_path / f"{method_sanitized}_summary_{cls._run_timestamp}.log"
         error_log_path = log_dir_path / f"{method_sanitized}_error_{cls._run_timestamp}.log"

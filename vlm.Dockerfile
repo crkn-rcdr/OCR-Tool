@@ -6,10 +6,10 @@ FROM ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddlex-genai-vllm-server
 
 FROM base-${BACKEND}
 
-ARG PADDLEOCR_VERSION=">=3.4.0,<3.5"
-ARG PADDLEX_VERSION=">=3.4.0,<3.5"
+ARG PADDLEOCR_VERSION="3.5.0"
+ARG PADDLEX_VERSION="3.5.2"
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install "paddleocr${PADDLEOCR_VERSION}" "paddlex${PADDLEX_VERSION}"
+    python -m pip install "paddleocr==${PADDLEOCR_VERSION}" "paddlex==${PADDLEX_VERSION}"
 
 RUN groupadd -g 1000 paddleocr \
     && useradd -m -s /bin/bash -u 1000 -g 1000 paddleocr
