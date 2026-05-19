@@ -213,7 +213,7 @@ def submit_config(
         "generate_text_file": generate_text_file,
         "tile_source_images": tile_source_images,
         "tile_rows": int(tile_rows) if tile_rows is not None else 3,
-        "tile_cols": int(tile_cols) if tile_cols is not None else 3,
+        "tile_cols": int(tile_cols) if tile_cols is not None else 1,
     }
 
     if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
@@ -299,9 +299,9 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         tile_source_images = gr.Checkbox(
-            label='Tile source images into a 3x3 grid before OCR.',
+            label='Tile source images into a grid before OCR.',
             value=False,
-            info="Available for PP-OCRv5 and PP-StructureV3.",
+            info="Available for PP-OCRv5 and PP-StructureV3. Default tiling: 3 rows x 1 column.",
         )
 
         tile_rows = gr.Slider(
@@ -316,10 +316,10 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_cols = gr.Slider(
             minimum=1,
             maximum=10,
-            value=3,
+            value=1,
             step=1,
             label="Tile Columns",
-            info="Number of tile columns when tiling source images.",
+            info="Number of tile columns when tiling source images (default 1).",
         )
 
     # PaddleVL-specific OCR options.
