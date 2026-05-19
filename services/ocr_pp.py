@@ -9,6 +9,7 @@ from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
+from services.tile_ocr import run_tiled_local_ocr, supports_tiled_ocr
 
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
@@ -71,6 +72,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
     generate_text_file = opt.get("generate_text_file", False)
     lang = opt.get("lang", "None")
+    tile_source_images = opt.get("tile_source_images", False)
    
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
@@ -102,17 +104,20 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                output = engine.infer(str(input_path), opt)
-
-                for res in output:
-                    res.save_to_json(save_path=str(out_dir))
-
-                json_file = out_dir / f"{input_path.stem}_res.json"
-                final_json = out_dir / f"{input_path.stem}.json"  
-                json_file.rename(final_json)  
+                final_json = run_ocr_for_image(
+                    image_path=input_path,
+                    out_dir=out_dir,
+                    opt=opt,
+                    select=select,
+                )
 
                 success_count += 1
-                messages.append(f"{input_path.name} created and saved in {out_dir}")
+                if tile_source_images and supports_tiled_ocr(method, select):
+                    messages.append(
+                        f"{input_path.name} created from 3x3 tiled OCR and saved in {out_dir}"
+                    )
+                else:
+                    messages.append(f"{input_path.name} created and saved in {out_dir}")
 
                 if generate_text_file:
                     txt_path = generate_txt_file(final_json)
@@ -163,18 +168,22 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         return
 
                     try:
-                        output = engine.infer(str(img), opt)
-
-                        for res in output:
-                            res.save_to_json(save_path=str(out_dir))
-
-                        json_file = out_dir / f"{img.stem}_res.json"
-                        json_file.rename(out_dir / f"{img.stem}.json")
+                        run_ocr_for_image(
+                            image_path=img,
+                            out_dir=out_dir,
+                            opt=opt,
+                            select=select,
+                        )
 
                         success_count += 1
                         folder_success += 1
 
-                        messages.append(f"{img.name} created and saved in {out_dir}")
+                        if tile_source_images and supports_tiled_ocr(method, select):
+                            messages.append(
+                                f"{img.name} created from 3x3 tiled OCR and saved in {out_dir}"
+                            )
+                        else:
+                            messages.append(f"{img.name} created and saved in {out_dir}")
                         yield "\n".join(messages)
 
                     except Exception as e:
@@ -242,3 +251,28 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
     finally:
         RUN_LOCK.release()
+
+
+def run_ocr_for_image(image_path, out_dir, opt, select=None):
+    """
+    Run OCR for a single image and save the final JSON output.
+    """
+    final_json = out_dir / f"{image_path.stem}.json"
+
+    if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
+        merged_json = run_tiled_local_ocr(image_path, opt, select=select)
+        final_json.write_text(
+            json.dumps(merged_json, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return final_json
+
+    output = engine.infer(str(image_path), opt)
+
+    for res in output:
+        res.save_to_json(save_path=str(out_dir))
+
+    json_file = out_dir / f"{image_path.stem}_res.json"
+    json_file.rename(final_json)
+
+    return final_json

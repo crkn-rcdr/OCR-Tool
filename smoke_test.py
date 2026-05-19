@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate TXT output instead of PDF/ALTO output.",
     )
+    parser.add_argument(
+        "--tile-source-images",
+        action="store_true",
+        help="Split each source image into a 3x3 grid before running local OCR.",
+    )
     return parser.parse_args()
 
 
@@ -79,6 +84,7 @@ def build_options(args: argparse.Namespace) -> dict:
         "use_doc_orientation_classify": args.use_doc_orientation_classify,
         "use_doc_unwarping": args.use_doc_unwarping,
         "generate_text_file": args.generate_text_file,
+        "tile_source_images": args.tile_source_images,
     }
 
     if args.method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:

@@ -162,9 +162,16 @@ def update_options(method):
     """
     Update visible UI options based on the selected OCR method.
     """
+    tile_update = (
+        gr.update(interactive=True)
+        if method in ["PP-OCRv5", "PP-StructureV3"]
+        else gr.update(interactive=False, value=False)
+    )
+
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
+        tile_update,
     )
 
 
@@ -178,6 +185,7 @@ def submit_config(
     use_textline_orientation,
     use_layout_detection,
     generate_text_file,
+    tile_source_images,
     text_det_thresh,
 ):
     """
@@ -198,8 +206,13 @@ def submit_config(
         "method": method,
         "use_doc_orientation_classify": use_doc_orientation_classify,
         "use_doc_unwarping": use_doc_unwarping,
-        "generate_text_file": generate_text_file
+        "generate_text_file": generate_text_file,
+        "tile_source_images": tile_source_images,
     }
+
+    if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
+        yield "3x3 tiling is currently available for PP-OCRv5 and PP-StructureV3 only."
+        return
 
     yield "Downloading models... OCR will start after the download is complete."
 
@@ -282,6 +295,12 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=False
         )
 
+        tile_source_images = gr.Checkbox(
+            label='Tile source images into a 3x3 grid before OCR.',
+            value=False,
+            info="Available for PP-OCRv5 and PP-StructureV3.",
+        )
+
     # PaddleVL-specific OCR options.
     with gr.Column(visible=False) as paddlevl_options:
         use_layout_detection = gr.Checkbox(
@@ -336,6 +355,7 @@ with gr.Blocks(css=APP_CSS) as demo:
     use_textline_orientation,
     use_layout_detection,
     generate_text_file,
+    tile_source_images,
     text_det_thresh,
     ]
 
@@ -344,7 +364,7 @@ with gr.Blocks(css=APP_CSS) as demo:
     method_radio.change(
         fn=update_options,
         inputs=method_radio,
-        outputs=[paddleocr_options, paddlevl_options]
+        outputs=[paddleocr_options, paddlevl_options, tile_source_images]
     )
 
     # Open a folder selection dialog for the input folder.
@@ -406,6 +426,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_textline_orientation,
         use_layout_detection,
         generate_text_file,
+        tile_source_images,
         text_det_thresh,
     ],
     outputs=output
