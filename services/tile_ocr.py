@@ -263,6 +263,12 @@ def merge_nested_overall_ocr(
             entry.get("angle", -1) for entry in entries
         ]
 
+    if any("text_word_boxes" in entry for entry in entries):
+        merged["text_word_boxes"] = [
+            entry.get("text_word_boxes", []) for entry in entries
+        ]
+        merged["text_word"] = [entry.get("text_word", []) for entry in entries]
+
     return merged
 
 

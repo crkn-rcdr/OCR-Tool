@@ -58,6 +58,165 @@ def calculate_textblock(polys) -> Tuple[int, int, int, int]:
     return hpos, vpos, width, height
 
 
+def normalize_box(box):
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    return box
+
+
+def box_to_rect(box) -> Tuple[float, float, float, float]:
+    box = normalize_box(box)
+
+    if (
+        len(box) == 4
+        and all(isinstance(v, Number) for v in box)
+    ):
+        x1, y1, x2, y2 = box
+        return float(x1), float(y1), float(x2), float(y2)
+
+    xs = [point[0] for point in box]
+    ys = [point[1] for point in box]
+    return float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))
+
+
+def make_ocr_item(text, box, score=None):
+    return {
+        "text": text,
+        "box": normalize_box(box),
+        "score": score,
+    }
+
+
+def extract_source_ocr_payload(data):
+    if "overall_ocr_res" in data:
+        return data["overall_ocr_res"], False
+
+    if "rec_texts" in data:
+        return data, False
+
+    parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
+        "parsing_res_list"
+    ]
+    return parsing_res_list, True
+
+
+def extract_word_level_lines(ocr_payload):
+    rec_scores = ocr_payload.get("rec_scores", [])
+    text_word_lines = ocr_payload.get("text_word") or []
+    text_word_box_lines = ocr_payload.get("text_word_boxes") or []
+    rec_polys = ocr_payload.get("rec_polys") or []
+
+    if not text_word_lines or not text_word_box_lines:
+        return []
+
+    lines = []
+
+    for index, (words, boxes) in enumerate(zip(text_word_lines, text_word_box_lines)):
+        if not words or not boxes:
+            continue
+
+        string_items = []
+
+        for word_text, word_box in zip(words, boxes):
+            if not word_text or not str(word_text).strip():
+                continue
+
+            string_items.append(make_ocr_item(word_text, word_box))
+
+        if not string_items:
+            continue
+
+        string_items.sort(key=lambda item: box_to_rect(item["box"])[0])
+
+        if index < len(rec_polys):
+            line_box = rec_polys[index]
+        else:
+            line_box = calculate_line_box([item["box"] for item in string_items])
+
+        lines.append(
+            {
+                "box": normalize_box(line_box),
+                "score": rec_scores[index] if index < len(rec_scores) else None,
+                "strings": string_items,
+            }
+        )
+
+    lines.sort(key=lambda line: box_sort_key(line["box"]))
+    return lines
+
+
+def extract_line_level_items(source_payload, select_paddlevl):
+    items = []
+
+    if select_paddlevl:
+        for block in source_payload:
+            text = block.get("block_content", "")
+            poly = block.get("block_bbox")
+
+            if not text or not text.strip() or not poly:
+                continue
+
+            items.append(make_ocr_item(text, poly))
+
+        return items
+
+    rec_texts = source_payload.get("rec_texts", [])
+    rec_scores = source_payload.get("rec_scores", [])
+    rec_polys = source_payload.get("rec_polys", [])
+
+    for text, score, poly in zip(rec_texts, rec_scores, rec_polys):
+        if not text or not text.strip() or not poly or len(poly) < 4:
+            continue
+
+        items.append(make_ocr_item(text, poly, score=score))
+
+    return items
+
+
+def build_alto_lines(data):
+    source_payload, select_paddlevl = extract_source_ocr_payload(data)
+
+    if not select_paddlevl:
+        word_lines = extract_word_level_lines(source_payload)
+        if word_lines:
+            return word_lines, select_paddlevl
+
+    items = extract_line_level_items(source_payload, select_paddlevl)
+    lines = []
+
+    for item in items:
+        lines.append(
+            {
+                "box": item["box"],
+                "score": item.get("score"),
+                "strings": [item],
+            }
+        )
+
+    lines.sort(key=lambda line: box_sort_key(line["box"]))
+    return lines, select_paddlevl
+
+
+def calculate_line_box(boxes):
+    hpos, vpos, width, height = calculate_textblock(boxes)
+    return [hpos, vpos, hpos + width, vpos + height]
+
+
+def box_sort_key(box):
+    x1, y1, x2, y2 = box_to_rect(box)
+    return (y1, x1, y2, x2)
+
+
+def box_to_alto_attrs(box, scale):
+    x1, y1, x2, y2 = box_to_rect(box)
+    return {
+        "HPOS": str(x1 * scale),
+        "VPOS": str(y1 * scale),
+        "WIDTH": str((x2 - x1) * scale),
+        "HEIGHT": str((y2 - y1) * scale),
+    }
+
+
 def generate_alto(
     json_file: Path,
     image: Path,
@@ -106,65 +265,7 @@ def generate_alto(
     with open(json_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    items = []
-    select_paddlevl = False
-
-    # OCR items are stored in the "data" field.
-    if "overall_ocr_res" in data:
-        ocr = data["overall_ocr_res"]
-
-        rec_texts = ocr.get("rec_texts", [])
-        rec_scores = ocr.get("rec_scores", [])
-        rec_polys = ocr.get("rec_polys", [])
-
-        items = []
-
-        for text, score, poly in zip(rec_texts, rec_scores, rec_polys):
-            if not text or not text.strip():
-                continue
-
-            if not poly or len(poly) < 4:
-                continue
-
-            items.append(
-                {
-                    "text": text,
-                    "box": poly,
-                    "score": score,
-                }
-            )
-    elif "rec_texts" in data:
-        rec_texts = data.get("rec_texts", [])
-        rec_scores = data.get("rec_scores", [])
-        rec_polys = data.get("rec_polys", [])
-
-        for text, score, poly in zip(rec_texts, rec_scores, rec_polys):
-            items.append(
-                {
-                    "text": text,
-                    "box": poly,
-                    "score": score,
-                }
-            )
-
-    else:
-        parsing_res_list =  data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
-        if len(parsing_res_list) == 0:
-            items = []
-        else:
-            select_paddlevl =  True
-            for block in  parsing_res_list:
-                text = block.get("block_content","")
-                poly = block.get("block_bbox")
-
-                items.append(
-                    {
-                        "text": text,
-                        "box": poly, 
-                        
-                    }
-                    )
-        
+    lines, select_paddlevl = build_alto_lines(data)
 
     # Use fileName from JSON if available; otherwise fall back to image name.
     file_name = data.get("fileName", image.name)
@@ -178,7 +279,11 @@ def generate_alto(
     scale = 1200.0 / dpi
 
     # Extract all OCR boxes for calculating the global text block.
-    boxes = [item["box"] for item in items]
+    boxes = [
+        string_item["box"]
+        for line in lines
+        for string_item in line["strings"]
+    ]
     if boxes:
         # Calculate the overall text block that contains all OCR strings.
         hpos, vpos, block_width, block_height = calculate_textblock(boxes)
@@ -265,74 +370,30 @@ def generate_alto(
         },
     )
 
-    # Current version puts all strings into one TextLine.
-    # This is structurally valid, though not ideal for multi-line layout.
-    text_line = ET.SubElement(
-        text_block,
-        "TextLine",
-        {
-            "HPOS": str(hpos),
-            "VPOS": str(vpos),
-            "WIDTH": str(block_width),
-            "HEIGHT": str(block_height),
-        },
-    )
-
     # ------------------------------------------------------------------
-    # String elements
+    # TextLine and String elements
     # ------------------------------------------------------------------
-    for item in items:
-        text = item["text"]
-        wc = item.get("score")
-        box = item["box"]
-
-        # CHANGED: numpy -> list
-        if hasattr(box, "tolist"):
-            box = box.tolist()
-
-        # PaddleVL block_bbox: [x1, y1, x2, y2]
-        if (
-            len(box) == 4
-            and all(isinstance(v, Number) for v in box)
-            ):
-            x1, y1, x2, y2 = box
-
-            string_hpos = x1 * scale
-            string_vpos = y1 * scale
-            string_width = (x2 - x1) * scale
-            string_height = (y2 - y1) * scale
-
-        # PaddleOCR polygon: [[x,y], [x,y], [x,y], [x,y]]
-        else:
-            # Extract all x and y coordinates from the box.
-            xs = [point[0] for point in box]
-            ys = [point[1] for point in box]
-
-            # Convert the box into a simple bounding rectangle.
-            string_hpos = min(xs) * scale
-            string_vpos = min(ys) * scale
-            string_width = (max(xs) - min(xs)) * scale
-            string_height = (max(ys) - min(ys)) * scale
-
-        attrs = {
-            "CONTENT": text,
-            "HPOS": str(string_hpos),
-            "VPOS": str(string_vpos),
-            "WIDTH": str(string_width),
-            "HEIGHT": str(string_height),
-        }
-
-        if lang and not select_paddlevl:
-            attrs["LANG"] = lang
-            
-        if wc is not None:
-            attrs["WC"] = str(wc)
-
-        ET.SubElement(
-            text_line,
-            "String",
-            attrs
+    for line in lines:
+        text_line = ET.SubElement(
+            text_block,
+            "TextLine",
+            box_to_alto_attrs(line["box"], scale),
         )
+
+        for string_item in line["strings"]:
+            attrs = {
+                "CONTENT": string_item["text"],
+                **box_to_alto_attrs(string_item["box"], scale),
+            }
+
+            if lang and not select_paddlevl:
+                attrs["LANG"] = lang
+
+            wc = string_item.get("score")
+            if wc is not None:
+                attrs["WC"] = str(wc)
+
+            ET.SubElement(text_line, "String", attrs)
 
     # Convert XML tree to formatted XML bytes.
     xml_bytes = minidom.parseString(
