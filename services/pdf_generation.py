@@ -166,15 +166,61 @@ def collect_json_files(output_dir, recursive=True):
 
 
 def find_image_for_json(json_path, input_dir):
-    """Find the source JPG image that corresponds to an OCR JSON file."""
-    image_name = json_path.stem.replace("_res", "") + ".jpg"
+    """Find the source image that corresponds to an OCR JSON file.
+
+    Tries the following, in order:
+    1. If the JSON contains `input_path` or `fileName` and that path exists, use it.
+    2. If the JSON contains `fileName`, search for that filename under `input_dir`.
+    3. Fallback: search for the JSON stem with common image extensions under `input_dir`.
+    If `input_dir` is a file, it's returned when its name matches a candidate.
+    """
+    json_path = Path(json_path)
+    input_dir = Path(input_dir)
+
+    # Try to read hints from the JSON itself.
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+
+    # Prefer an explicit input path recorded in the JSON.
+    input_path_field = data.get("input_path") or data.get("fileName")
+    if input_path_field:
+        candidate = Path(input_path_field)
+
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        # Try relative to the JSON file's directory.
+        relative_candidate = (json_path.parent / input_path_field)
+        if relative_candidate.exists():
+            return relative_candidate
+
+        # Search under the provided input_dir for a matching filename.
+        if input_dir.is_dir():
+            for match in input_dir.rglob(Path(input_path_field).name):
+                return match
+
+        if input_dir.is_file() and input_dir.name == Path(input_path_field).name:
+            return input_dir
+
+    # Fallback: search by common image extensions using the JSON stem.
+    base_name = json_path.stem.replace("_res", "")
+    exts = [".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"]
+    candidates = [base_name + ext for ext in exts]
 
     if input_dir.is_file():
-        return input_dir if input_dir.name == image_name else None
+        for cand in candidates:
+            if input_dir.name.lower() == cand.lower():
+                return input_dir
+        return None
 
-    matches = list(input_dir.rglob(image_name))
+    for cand in candidates:
+        matches = list(input_dir.rglob(cand))
+        if matches:
+            return matches[0]
 
-    return matches[0] if matches else None
+    return None
 
 
 def extract_ocr_data(data):

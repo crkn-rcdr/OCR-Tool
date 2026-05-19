@@ -172,6 +172,8 @@ def update_options(method):
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
         tile_update,
+        tile_update,
+        tile_update,
     )
 
 
@@ -186,6 +188,8 @@ def submit_config(
     use_layout_detection,
     generate_text_file,
     tile_source_images,
+    tile_rows,
+    tile_cols,
     text_det_thresh,
 ):
     """
@@ -208,6 +212,8 @@ def submit_config(
         "use_doc_unwarping": use_doc_unwarping,
         "generate_text_file": generate_text_file,
         "tile_source_images": tile_source_images,
+        "tile_rows": int(tile_rows) if tile_rows is not None else 3,
+        "tile_cols": int(tile_cols) if tile_cols is not None else 3,
     }
 
     if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
@@ -254,10 +260,7 @@ with gr.Blocks(css=APP_CSS) as demo:
     # Create a fixed header section for the application title
     # and OCR method selection.
     with gr.Column(elem_id="fixed-header"):
-        gr.Markdown(
-            "## CRKN PaddleOCR Engine",
-        
-            )
+        gr.Markdown("## CRKN PaddleOCR Engine")
 
         method_radio = gr.Radio(
             choices=["PP-OCRv5","PP-StructureV3", "PaddleVL", "Auto Routing"],
@@ -299,6 +302,24 @@ with gr.Blocks(css=APP_CSS) as demo:
             label='Tile source images into a 3x3 grid before OCR.',
             value=False,
             info="Available for PP-OCRv5 and PP-StructureV3.",
+        )
+
+        tile_rows = gr.Slider(
+            minimum=1,
+            maximum=10,
+            value=3,
+            step=1,
+            label="Tile Rows",
+            info="Number of tile rows when tiling source images.",
+        )
+
+        tile_cols = gr.Slider(
+            minimum=1,
+            maximum=10,
+            value=3,
+            step=1,
+            label="Tile Columns",
+            info="Number of tile columns when tiling source images.",
         )
 
     # PaddleVL-specific OCR options.
@@ -343,20 +364,22 @@ with gr.Blocks(css=APP_CSS) as demo:
 
     # Store UI components for dynamic state updates.
     ui_components = [
-    submit_btn,
-    method_radio,
-    image_input_folder,
-    image_input_btn,
-    output_folder,
-    output_folder_btn,
-    language_dropdown,
-    use_doc_orientation_classify,
-    use_doc_unwarping,
-    use_textline_orientation,
-    use_layout_detection,
-    generate_text_file,
-    tile_source_images,
-    text_det_thresh,
+        submit_btn,
+        method_radio,
+        image_input_folder,
+        image_input_btn,
+        output_folder,
+        output_folder_btn,
+        language_dropdown,
+        use_doc_orientation_classify,
+        use_doc_unwarping,
+        use_textline_orientation,
+        use_layout_detection,
+        generate_text_file,
+        tile_source_images,
+        tile_rows,
+        tile_cols,
+        text_det_thresh,
     ]
 
     # Update visible OCR option sections
@@ -364,7 +387,7 @@ with gr.Blocks(css=APP_CSS) as demo:
     method_radio.change(
         fn=update_options,
         inputs=method_radio,
-        outputs=[paddleocr_options, paddlevl_options, tile_source_images]
+        outputs=[paddleocr_options, paddlevl_options, tile_source_images, tile_rows, tile_cols]
     )
 
     # Open a folder selection dialog for the input folder.
@@ -427,6 +450,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_layout_detection,
         generate_text_file,
         tile_source_images,
+        tile_rows,
+        tile_cols,
         text_det_thresh,
     ],
     outputs=output

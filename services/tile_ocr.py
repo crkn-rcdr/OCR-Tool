@@ -71,7 +71,8 @@ def run_tiled_local_ocr(
     image_path: Path,
     opt: dict,
     select: str | None = None,
-    grid_size: int = TILE_GRID_SIZE,
+    grid_rows: int | None = None,
+    grid_cols: int | None = None,
 ) -> dict[str, Any]:
     effective_method = get_effective_method(opt.get("method"), select)
     if effective_method is None:
@@ -80,9 +81,20 @@ def run_tiled_local_ocr(
     tile_opt = dict(opt)
     tile_opt["tile_source_images"] = False
 
+    # Determine grid rows/cols from opt if provided, otherwise fall back
+    # to the single grid_size parameter or default TILE_GRID_SIZE.
+    if grid_rows is None and grid_cols is None:
+        if "tile_rows" in opt or "tile_cols" in opt:
+            grid_rows = int(opt.get("tile_rows", TILE_GRID_SIZE))
+            grid_cols = int(opt.get("tile_cols", TILE_GRID_SIZE))
+        else:
+            gs = int(opt.get("tile_grid", TILE_GRID_SIZE))
+            grid_rows = grid_rows or gs
+            grid_cols = grid_cols or gs
+
     with tempfile.TemporaryDirectory(prefix="ocr_tiles_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        tiles = build_image_tiles(image_path, temp_dir, grid_size=grid_size)
+        tiles = build_image_tiles(image_path, temp_dir, grid_rows=grid_rows, grid_cols=grid_cols)
         tile_results = []
 
         for tile in tiles:
@@ -90,24 +102,25 @@ def run_tiled_local_ocr(
             tile_results.append({"tile": tile, "json": tile_json})
 
     if effective_method == "PP-OCRv5":
-        return merge_ppocr_tile_results(tile_results, image_path, grid_size)
+        return merge_ppocr_tile_results(tile_results, image_path, grid_rows, grid_cols)
 
-    return merge_ppstructure_tile_results(tile_results, image_path, grid_size)
+    return merge_ppstructure_tile_results(tile_results, image_path, grid_rows, grid_cols)
 
 
 def build_image_tiles(
     image_path: Path,
     temp_dir: Path,
-    grid_size: int = TILE_GRID_SIZE,
+    grid_rows: int = TILE_GRID_SIZE,
+    grid_cols: int = TILE_GRID_SIZE,
 ) -> list[TileSpec]:
     tiles = []
 
     with Image.open(image_path) as image:
-        x_edges = [(image.width * index) // grid_size for index in range(grid_size + 1)]
-        y_edges = [(image.height * index) // grid_size for index in range(grid_size + 1)]
+        x_edges = [(image.width * index) // grid_cols for index in range(grid_cols + 1)]
+        y_edges = [(image.height * index) // grid_rows for index in range(grid_rows + 1)]
 
-        for row in range(grid_size):
-            for col in range(grid_size):
+        for row in range(grid_rows):
+            for col in range(grid_cols):
                 left = x_edges[col]
                 right = x_edges[col + 1]
                 top = y_edges[row]
@@ -150,10 +163,19 @@ def infer_tile_json(tile_path: Path, opt: dict) -> dict[str, Any]:
 def merge_ppocr_tile_results(
     tile_results: list[dict[str, Any]],
     image_path: Path,
-    grid_size: int,
+    grid_rows: int,
+    grid_cols: int,
 ) -> dict[str, Any]:
     first = tile_results[0]["json"] if tile_results else {}
     entries = collect_ocr_entries(tile_results)
+    # Attempt to rejoin tokens that were split at tile seams.
+    # Compute vertical seam x positions from tile bboxes (inner vertical borders).
+    seam_positions = sorted({
+        tr["tile"].right
+        for tr in tile_results
+        if hasattr(tr["tile"], "col") and tr["tile"].col < (grid_cols - 1)
+    })
+    entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
 
     merged = {
         "input_path": str(image_path),
@@ -168,7 +190,7 @@ def merge_ppocr_tile_results(
         "rec_polys": [entry["rec_poly"] for entry in entries],
         "rec_boxes": [geometry_to_bbox(entry["rec_poly"]) for entry in entries],
         "dt_polys": [entry["dt_poly"] for entry in entries],
-        "tile_processing": build_tile_metadata(tile_results, image_path, grid_size),
+        "tile_processing": build_tile_metadata(tile_results, image_path, grid_rows, grid_cols),
     }
 
     if any("angle" in entry for entry in entries):
@@ -188,7 +210,8 @@ def merge_ppocr_tile_results(
 def merge_ppstructure_tile_results(
     tile_results: list[dict[str, Any]],
     image_path: Path,
-    grid_size: int,
+    grid_rows: int,
+    grid_cols: int,
 ) -> dict[str, Any]:
     first = tile_results[0]["json"] if tile_results else {}
 
@@ -196,9 +219,9 @@ def merge_ppstructure_tile_results(
         "input_path": str(image_path),
         "page_index": first.get("page_index", 0),
         "model_settings": first.get("model_settings", {}),
-        "overall_ocr_res": merge_nested_overall_ocr(tile_results, image_path),
+        "overall_ocr_res": merge_nested_overall_ocr(tile_results, image_path, grid_cols),
         "parsing_res_list": merge_parsing_results(tile_results),
-        "tile_processing": build_tile_metadata(tile_results, image_path, grid_size),
+        "tile_processing": build_tile_metadata(tile_results, image_path, grid_rows, grid_cols),
     }
 
     layout_det_res = merge_layout_detection_results(tile_results, image_path)
@@ -229,6 +252,7 @@ def merge_ppstructure_tile_results(
 def merge_nested_overall_ocr(
     tile_results: list[dict[str, Any]],
     image_path: Path,
+    grid_cols: int,
 ) -> dict[str, Any]:
     first = {}
     entries = []
@@ -238,10 +262,16 @@ def merge_nested_overall_ocr(
         overall = tile_result["json"].get("overall_ocr_res") or {}
         if not first and overall:
             first = overall
-
         entries.extend(collect_ocr_entries_for_payload(overall, tile.left, tile.top))
 
     entries.sort(key=lambda entry: geometry_sort_key(entry["rec_poly"]))
+    # Merge possible fragments created by tiling, using seam positions
+    seam_positions = sorted({
+        tr["tile"].right
+        for tr in tile_results
+        if hasattr(tr["tile"], "col") and tr["tile"].col < (grid_cols - 1)
+    })
+    entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
 
     merged = {
         "input_path": str(image_path),
@@ -347,6 +377,151 @@ def collect_ocr_entries(tile_results: list[dict[str, Any]]) -> list[dict[str, An
     return entries
 
 
+def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[float] | None = None) -> list[dict[str, Any]]:
+    """Try to rejoin word fragments that were split at tile boundaries.
+
+    Heuristic:
+    - Group entries into approximate text lines by vertical center.
+    - Within each line, sort tokens left-to-right and merge adjacent tokens
+      when the horizontal gap is very small relative to the estimated
+      character width for the line (likely a tile seam split).
+
+    Returns a new entries list with merged `text` and unified `rec_poly` boxes.
+    """
+    if not entries:
+        return entries
+
+    # Build structured list with bbox and centers
+    structured = []
+    for e in entries:
+        bbox = geometry_to_bbox(e["rec_poly"]) if "rec_poly" in e else geometry_to_bbox(e.get("dt_poly", e.get("rec_poly")))
+        x0, y0, x1, y1 = bbox
+        center_y = (y0 + y1) / 2.0
+        width = max(1.0, x1 - x0)
+        height = max(1.0, y1 - y0)
+        structured.append({"entry": e, "bbox": bbox, "center_y": center_y, "width": width, "height": height})
+
+    # median height -> line threshold
+    heights = sorted(s["height"] for s in structured)
+    median_h = heights[len(heights) // 2] if heights else 12.0
+    line_thr = max(8.0, median_h * 0.6)
+
+    # group into lines by y center
+    structured.sort(key=lambda s: (s["center_y"], s["bbox"][0]))
+    lines = []
+    cur = [structured[0]]
+    cur_y = structured[0]["center_y"]
+
+    for s in structured[1:]:
+        if abs(s["center_y"] - cur_y) <= line_thr:
+            cur.append(s)
+            cur_y = sum(x["center_y"] for x in cur) / len(cur)
+        else:
+            lines.append(cur)
+            cur = [s]
+            cur_y = s["center_y"]
+
+    if cur:
+        lines.append(cur)
+
+    merged_entries: list[dict[str, Any]] = []
+
+    for line in lines:
+        # sort tokens left-to-right
+        line.sort(key=lambda s: s["bbox"][0])
+
+        # estimate char width for the line
+        char_widths = []
+        for s in line:
+            text = str(s["entry"].get("text", ""))
+            nch = max(1, len(text.replace(" ", "")))
+            char_widths.append(s["width"] / nch)
+        char_w = sum(char_widths) / len(char_widths) if char_widths else 10.0
+
+        cur_s = line[0]
+        cur_text = str(cur_s["entry"].get("text", ""))
+        cur_bbox = list(cur_s["bbox"])
+        cur_score = cur_s["entry"].get("score")
+        cur_text_words = cur_s["entry"].get("text_word") if "text_word" in cur_s["entry"] else None
+        cur_text_word_boxes = cur_s["entry"].get("text_word_boxes") if "text_word_boxes" in cur_s["entry"] else None
+
+        for s in line[1:]:
+            nxt_text = str(s["entry"].get("text", ""))
+            nxt_bbox = list(s["bbox"])
+            gap = nxt_bbox[0] - cur_bbox[2]
+            # merge only when gap is very small AND one of the tokens touches a tile seam
+            touches_seam = False
+            if seam_x:
+                eps = max(1.0, char_w * 0.12)
+                for sx in seam_x:
+                    if abs(cur_bbox[2] - sx) <= eps or abs(nxt_bbox[0] - sx) <= eps:
+                        touches_seam = True
+                        break
+
+            # only join when gap is very small relative to char width (tight)
+            if gap <= max(1.0, char_w * 0.18) and cur_text and nxt_text and not cur_text.endswith(" ") and (seam_x is None or touches_seam):
+                # merge without space
+                cur_text = cur_text + nxt_text
+                cur_bbox[2] = max(cur_bbox[2], nxt_bbox[2])
+                cur_bbox[1] = min(cur_bbox[1], nxt_bbox[1])
+                cur_bbox[3] = max(cur_bbox[3], nxt_bbox[3])
+                # merge scores conservatively
+                if cur_score is None:
+                    cur_score = s["entry"].get("score")
+                elif s["entry"].get("score") is not None:
+                    cur_score = (cur_score + s["entry"].get("score")) / 2.0
+                # merge text_word arrays if present
+                if cur_text_words is None and "text_word" in s["entry"]:
+                    cur_text_words = s["entry"].get("text_word")
+                elif cur_text_words is not None and "text_word" in s["entry"]:
+                    cur_text_words = cur_text_words + s["entry"].get("text_word")
+
+                if cur_text_word_boxes is None and "text_word_boxes" in s["entry"]:
+                    cur_text_word_boxes = s["entry"].get("text_word_boxes")
+                elif cur_text_word_boxes is not None and "text_word_boxes" in s["entry"]:
+                    cur_text_word_boxes = cur_text_word_boxes + s["entry"].get("text_word_boxes")
+
+            else:
+                # finalize current
+                new_entry = {
+                    "text": cur_text,
+                    "score": cur_score,
+                    "rec_poly": [cur_bbox[0], cur_bbox[1], cur_bbox[2], cur_bbox[3]],
+                    "dt_poly": [cur_bbox[0], cur_bbox[1], cur_bbox[2], cur_bbox[3]],
+                }
+                if cur_text_words is not None:
+                    new_entry["text_word"] = cur_text_words
+                if cur_text_word_boxes is not None:
+                    new_entry["text_word_boxes"] = cur_text_word_boxes
+
+                merged_entries.append(new_entry)
+
+                # start new current
+                cur_text = nxt_text
+                cur_bbox = nxt_bbox
+                cur_score = s["entry"].get("score")
+                cur_text_words = s["entry"].get("text_word") if "text_word" in s["entry"] else None
+                cur_text_word_boxes = s["entry"].get("text_word_boxes") if "text_word_boxes" in s["entry"] else None
+
+        # finalize last in line
+        new_entry = {
+            "text": cur_text,
+            "score": cur_score,
+            "rec_poly": [cur_bbox[0], cur_bbox[1], cur_bbox[2], cur_bbox[3]],
+            "dt_poly": [cur_bbox[0], cur_bbox[1], cur_bbox[2], cur_bbox[3]],
+        }
+        if cur_text_words is not None:
+            new_entry["text_word"] = cur_text_words
+        if cur_text_word_boxes is not None:
+            new_entry["text_word_boxes"] = cur_text_word_boxes
+
+        merged_entries.append(new_entry)
+
+    # Sort merged entries for downstream consumption
+    merged_entries.sort(key=lambda entry: geometry_sort_key(entry["rec_poly"]))
+    return merged_entries
+
+
 def collect_ocr_entries_for_payload(
     payload: dict[str, Any],
     offset_x: int,
@@ -397,12 +572,42 @@ def collect_ocr_entries_for_payload(
 def build_tile_metadata(
     tile_results: list[dict[str, Any]],
     image_path: Path,
-    grid_size: int,
+    grid_rows: int,
+    grid_cols: int,
 ) -> dict[str, Any]:
+    # Backwards compatible: if grid_rows/grid_cols are encoded in the
+    # tile_results metadata, prefer them; otherwise infer square grid size.
+    # The signature previously accepted a single grid_size; callers now
+    # pass rows and cols as separate values in `image_path` parameter
+    # positions. To remain compatible, callers should pass two ints after
+    # image_path; however, we also support older single-int usage.
+    # Determine rows/cols from the tiles list if possible.
+    rows = None
+    cols = None
+    for t in tile_results:
+        try:
+            rows = max(rows or 0, t["tile"].row)
+            cols = max(cols or 0, t["tile"].col)
+        except Exception:
+            pass
+
+    # convert to counts (max index + 1)
+    if rows is not None:
+        rows = rows + 1
+    if cols is not None:
+        cols = cols + 1
+
+    # fall back to TILE_GRID_SIZE
+    if rows is None:
+        rows = TILE_GRID_SIZE
+    if cols is None:
+        cols = TILE_GRID_SIZE
+
     return {
         "enabled": True,
         "strategy": "grid",
-        "grid_size": grid_size,
+        "grid_rows": rows,
+        "grid_cols": cols,
         "source_image": image_path.name,
         "tiles": [
             {

@@ -181,19 +181,72 @@ def build_alto_lines(data):
         if word_lines:
             return word_lines, select_paddlevl
 
+    # If we don't have explicit word-level arrays, try to build lines
+    # from the available `rec_texts` / `rec_polys` tokens by spatial grouping.
     items = extract_line_level_items(source_payload, select_paddlevl)
-    lines = []
 
-    for item in items:
-        lines.append(
-            {
-                "box": item["box"],
-                "score": item.get("score"),
-                "strings": [item],
-            }
-        )
+    def group_words_into_lines(items):
+        """Group word-level items into TextLine-like structures.
 
-    lines.sort(key=lambda line: box_sort_key(line["box"]))
+        Each returned line is a dict: {"box": [x1,y1,x2,y2], "score": None, "strings": [item,...]}
+        where each `item` is {'text':..., 'box':..., 'score':...}.
+        """
+
+        if not items:
+            return []
+
+        # Convert to rects and compute centers
+        structured = []
+        for it in items:
+            x1, y1, x2, y2 = box_to_rect(it["box"])
+            center_y = (y1 + y2) / 2
+            center_x = (x1 + x2) / 2
+            height = max(1.0, y2 - y1)
+            structured.append({
+                "text": it["text"],
+                "box": it["box"],
+                "score": it.get("score"),
+                "rect": (x1, y1, x2, y2),
+                "center_y": center_y,
+                "center_x": center_x,
+                "height": height,
+            })
+
+        median_height = sorted(s["height"] for s in structured)[len(structured) // 2]
+        line_threshold = max(8.0, median_height * 0.6)
+
+        structured.sort(key=lambda s: (s["center_y"], s["rect"][0]))
+
+        lines = []
+        current = [structured[0]]
+        current_y = structured[0]["center_y"]
+
+        for s in structured[1:]:
+            if abs(s["center_y"] - current_y) <= line_threshold:
+                current.append(s)
+                current_y = sum(x["center_y"] for x in current) / len(current)
+            else:
+                # finalize current line
+                current.sort(key=lambda x: x["rect"][0])
+                line_box = calculate_line_box([c["box"] for c in current])
+                strings = [{"text": c["text"], "box": c["box"], "score": c.get("score")} for c in current]
+                lines.append({"box": line_box, "score": None, "strings": strings})
+
+                current = [s]
+                current_y = s["center_y"]
+
+        # finalize last
+        if current:
+            current.sort(key=lambda x: x["rect"][0])
+            line_box = calculate_line_box([c["box"] for c in current])
+            strings = [{"text": c["text"], "box": c["box"], "score": c.get("score")} for c in current]
+            lines.append({"box": line_box, "score": None, "strings": strings})
+
+        # Sort lines top-to-bottom
+        lines.sort(key=lambda line: box_sort_key(line["box"]))
+        return lines
+
+    lines = group_words_into_lines(items)
     return lines, select_paddlevl
 
 
@@ -215,6 +268,152 @@ def box_to_alto_attrs(box, scale):
         "WIDTH": str((x2 - x1) * scale),
         "HEIGHT": str((y2 - y1) * scale),
     }
+
+
+def detect_columns(lines, page_width, min_valley_width_ratio=0.03):
+    """Detect vertical column separators using a horizontal projection.
+
+    Returns a list of (x0, x1) column ranges in pixel coordinates. If no
+    clear separators are found, returns a single column covering the page.
+    """
+    if not lines or page_width <= 0:
+        return [(0, page_width)]
+
+    # bin the page width into coarse bins to build a projection profile.
+    page_width = int(page_width)
+    bin_size = max(8, page_width // 200)
+    num_bins = (page_width + bin_size - 1) // bin_size
+
+    coverage = [0] * num_bins
+
+    for ln in lines:
+        x1, y1, x2, y2 = box_to_rect(ln["box"])
+        b0 = max(0, int(x1 // bin_size))
+        b1 = min(num_bins - 1, int(x2 // bin_size))
+        for b in range(b0, b1 + 1):
+            coverage[b] += 1
+
+    max_cov = max(coverage) if coverage else 0
+    valley_thr = max(1, int(max_cov * 0.05))
+
+    # find contiguous low-coverage (valley) ranges
+    valleys = []
+    in_valley = False
+    vstart = None
+    for i, c in enumerate(coverage):
+        if c <= valley_thr:
+            if not in_valley:
+                in_valley = True
+                vstart = i
+        else:
+            if in_valley:
+                valleys.append((vstart, i - 1))
+                in_valley = False
+    if in_valley:
+        valleys.append((vstart, num_bins - 1))
+
+    # filter narrow valleys
+    min_valley_bins = max(1, int(min_valley_width_ratio * num_bins))
+    separations = [v for v in valleys if (v[1] - v[0] + 1) >= min_valley_bins]
+
+    if not separations:
+        return [(0, page_width)]
+
+    cols = []
+    left = 0
+    for v in separations:
+        sep_start = v[0] * bin_size
+        sep_end = min(page_width, (v[1] + 1) * bin_size)
+        if sep_start - left > bin_size:
+            cols.append((left, min(sep_start, page_width)))
+        left = sep_end
+
+    if page_width - left > bin_size:
+        cols.append((left, page_width))
+
+    # If no columns detected (all valleys at edges), fall back to whole page
+    if not cols:
+        return [(0, page_width)]
+
+    return cols
+
+
+def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
+    """Group sorted `lines` into higher-level text blocks.
+
+    - If `select_paddlevl` is True (PaddleVL), each line represents a layout
+      block already, so return one block per line.
+    - Otherwise, cluster consecutive lines into blocks based on vertical
+      proximity using a median line-height heuristic.
+
+    Returns a list of blocks: {"box": [x1,y1,x2,y2], "lines": [...]}
+    """
+    if not lines:
+        return []
+
+    if select_paddlevl:
+        blocks = []
+        for ln in lines:
+            blocks.append({"box": ln["box"], "lines": [ln]})
+        return blocks
+
+    # Non-PaddleVL: cluster by vertical gaps
+    # If page_width not provided, estimate from line boxes
+    if page_width is None:
+        page_width = int(max((box_to_rect(l["box"])[2] for l in lines), default=0))
+
+    # Detect columns and cluster lines within each column separately.
+    columns = detect_columns(lines, page_width)
+
+    blocks = []
+
+    for col_start, col_end in sorted(columns, key=lambda c: c[0]):
+        # select lines whose horizontal center falls into this column
+        col_lines = []
+        for ln in lines:
+            x1, y1, x2, y2 = box_to_rect(ln["box"])
+            center_x = (x1 + x2) / 2.0
+            # include right edge in last column
+            if (center_x >= col_start and center_x < col_end) or (
+                col_end == page_width and center_x <= col_end
+            ):
+                col_lines.append(ln)
+
+        if not col_lines:
+            continue
+
+        rects = [box_to_rect(l["box"]) for l in col_lines]
+        heights = [r[3] - r[1] for r in rects]
+        median_h = sorted(heights)[len(heights) // 2] if heights else 12.0
+        gap_threshold = max(8.0, median_h * 0.8)
+
+        sorted_lines = sorted(col_lines, key=lambda l: box_to_rect(l["box"])[1])
+
+        current = [sorted_lines[0]]
+        _, cur_y1, _, cur_y2 = box_to_rect(sorted_lines[0]["box"])
+
+        for ln in sorted_lines[1:]:
+            x1, y1, x2, y2 = box_to_rect(ln["box"])
+
+            if y1 - cur_y2 <= gap_threshold:
+                current.append(ln)
+                cur_y2 = max(cur_y2, y2)
+            else:
+                boxes = [l["box"] for l in current]
+                block_box = calculate_line_box(boxes)
+                blocks.append({"box": block_box, "lines": current})
+
+                current = [ln]
+                cur_y2 = y2
+
+        if current:
+            boxes = [l["box"] for l in current]
+            block_box = calculate_line_box(boxes)
+            blocks.append({"box": block_box, "lines": current})
+
+    # Sort blocks left-to-right then top-to-bottom for reading order.
+    blocks.sort(key=lambda b: (box_to_rect(b["box"])[0], box_to_rect(b["box"])[1]))
+    return blocks
 
 
 def generate_alto(
@@ -356,44 +555,45 @@ def generate_alto(
         },
     )
 
-    # Create one TextBlock that contains all OCR strings.
-    text_block = ET.SubElement(
-        print_space,
-        "TextBlock",
-        {
-            "HPOS": str(hpos),
-            "VPOS": str(vpos),
-            "WIDTH": str(block_width),
-            "HEIGHT": str(block_height),
-            "{http://www.w3.org/1999/xlink}type": "simple",
-            
-        },
-    )
+    # Group lines into TextBlocks (use layout blocks from PaddleVL when available).
+    blocks = group_lines_into_blocks(lines, select_paddlevl)
 
-    # ------------------------------------------------------------------
-    # TextLine and String elements
-    # ------------------------------------------------------------------
-    for line in lines:
-        text_line = ET.SubElement(
-            text_block,
-            "TextLine",
-            box_to_alto_attrs(line["box"], scale),
-        )
+    if not blocks:
+        # Fallback: if we have individual string boxes, use their overall box;
+        # otherwise create a single block covering the whole page.
+        if boxes:
+            blocks = [{"box": calculate_line_box(boxes), "lines": lines}]
+        else:
+            blocks = [{"box": [0, 0, width, height], "lines": lines}]
 
-        for string_item in line["strings"]:
-            attrs = {
-                "CONTENT": string_item["text"],
-                **box_to_alto_attrs(string_item["box"], scale),
-            }
+    # Create a TextBlock element for each block and add TextLine/String children.
+    for block in blocks:
+        tb_attrs = box_to_alto_attrs(block["box"], scale)
+        tb_attrs["{http://www.w3.org/1999/xlink}type"] = "simple"
 
-            if lang and not select_paddlevl:
-                attrs["LANG"] = lang
+        text_block = ET.SubElement(print_space, "TextBlock", tb_attrs)
 
-            wc = string_item.get("score")
-            if wc is not None:
-                attrs["WC"] = str(wc)
+        for line in block["lines"]:
+            text_line = ET.SubElement(
+                text_block,
+                "TextLine",
+                box_to_alto_attrs(line["box"], scale),
+            )
 
-            ET.SubElement(text_line, "String", attrs)
+            for string_item in line["strings"]:
+                attrs = {
+                    "CONTENT": string_item["text"],
+                    **box_to_alto_attrs(string_item["box"], scale),
+                }
+
+                if lang and not select_paddlevl:
+                    attrs["LANG"] = lang
+
+                wc = string_item.get("score")
+                if wc is not None:
+                    attrs["WC"] = str(wc)
+
+                ET.SubElement(text_line, "String", attrs)
 
     # Convert XML tree to formatted XML bytes.
     xml_bytes = minidom.parseString(
