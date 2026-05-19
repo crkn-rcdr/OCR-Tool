@@ -158,22 +158,30 @@ def choose_folder(current_value=""):
         return current_value
 
 
-def update_options(method):
+def update_grid_overlap_control(method, tile_strategy):
+    supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
+    show_fixed_grid_controls = supports_tiling and (tile_strategy or "grid") == "grid"
+
+    return gr.update(visible=show_fixed_grid_controls, interactive=supports_tiling)
+
+
+def update_options(method, tile_strategy):
     """
     Update visible UI options based on the selected OCR method.
     """
-    tile_update = (
+    supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
+    tile_checkbox_update = (
         gr.update(interactive=True)
-        if method in ["PP-OCRv5", "PP-StructureV3"]
+        if supports_tiling
         else gr.update(interactive=False, value=False)
     )
+    tile_strategy_update = gr.update(interactive=supports_tiling)
 
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
-        tile_update,
-        tile_update,
-        tile_update,
+        tile_checkbox_update,
+        tile_strategy_update,
     )
 
 
@@ -188,8 +196,7 @@ def submit_config(
     use_layout_detection,
     generate_text_file,
     tile_source_images,
-    tile_rows,
-    tile_cols,
+    tile_strategy,
     text_det_thresh,
 ):
     """
@@ -212,12 +219,13 @@ def submit_config(
         "use_doc_unwarping": use_doc_unwarping,
         "generate_text_file": generate_text_file,
         "tile_source_images": tile_source_images,
-        "tile_rows": int(tile_rows) if tile_rows is not None else 3,
-        "tile_cols": int(tile_cols) if tile_cols is not None else 1,
+        "tile_strategy": tile_strategy or "grid",
+        "tile_rows": 3,
+        "tile_cols": 1,
     }
 
     if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
-        yield "3x3 tiling is currently available for PP-OCRv5 and PP-StructureV3 only."
+        yield "Source-image tiling is currently available for PP-OCRv5 and PP-StructureV3 only."
         return
 
     yield "Downloading models... OCR will start after the download is complete."
@@ -299,28 +307,22 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         tile_source_images = gr.Checkbox(
-            label='Tile source images into a grid before OCR.',
+            label='Tile source images before OCR.',
             value=False,
-            info="Available for PP-OCRv5 and PP-StructureV3. Default tiling: 3 rows x 1 column.",
+            info="Available for PP-OCRv5 and PP-StructureV3. Fixed grid uses 3 rows x 1 column.",
         )
 
-        tile_rows = gr.Slider(
-            minimum=1,
-            maximum=10,
-            value=3,
-            step=1,
-            label="Tile Rows",
-            info="Number of tile rows when tiling source images.",
+        tile_strategy = gr.Dropdown(
+            choices=[
+                ("Fixed grid", "grid"),
+                ("Content boxes (CV)", "content_boxes"),
+            ],
+            value="grid",
+            label="Tile Strategy",
+            info="Use fixed grid tiles or detect content boxes from foreground vs whitespace.",
         )
 
-        tile_cols = gr.Slider(
-            minimum=1,
-            maximum=10,
-            value=1,
-            step=1,
-            label="Tile Columns",
-            info="Number of tile columns when tiling source images (default 1).",
-        )
+
 
     # PaddleVL-specific OCR options.
     with gr.Column(visible=False) as paddlevl_options:
@@ -377,8 +379,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_layout_detection,
         generate_text_file,
         tile_source_images,
-        tile_rows,
-        tile_cols,
+        tile_strategy,
         text_det_thresh,
     ]
 
@@ -386,9 +387,16 @@ with gr.Blocks(css=APP_CSS) as demo:
     # when the processing method changes.
     method_radio.change(
         fn=update_options,
-        inputs=method_radio,
-        outputs=[paddleocr_options, paddlevl_options, tile_source_images, tile_rows, tile_cols]
+        inputs=[method_radio, tile_strategy],
+        outputs=[
+            paddleocr_options,
+            paddlevl_options,
+            tile_source_images,
+            tile_strategy,
+        ]
     )
+
+
 
     # Open a folder selection dialog for the input folder.
     image_input_btn.click(
@@ -450,8 +458,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_layout_detection,
         generate_text_file,
         tile_source_images,
-        tile_rows,
-        tile_cols,
+        tile_strategy,
         text_det_thresh,
     ],
     outputs=output

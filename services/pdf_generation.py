@@ -39,6 +39,14 @@ def polygon_to_rect(poly):
     if hasattr(poly, "tolist"):
         poly = poly.tolist()
 
+    if (
+        isinstance(poly, list)
+        and len(poly) == 4
+        and all(isinstance(value, (int, float)) for value in poly)
+    ):
+        x0, y0, x1, y1 = poly
+        return fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
 

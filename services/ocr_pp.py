@@ -9,7 +9,11 @@ from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger
 from services.txt_generation import generate_txt_file 
-from services.tile_ocr import run_tiled_local_ocr, supports_tiled_ocr
+from services.tile_ocr import (
+    DEFAULT_CONTENT_BOX_PADDING_PX,
+    run_tiled_local_ocr,
+    supports_tiled_ocr,
+)
 
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
@@ -27,6 +31,25 @@ RUN_LOCK = threading.Lock()
 
 # Global flag to signal stopping the OCR process
 STOP_FLAG = False
+
+
+def describe_tiling(opt):
+    strategy = opt.get("tile_strategy", "grid")
+
+    if strategy == "content_boxes":
+        padding_value = opt.get("tile_content_padding_px")
+        padding = int(
+            DEFAULT_CONTENT_BOX_PADDING_PX
+            if padding_value is None
+            else padding_value
+        )
+        padding_label = f", {padding}px padding" if padding > 0 else ""
+        return f"content-box tiled OCR{padding_label}"
+
+    overlap = int(opt.get("tile_overlap_px", 0) or 0)
+    overlap_label = f", {overlap}px overlap" if overlap > 0 else ""
+    return f"3x1 tiled OCR{overlap_label}"
+
 
 def stop_ocr():
     """
@@ -114,7 +137,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 success_count += 1
                 if tile_source_images and supports_tiled_ocr(method, select):
                     messages.append(
-                        f"{input_path.name} created from 3x3 tiled OCR and saved in {out_dir}"
+                        f"{input_path.name} created from {describe_tiling(opt)} and saved in {out_dir}"
                     )
                 else:
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
@@ -180,7 +203,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                         if tile_source_images and supports_tiled_ocr(method, select):
                             messages.append(
-                                f"{img.name} created from 3x3 tiled OCR and saved in {out_dir}"
+                                f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
                             )
                         else:
                             messages.append(f"{img.name} created and saved in {out_dir}")

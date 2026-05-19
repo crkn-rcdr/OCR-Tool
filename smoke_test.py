@@ -73,7 +73,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tile-source-images",
         action="store_true",
-        help="Split each source image into a 3x3 grid before running local OCR.",
+        help="Split each source image into tiles before running local OCR.",
+    )
+    parser.add_argument(
+        "--tile-strategy",
+        choices=["grid", "content_boxes"],
+        default="grid",
+        help="Tile strategy: fixed grid or OpenCV-detected content boxes.",
+    )
+    parser.add_argument(
+        "--tile-overlap-px",
+        type=int,
+        default=48,
+        help="Fixed 3x1 grid tile overlap, in pixels.",
+    )
+    parser.add_argument(
+        "--tile-content-padding-px",
+        type=int,
+        default=None,
+        help="Optional content-box tile padding, in pixels.",
     )
     return parser.parse_args()
 
@@ -85,7 +103,14 @@ def build_options(args: argparse.Namespace) -> dict:
         "use_doc_unwarping": args.use_doc_unwarping,
         "generate_text_file": args.generate_text_file,
         "tile_source_images": args.tile_source_images,
+        "tile_strategy": args.tile_strategy,
+        "tile_rows": 3,
+        "tile_cols": 1,
+        "tile_overlap_px": max(0, args.tile_overlap_px),
     }
+
+    if args.tile_content_padding_px is not None:
+        opt["tile_content_padding_px"] = max(0, args.tile_content_padding_px)
 
     if args.method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
         opt.update(
