@@ -69,8 +69,10 @@ OPTION_ORDER = [
 
 TILE_STRATEGY_LABELS = {
     "grid": "Fixed 3x1 grid",
+    "grid_3x2": "Fixed 3x2 grid",
     "doclayout_v3": "PP-DocLayoutV3 Layout",
     "grid_doclayout_v3": "3x1 + PP-DocLayoutV3",
+    "grid_3x2_doclayout_v3": "3x2 + PP-DocLayoutV3",
 }
 
 GRID_TILE_KEYS = {"tile_rows", "tile_cols", "tile_overlap_px"}
@@ -118,10 +120,10 @@ def option_applies_to_strategy(key, opt):
         return False
 
     if key in GRID_TILE_KEYS:
-        return strategy in {"grid", "grid_doclayout_v3"}
+        return strategy in {"grid", "grid_3x2", "grid_doclayout_v3", "grid_3x2_doclayout_v3"}
 
     if key in DOCLAYOUT_TILE_KEYS:
-        return strategy in {"doclayout_v3", "grid_doclayout_v3"}
+        return strategy in {"doclayout_v3", "grid_doclayout_v3", "grid_3x2_doclayout_v3"}
 
     return True
 
@@ -129,7 +131,7 @@ def option_applies_to_strategy(key, opt):
 def default_strategy_options(opt):
     strategy = tile_strategy_from_options(opt)
 
-    if strategy in {"doclayout_v3", "grid_doclayout_v3"}:
+    if strategy in {"doclayout_v3", "grid_doclayout_v3", "grid_3x2_doclayout_v3"}:
         for key, value in DOCLAYOUT_DEFAULT_OPTIONS.items():
             if key not in opt:
                 yield key, value
@@ -195,7 +197,7 @@ def models_for_run(opt, select=None):
     elif method:
         models.append(f"Primary pipeline: {method}")
 
-    if tile_enabled and tile_strategy in {"doclayout_v3", "grid_doclayout_v3"}:
+    if tile_enabled and tile_strategy in {"doclayout_v3", "grid_doclayout_v3", "grid_3x2_doclayout_v3"}:
         models.append("Tile layout detector: PP-DocLayoutV3")
 
     if tile_enabled:

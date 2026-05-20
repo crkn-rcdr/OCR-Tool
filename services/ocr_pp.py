@@ -14,9 +14,11 @@ from services.tile_ocr import (
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_STRATEGY,
+    tile_grid_for_strategy,
     run_tiled_local_ocr,
     supports_tiled_ocr,
 )
+from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
@@ -38,6 +40,8 @@ STOP_FLAG = False
 
 def describe_tiling(opt):
     strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
+    rows, cols = tile_grid_for_strategy(strategy)
+    grid_label = f"{rows}x{cols}"
 
     if strategy == "doclayout_v3":
         padding_value = opt.get("tile_doclayout_padding_px")
@@ -50,7 +54,7 @@ def describe_tiling(opt):
         padding_label = f", {padding}px padding" if padding > 0 else ""
         return f"PP-DocLayoutV3 tiled OCR{padding_label}, threshold {threshold:g}"
 
-    if strategy == "grid_doclayout_v3":
+    if strategy in {"grid_doclayout_v3", "grid_3x2_doclayout_v3"}:
         padding_value = opt.get("tile_doclayout_padding_px")
         padding = int(
             DEFAULT_DOCLAYOUT_PADDING_PX
@@ -67,7 +71,7 @@ def describe_tiling(opt):
         overlap_label = f", {overlap}px band overlap" if overlap > 0 else ""
         padding_label = f", {padding}px layout padding" if padding > 0 else ""
         return (
-            "3x1 + PP-DocLayoutV3 tiled OCR"
+            f"{grid_label} + PP-DocLayoutV3 tiled OCR"
             f"{overlap_label}{padding_label}, threshold {threshold:g}"
         )
 
@@ -78,7 +82,7 @@ def describe_tiling(opt):
         else overlap_value
     )
     overlap_label = f", {overlap}px overlap" if overlap > 0 else ""
-    return f"3x1 tiled OCR{overlap_label}"
+    return f"{grid_label} tiled OCR{overlap_label}"
 
 
 def stop_ocr():
@@ -336,6 +340,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
 
     if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
         merged_json = run_tiled_local_ocr(image_path, opt, select=select)
+        normalize_ocr_word_boxes_in_payload(merged_json)
         final_json.write_text(
             json.dumps(merged_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -349,5 +354,19 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
 
     json_file = out_dir / f"{image_path.stem}_res.json"
     json_file.rename(final_json)
+    normalize_saved_ocr_json(final_json)
 
     return final_json
+
+
+def normalize_saved_ocr_json(json_path: Path) -> None:
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    if normalize_ocr_word_boxes_in_payload(payload):
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )

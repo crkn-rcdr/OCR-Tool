@@ -9,6 +9,8 @@ from numbers import Number
 
 from PIL import Image
 
+from services.word_box_normalization import merge_apostrophe_word_boxes
+
 
 ALTO_PROFILE_ABBYY_LIKE = "abbyy_like"
 ALTO_PROFILE_LEGACY = "legacy"
@@ -16,7 +18,11 @@ ALTO_NS_V3 = "http://www.loc.gov/standards/alto/ns-v3#"
 ALTO_NS_V4 = "http://www.loc.gov/standards/alto/ns-v4#"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
-DOCLAYOUT_TILE_STRATEGIES = {"doclayout_v3", "grid_doclayout_v3"}
+DOCLAYOUT_TILE_STRATEGIES = {
+    "doclayout_v3",
+    "grid_doclayout_v3",
+    "grid_3x2_doclayout_v3",
+}
 TITLE_LABELS = {"doc_title", "paragraph_title", "title"}
 
 
@@ -117,6 +123,7 @@ def extract_source_ocr_payload(data):
 
 
 def extract_word_level_lines(ocr_payload):
+    rec_texts = ocr_payload.get("rec_texts", [])
     rec_scores = ocr_payload.get("rec_scores", [])
     text_word_lines = ocr_payload.get("text_word") or []
     text_word_box_lines = ocr_payload.get("text_word_boxes") or []
@@ -131,6 +138,12 @@ def extract_word_level_lines(ocr_payload):
         if not words or not boxes:
             continue
 
+        line_text = rec_texts[index] if index < len(rec_texts) else None
+        words, boxes = merge_apostrophe_word_boxes(
+            words,
+            boxes,
+            line_text=line_text,
+        )
         string_items = []
         line_score = rec_scores[index] if index < len(rec_scores) else None
 

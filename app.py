@@ -25,6 +25,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
 )
+from services.tile_ocr import tile_grid_for_strategy
 
 APP_CSS = """
 #fixed-header {
@@ -176,11 +177,14 @@ def update_tile_controls(method, tile_strategy):
     strategy = tile_strategy or "grid_doclayout_v3"
     show_fixed_grid_controls = supports_tiling and strategy in {
         "grid",
+        "grid_3x2",
         "grid_doclayout_v3",
+        "grid_3x2_doclayout_v3",
     }
     show_doclayout_controls = supports_tiling and strategy in {
         "doclayout_v3",
         "grid_doclayout_v3",
+        "grid_3x2_doclayout_v3",
     }
 
     return (
@@ -303,6 +307,7 @@ def submit_config(
 
     input_path = Path(image_input_folder)
     output_root = Path(output_folder)
+    tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy or "grid_doclayout_v3")
     
     opt = {
         "method": method,
@@ -311,8 +316,8 @@ def submit_config(
         "generate_text_file": generate_text_file,
         "tile_source_images": tile_source_images,
         "tile_strategy": tile_strategy or "grid_doclayout_v3",
-        "tile_rows": 3,
-        "tile_cols": 1,
+        "tile_rows": tile_rows,
+        "tile_cols": tile_cols,
         "tile_overlap_px": (
             int(tile_overlap_px)
             if tile_overlap_px is not None
@@ -422,20 +427,22 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_source_images = gr.Checkbox(
             label='Tile source images before OCR.',
             value=False,
-            info="Available for PP-OCRv5 and PP-StructureV3. Fixed grid uses 3 rows x 1 column.",
+            info="Available for PP-OCRv5 and PP-StructureV3.",
         )
 
         tile_strategy = gr.Dropdown(
             choices=[
-                ("Fixed grid", "grid"),
+                ("Fixed 3x1 grid", "grid"),
+                ("Fixed 3x2 grid", "grid_3x2"),
                 ("PP-DocLayoutV3 Layout", "doclayout_v3"),
                 ("3x1 + PP-DocLayoutV3", "grid_doclayout_v3"),
+                ("3x2 + PP-DocLayoutV3", "grid_3x2_doclayout_v3"),
             ],
             value="grid_doclayout_v3",
             label="Tile Strategy",
             info=(
-                "Use fixed 3x1 tiles, PaddleX PP-DocLayoutV3 regions, "
-                "or PP-DocLayoutV3 inside each 3x1 band."
+                "Use fixed tiles, PaddleX PP-DocLayoutV3 regions, "
+                "or PP-DocLayoutV3 inside each fixed grid tile."
             ),
         )
 
@@ -445,7 +452,7 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=DEFAULT_TILE_OVERLAP_PX,
             step=4,
             label="Tile Overlap (px)",
-            info="Overlap for fixed 3x1 grid tiles before deduping.",
+            info="Overlap for fixed grid tiles before deduping.",
         )
 
         tile_doclayout_padding_px = gr.Slider(

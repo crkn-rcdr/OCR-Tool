@@ -14,6 +14,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
 )
+from services.tile_ocr import tile_grid_for_strategy
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT = (
@@ -133,19 +134,25 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tile-strategy",
-        choices=["grid", "doclayout_v3", "grid_doclayout_v3"],
+        choices=[
+            "grid",
+            "grid_3x2",
+            "doclayout_v3",
+            "grid_doclayout_v3",
+            "grid_3x2_doclayout_v3",
+        ],
         default="grid_doclayout_v3",
         help=(
-            "Tile strategy: fixed grid or PP-DocLayoutV3 layout regions. "
-            "Use grid_doclayout_v3 to run "
-            "PP-DocLayoutV3 inside each fixed 3x1 band."
+            "Tile strategy: fixed 3x1/3x2 grid or PP-DocLayoutV3 layout regions. "
+            "Use grid_doclayout_v3 or grid_3x2_doclayout_v3 to run "
+            "PP-DocLayoutV3 inside each fixed grid tile."
         ),
     )
     parser.add_argument(
         "--tile-overlap-px",
         type=int,
         default=DEFAULT_TILE_OVERLAP_PX,
-        help="Fixed 3x1 grid tile overlap, in pixels.",
+        help="Fixed grid tile overlap, in pixels.",
     )
     parser.add_argument(
         "--tile-doclayout-padding-px",
@@ -168,6 +175,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_options(args: argparse.Namespace) -> dict:
+    tile_rows, tile_cols = tile_grid_for_strategy(args.tile_strategy)
     opt = {
         "method": args.method,
         "use_doc_orientation_classify": args.use_doc_orientation_classify,
@@ -175,8 +183,8 @@ def build_options(args: argparse.Namespace) -> dict:
         "generate_text_file": args.generate_text_file,
         "tile_source_images": args.tile_source_images,
         "tile_strategy": args.tile_strategy,
-        "tile_rows": 3,
-        "tile_cols": 1,
+        "tile_rows": tile_rows,
+        "tile_cols": tile_cols,
         "tile_overlap_px": max(0, args.tile_overlap_px),
         "tile_doclayout_padding_px": max(0, args.tile_doclayout_padding_px),
         "tile_doclayout_threshold": max(

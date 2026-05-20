@@ -20,6 +20,7 @@ from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TILE_OVERLAP_PX,
 )
+from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 
 SUPPORTED_TILING_METHODS = {"PP-OCRv5", "PP-StructureV3"}
 TILE_GRID_SIZE = 3
@@ -27,13 +28,27 @@ DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
 DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
 TILE_STRATEGY_GRID = "grid"
+TILE_STRATEGY_GRID_3X2 = "grid_3x2"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
 TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
+TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3 = "grid_3x2_doclayout_v3"
 DEFAULT_TILE_STRATEGY = TILE_STRATEGY_GRID_DOCLAYOUT_V3
+GRID_TILE_STRATEGIES = {
+    TILE_STRATEGY_GRID,
+    TILE_STRATEGY_GRID_3X2,
+    TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+    TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+}
+GRID_DOCLAYOUT_TILE_STRATEGIES = {
+    TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+    TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+}
 SUPPORTED_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
+    TILE_STRATEGY_GRID_3X2,
     TILE_STRATEGY_DOCLAYOUT_V3,
     TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+    TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
 }
 DOCLAYOUT_TEXT_LABELS = {
     "abstract",
@@ -170,7 +185,7 @@ def run_tiled_local_ocr(
 
     with tempfile.TemporaryDirectory(prefix="ocr_tiles_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        if tile_strategy == TILE_STRATEGY_GRID_DOCLAYOUT_V3:
+        if tile_strategy in GRID_DOCLAYOUT_TILE_STRATEGIES:
             overlap_px = grid_overlap_px
             grid_doclayout_tiles = build_grid_doclayout_tiles(
                 image_path,
@@ -184,10 +199,8 @@ def run_tiled_local_ocr(
             )
             if grid_doclayout_tiles:
                 tiles = grid_doclayout_tiles
-                grid_rows = max(1, len(tiles))
-                grid_cols = 1
             else:
-                tile_strategy = TILE_STRATEGY_GRID
+                tile_strategy = grid_strategy_for_shape(grid_rows, grid_cols)
 
         if tile_strategy == TILE_STRATEGY_DOCLAYOUT_V3:
             overlap_px = doclayout_padding_px
@@ -203,9 +216,9 @@ def run_tiled_local_ocr(
                 grid_rows = max(1, len(tiles))
                 grid_cols = 1
             else:
-                tile_strategy = TILE_STRATEGY_GRID
+                tile_strategy = grid_strategy_for_shape(grid_rows, grid_cols)
 
-        if tile_strategy == TILE_STRATEGY_GRID:
+        if tile_strategy in {TILE_STRATEGY_GRID, TILE_STRATEGY_GRID_3X2}:
             overlap_px = grid_overlap_px
             tiles = build_image_tiles(
                 image_path,
@@ -303,12 +316,46 @@ def resolve_tile_grid(
     grid_rows: int | None = None,
     grid_cols: int | None = None,
 ) -> tuple[int, int]:
-    """Fixed-grid tiling is intentionally locked to the validated 3x1 layout."""
+    strategy = resolve_tile_strategy(opt)
+    strategy_rows, strategy_cols = tile_grid_for_strategy(strategy)
+
+    if strategy in GRID_TILE_STRATEGIES:
+        return strategy_rows, strategy_cols
+
+    rows = grid_rows if grid_rows is not None else opt.get("tile_rows", strategy_rows)
+    cols = grid_cols if grid_cols is not None else opt.get("tile_cols", strategy_cols)
+
+    try:
+        rows = max(1, int(rows))
+    except (TypeError, ValueError):
+        rows = strategy_rows
+
+    try:
+        cols = max(1, int(cols))
+    except (TypeError, ValueError):
+        cols = strategy_cols
+
+    return rows, cols
+
+
+def tile_grid_for_strategy(strategy: str | None) -> tuple[int, int]:
+    strategy = normalize_tile_strategy(strategy)
+    if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3}:
+        return 3, 2
     return DEFAULT_TILE_ROWS, DEFAULT_TILE_COLS
 
 
+def grid_strategy_for_shape(rows: int, cols: int) -> str:
+    return TILE_STRATEGY_GRID_3X2 if (int(rows), int(cols)) == (3, 2) else TILE_STRATEGY_GRID
+
+
 def resolve_tile_strategy(opt: dict) -> str:
-    strategy = str(opt.get("tile_strategy") or DEFAULT_TILE_STRATEGY)
+    strategy = normalize_tile_strategy(opt.get("tile_strategy"))
+    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
+
+
+def normalize_tile_strategy(value: Any) -> str:
+    strategy = str(value or DEFAULT_TILE_STRATEGY)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
     strategy_aliases = {
         "pp_doclayoutv3": TILE_STRATEGY_DOCLAYOUT_V3,
@@ -316,14 +363,28 @@ def resolve_tile_strategy(opt: dict) -> str:
         "pp_doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "3x1": TILE_STRATEGY_GRID,
+        "3x1_grid": TILE_STRATEGY_GRID,
+        "fixed_3x1": TILE_STRATEGY_GRID,
+        "3x2": TILE_STRATEGY_GRID_3X2,
+        "3x2_grid": TILE_STRATEGY_GRID_3X2,
+        "fixed_3x2": TILE_STRATEGY_GRID_3X2,
         "3x1_doclayout_v3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
         "3x1_doclayout": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "3x1_pp_doclayout_v3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "3x1_pp_doclayoutv3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "3x2_doclayout_v3": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+        "3x2_doclayout": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+        "3x2_pp_doclayout_v3": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+        "3x2_pp_doclayoutv3": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
         "grid_doclayout": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
         "grid_pp_doclayout_v3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
         "grid_pp_doclayoutv3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "grid_3x2_doclayout": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+        "grid_3x2_pp_doclayout_v3": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
+        "grid_3x2_pp_doclayoutv3": TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
     }
-    strategy = strategy_aliases.get(strategy, strategy)
-    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
+    return strategy_aliases.get(strategy, strategy)
 
 
 def build_image_tiles(
@@ -582,8 +643,8 @@ def build_doclayout_tiles_from_source_tile(
             image.crop((left, top, right, bottom)).save(tile_path)
             tiles.append(
                 TileSpec(
-                    row=tile_index,
-                    col=0,
+                    row=source_tile.row,
+                    col=source_tile.col,
                     left=source_tile.left + left,
                     top=source_tile.top + top,
                     right=source_tile.left + right,
@@ -630,8 +691,8 @@ def copy_tile_with_sequence(
     label: str | None = None,
 ) -> TileSpec:
     return TileSpec(
-        row=sequence_index,
-        col=0,
+        row=tile.row,
+        col=tile.col,
         left=tile.left,
         top=tile.top,
         right=tile.right,
@@ -1433,12 +1494,9 @@ def merge_ppocr_tile_results(
     first = tile_results[0]["json"] if tile_results else {}
     entries = dedupe_overlapping_entries(collect_ocr_entries(tile_results))
     # Attempt to rejoin tokens that were split at tile seams.
-    # Compute vertical seam x positions from tile bboxes (inner vertical borders).
-    seam_positions = sorted({
-        tr["tile"].nominal_right
-        for tr in tile_results
-        if hasattr(tr["tile"], "col") and tr["tile"].col < (grid_cols - 1)
-    })
+    # Compute vertical seam x positions from the fixed grid so DocLayout subtiles
+    # still know where the source image was split.
+    seam_positions = grid_vertical_seams(image_path, grid_cols)
     entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
 
     merged = {
@@ -1475,6 +1533,7 @@ def merge_ppocr_tile_results(
         ]
         merged["text_word"] = [entry.get("text_word", []) for entry in entries]
 
+    normalize_ocr_word_boxes_in_payload(merged)
     return merged
 
 
@@ -1554,12 +1613,8 @@ def merge_nested_overall_ocr(
 
     entries = dedupe_overlapping_entries(entries)
     entries.sort(key=lambda entry: geometry_sort_key(entry["rec_poly"]))
-    # Merge possible fragments created by tiling, using seam positions
-    seam_positions = sorted({
-        tr["tile"].nominal_right
-        for tr in tile_results
-        if hasattr(tr["tile"], "col") and tr["tile"].col < (grid_cols - 1)
-    })
+    # Merge possible fragments created by tiling, using fixed-grid seam positions.
+    seam_positions = grid_vertical_seams(image_path, grid_cols)
     entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
 
     merged = {
@@ -1588,7 +1643,21 @@ def merge_nested_overall_ocr(
         ]
         merged["text_word"] = [entry.get("text_word", []) for entry in entries]
 
+    normalize_ocr_word_boxes_in_payload(merged)
     return merged
+
+
+def grid_vertical_seams(image_path: Path, grid_cols: int) -> list[int]:
+    if grid_cols <= 1:
+        return []
+
+    try:
+        with Image.open(image_path) as image:
+            width = image.width
+    except Exception:
+        return []
+
+    return [(width * index) // grid_cols for index in range(1, grid_cols)]
 
 
 def merge_parsing_results(tile_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1745,21 +1814,48 @@ def dedupe_overlapping_entries(entries: list[dict[str, Any]]) -> list[dict[str, 
 
     ranked_entries = sorted(
         (deepcopy(entry) for entry in entries),
-        key=lambda entry: (
-            float(entry.get("score") or 0.0),
-            bbox_area(geometry_to_bbox(entry.get("rec_poly"))),
-        ),
+        key=entry_dedupe_preference,
         reverse=True,
     )
     kept: list[dict[str, Any]] = []
+    kept_by_vertical_bucket: dict[int, list[dict[str, Any]]] = {}
 
     for entry in ranked_entries:
-        if any(entries_are_duplicate(entry, existing) for existing in kept):
+        candidate_entries = nearby_dedupe_candidates(entry, kept_by_vertical_bucket)
+        if any(entries_are_duplicate(entry, existing) for existing in candidate_entries):
             continue
         kept.append(entry)
+        bucket = vertical_dedupe_bucket(entry)
+        kept_by_vertical_bucket.setdefault(bucket, []).append(entry)
 
     kept.sort(key=lambda entry: geometry_sort_key(entry["rec_poly"]))
     return kept
+
+
+def nearby_dedupe_candidates(
+    entry: dict[str, Any],
+    buckets: dict[int, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    bucket = vertical_dedupe_bucket(entry)
+    candidates: list[dict[str, Any]] = []
+
+    for nearby_bucket in range(bucket - 1, bucket + 2):
+        candidates.extend(buckets.get(nearby_bucket, []))
+
+    return candidates
+
+
+def vertical_dedupe_bucket(entry: dict[str, Any]) -> int:
+    bbox = geometry_to_bbox(entry.get("rec_poly"))
+    center_y = (bbox[1] + bbox[3]) / 2.0
+    return int(center_y // 96)
+
+
+def entry_dedupe_preference(entry: dict[str, Any]) -> tuple[int, float, float]:
+    text_len = len(normalize_for_dedupe(entry.get("text", "")))
+    area = bbox_area(geometry_to_bbox(entry.get("rec_poly")))
+    score = float(entry.get("score") or 0.0)
+    return (text_len, area, score)
 
 
 def entries_are_duplicate(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1773,7 +1869,58 @@ def entries_are_duplicate(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if overlap_ratio < 0.65 and bbox_iou(left_bbox, right_bbox) < 0.45:
         return False
 
-    return text_similarity(left.get("text", ""), right.get("text", "")) >= 0.72
+    if text_similarity(left.get("text", ""), right.get("text", "")) >= 0.72:
+        return True
+
+    return overlap_ratio >= 0.9 and text_has_contained_duplicate_shape(
+        left.get("text", ""),
+        right.get("text", ""),
+    )
+
+
+def text_has_contained_duplicate_shape(left: Any, right: Any) -> bool:
+    """Catch truncated same-line duplicates from layout/recovery overlap."""
+    left_norm = normalize_for_dedupe(left)
+    right_norm = normalize_for_dedupe(right)
+
+    if len(left_norm) < 4 or len(right_norm) < 4 or left_norm == right_norm:
+        return False
+
+    longer, shorter = (
+        (left_norm, right_norm)
+        if len(left_norm) >= len(right_norm)
+        else (right_norm, left_norm)
+    )
+
+    if len(shorter) > len(longer) * 0.85:
+        return False
+
+    return (
+        truncated_prefix_match(longer, shorter)
+        or truncated_suffix_match(longer, shorter)
+    )
+
+
+def truncated_prefix_match(longer: str, shorter: str) -> bool:
+    if longer.startswith(shorter):
+        return True
+
+    for trim in (1, 2):
+        if len(shorter) > trim + 3 and longer.startswith(shorter[:-trim]):
+            return True
+
+    return False
+
+
+def truncated_suffix_match(longer: str, shorter: str) -> bool:
+    if longer.endswith(shorter):
+        return True
+
+    for trim in (1, 2):
+        if len(shorter) > trim + 3 and longer.endswith(shorter[trim:]):
+            return True
+
+    return False
 
 
 def text_similarity(left: Any, right: Any) -> float:
