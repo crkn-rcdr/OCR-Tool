@@ -7,6 +7,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
     DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
     DEFAULT_TEXT_DET_THRESH,
     DEFAULT_TEXT_DET_UNCLIP_RATIO,
     DEFAULT_TEXT_REC_SCORE_THRESH,
@@ -69,6 +70,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
         help="Text detection side length limit.",
+    )
+    parser.add_argument(
+        "--text-det-max-side-limit",
+        type=int,
+        default=DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
+        help="Text detection hard maximum side length before PaddleX clamps/resizes.",
     )
     parser.add_argument(
         "--text-det-box-thresh",
@@ -187,6 +194,7 @@ def build_options(args: argparse.Namespace) -> dict:
                 "text_det_thresh": args.text_det_thresh,
                 "text_det_limit_type": args.text_det_limit_type,
                 "text_det_limit_side_len": max(1, args.text_det_limit_side_len),
+                "text_det_max_side_limit": max(1, args.text_det_max_side_limit),
                 "text_det_box_thresh": max(0.0, min(args.text_det_box_thresh, 1.0)),
                 "text_det_unclip_ratio": max(0.1, args.text_det_unclip_ratio),
                 "text_rec_score_thresh": max(0.0, min(args.text_rec_score_thresh, 1.0)),

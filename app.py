@@ -18,6 +18,7 @@ from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
     DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
     DEFAULT_TEXT_DET_THRESH,
     DEFAULT_TEXT_DET_UNCLIP_RATIO,
     DEFAULT_TEXT_REC_SCORE_THRESH,
@@ -218,6 +219,7 @@ def build_paddle_options(
     text_det_thresh,
     text_det_limit_type,
     text_det_limit_side_len,
+    text_det_max_side_limit,
     text_det_box_thresh,
     text_det_unclip_ratio,
     text_rec_score_thresh,
@@ -234,6 +236,11 @@ def build_paddle_options(
             DEFAULT_TEXT_DET_LIMIT_SIDE_LEN
             if text_det_limit_side_len is None
             else text_det_limit_side_len
+        ),
+        "text_det_max_side_limit": int(
+            DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+            if text_det_max_side_limit is None
+            else text_det_max_side_limit
         ),
         "text_det_box_thresh": float(
             DEFAULT_TEXT_DET_BOX_THRESH
@@ -277,6 +284,7 @@ def submit_config(
     text_det_thresh,
     text_det_limit_type,
     text_det_limit_side_len,
+    text_det_max_side_limit,
     text_det_box_thresh,
     text_det_unclip_ratio,
     text_rec_score_thresh,
@@ -334,6 +342,7 @@ def submit_config(
         text_det_thresh,
         text_det_limit_type,
         text_det_limit_side_len,
+        text_det_max_side_limit,
         text_det_box_thresh,
         text_det_unclip_ratio,
         text_rec_score_thresh,
@@ -503,6 +512,14 @@ with gr.Blocks(css=APP_CSS) as demo:
             label="Text Detection Limit Side Length",
         )
 
+        text_det_max_side_limit = gr.Slider(
+            minimum=4000,
+            maximum=12000,
+            value=DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
+            step=32,
+            label="Text Detection Max Side Limit",
+        )
+
         text_det_box_thresh = gr.Slider(
             minimum=0.0,
             maximum=1.0,
@@ -572,6 +589,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_thresh,
         text_det_limit_type,
         text_det_limit_side_len,
+        text_det_max_side_limit,
         text_det_box_thresh,
         text_det_unclip_ratio,
         text_rec_score_thresh,
@@ -676,6 +694,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_thresh,
         text_det_limit_type,
         text_det_limit_side_len,
+        text_det_max_side_limit,
         text_det_box_thresh,
         text_det_unclip_ratio,
         text_rec_score_thresh,

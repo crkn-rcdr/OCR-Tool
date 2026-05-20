@@ -4,6 +4,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
     DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
     DEFAULT_TEXT_DET_THRESH,
     DEFAULT_TEXT_DET_UNCLIP_RATIO,
     DEFAULT_TEXT_REC_SCORE_THRESH,
@@ -83,6 +84,13 @@ class PaddleEngine:
                     DEFAULT_TEXT_DET_LIMIT_TYPE,
                 )
             ),
+            "text_det_max_side_limit": int(
+                option_or_default(
+                    opt,
+                    "text_det_max_side_limit",
+                    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
+                )
+            ),
             "text_det_box_thresh": option_or_default(
                 opt,
                 "text_det_box_thresh",
@@ -149,8 +157,30 @@ class PaddleEngine:
             self.pipeline = PPStructureV3(**kwargs)
 
         self._init_params = params
+        self.method = method
         return True
         
     def infer(self,image_path:str,opt:dict):
         self.single_instance_engine(opt)
-        return self.pipeline.predict(image_path)
+        params = self._create_params(opt)
+        predict_kwargs = {
+            "use_doc_orientation_classify": params["use_doc_orientation_classify"],
+            "use_doc_unwarping": params["use_doc_unwarping"],
+            "use_textline_orientation": params["use_textline_orientation"],
+            "text_det_limit_side_len": params["text_det_limit_side_len"],
+            "text_det_limit_type": params["text_det_limit_type"],
+            "text_det_thresh": params["text_det_thresh"],
+            "text_det_box_thresh": params["text_det_box_thresh"],
+            "text_det_unclip_ratio": params["text_det_unclip_ratio"],
+            "text_rec_score_thresh": params["text_rec_score_thresh"],
+        }
+
+        if self.method == "PP-OCRv5" and hasattr(self.pipeline, "paddlex_pipeline"):
+            return self.pipeline.paddlex_pipeline.predict(
+                image_path,
+                **predict_kwargs,
+                text_det_max_side_limit=params["text_det_max_side_limit"],
+                return_word_box=True,
+            )
+
+        return self.pipeline.predict(image_path, **predict_kwargs)
