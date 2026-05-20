@@ -1,5 +1,27 @@
 from pathlib import Path
 import json
+
+from services.alto_generation import ordered_text_lines_from_data
+
+
+def extract_fallback_texts(data):
+    if "overall_ocr_res" in data:
+        ocr_res = data["overall_ocr_res"]
+        return ocr_res["rec_texts"]
+
+    if "rec_texts" in data:
+        return data["rec_texts"]
+
+    if "result" in data:
+        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
+            "parsing_res_list"
+        ]
+
+        return [block.get("block_content") for block in parsing_res_list]
+
+    return []
+
+
 def generate_txt_file(json_path:Path):
     """
     Generate a TXT file from OCR JSON results.
@@ -17,20 +39,13 @@ def generate_txt_file(json_path:Path):
     """
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
-    if "overall_ocr_res" in data:
-        ocr_res = data["overall_ocr_res"]
-        texts = ocr_res["rec_texts"]
-    elif "rec_texts" in data:
-        texts = data["rec_texts"]
 
-    elif "result" in data:
-        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
-        texts = []
-
-        for block in parsing_res_list:
-            text = block.get("block_content")
-            texts.append(text)
+    if "overall_ocr_res" in data or "rec_texts" in data:
+        texts = ordered_text_lines_from_data(data)
+        if not texts:
+            texts = extract_fallback_texts(data)
+    else:
+        texts = extract_fallback_texts(data)
 
     txt_path = json_path.with_suffix(".txt")
 

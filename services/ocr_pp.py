@@ -13,6 +13,7 @@ from services.tile_ocr import (
     DEFAULT_CONTENT_BOX_PADDING_PX,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TILE_STRATEGY,
     run_tiled_local_ocr,
     supports_tiled_ocr,
 )
@@ -36,7 +37,7 @@ STOP_FLAG = False
 
 
 def describe_tiling(opt):
-    strategy = opt.get("tile_strategy", "grid")
+    strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
 
     if strategy == "content_boxes":
         padding_value = opt.get("tile_content_padding_px")

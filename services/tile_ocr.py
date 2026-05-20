@@ -29,6 +29,7 @@ TILE_STRATEGY_GRID = "grid"
 TILE_STRATEGY_CONTENT_BOXES = "content_boxes"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
 TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
+DEFAULT_TILE_STRATEGY = TILE_STRATEGY_GRID_DOCLAYOUT_V3
 SUPPORTED_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_CONTENT_BOXES,
@@ -274,7 +275,7 @@ def resolve_tile_grid(
 
 
 def resolve_tile_strategy(opt: dict) -> str:
-    strategy = str(opt.get("tile_strategy") or TILE_STRATEGY_GRID)
+    strategy = str(opt.get("tile_strategy") or DEFAULT_TILE_STRATEGY)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
     strategy_aliases = {
         "pp_doclayoutv3": TILE_STRATEGY_DOCLAYOUT_V3,

@@ -490,6 +490,83 @@ def build_alto_blocks(data, lines, select_paddlevl, page_width):
     )
 
 
+def infer_page_width_from_lines(lines):
+    right_edges = []
+
+    for line in lines or []:
+        try:
+            right_edges.append(box_to_rect(line["box"])[2])
+        except Exception:
+            continue
+
+    return int(max(right_edges, default=0))
+
+
+def build_ordered_blocks(data, page_width=None):
+    """Build OCR blocks in the same reading order used for ALTO output."""
+    lines, select_paddlevl = build_alto_lines(data)
+
+    if page_width is None:
+        page_width = infer_page_width_from_lines(lines)
+
+    blocks = build_alto_blocks(
+        data,
+        lines,
+        select_paddlevl,
+        page_width=page_width,
+    )
+
+    if blocks:
+        return blocks
+
+    boxes = [
+        string_item["box"]
+        for line in lines
+        for string_item in line.get("strings", [])
+    ]
+    fallback_box = calculate_line_box(boxes) if boxes else [0, 0, page_width or 0, 0]
+
+    return [{"box": fallback_box, "lines": lines}]
+
+
+def line_to_text(line):
+    """Reconstruct readable text from a normalized OCR line."""
+    string_items = [
+        item
+        for item in line.get("strings", [])
+        if clean_alto_text(item.get("text", ""))
+    ]
+
+    parts = []
+    previous_item = None
+
+    for item in string_items:
+        if previous_item is not None and should_insert_sp(previous_item, item):
+            parts.append(" ")
+
+        parts.append(clean_alto_text(item.get("text", "")))
+
+        if item.get("add_hyp"):
+            parts.append("-")
+
+        previous_item = item
+
+    return "".join(parts).strip()
+
+
+def ordered_text_lines_from_data(data, page_width=None):
+    """Return text lines in the ALTO/DocLayout reading order."""
+    ordered_lines = []
+
+    for block in build_ordered_blocks(data, page_width=page_width):
+        for line in block.get("lines") or []:
+            text = line_to_text(line)
+            if text:
+                ordered_lines.append(text)
+
+    return ordered_lines
+
+
 def build_blocks_from_doclayout_tiles(data, lines):
     tile_processing = data.get("tile_processing") or {}
     strategy = tile_processing.get("strategy")

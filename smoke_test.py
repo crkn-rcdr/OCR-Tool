@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tile-strategy",
         choices=["grid", "content_boxes", "doclayout_v3", "grid_doclayout_v3"],
-        default="grid",
+        default="grid_doclayout_v3",
         help=(
             "Tile strategy: fixed grid, OpenCV content boxes, or "
             "PP-DocLayoutV3 layout regions. Use grid_doclayout_v3 to run "

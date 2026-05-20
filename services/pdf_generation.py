@@ -9,7 +9,7 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image
 
-from services.alto_generation import generate_alto
+from services.alto_generation import build_ordered_blocks, generate_alto, line_to_text
 from services.ocr_logger import OCRLoggerManger
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -507,6 +507,49 @@ def build_text_blocks(items, method=None, select=None):
     return blocks
 
 
+def pad_line_rect(rect):
+    """Add a small tolerance around an OCR line rectangle for PDF text fitting."""
+    rect = fitz.Rect(rect)
+    pad_x = max(1.0, rect.height * 0.08)
+    pad_y = max(0.5, rect.height * 0.12)
+
+    return fitz.Rect(
+        rect.x0 - pad_x,
+        rect.y0 - pad_y,
+        rect.x1 + pad_x,
+        rect.y1 + pad_y,
+    )
+
+
+def build_text_blocks_from_ordered_lines(data, page_width):
+    """Build PDF text blocks without merging separate newspaper columns."""
+    pdf_blocks = []
+
+    for ordered_block in build_ordered_blocks(data, page_width=page_width):
+        for line in ordered_block.get("lines") or []:
+            text = line_to_text(line)
+            if not text:
+                continue
+
+            rect = polygon_to_rect(line["box"])
+            if rect.is_empty or rect.width <= 0 or rect.height <= 0:
+                continue
+
+            mode = "cjk_chars" if is_mostly_cjk(text) else "latin_line"
+            font_alias = choose_font_alias(text)
+
+            pdf_blocks.append(
+                {
+                    "mode": mode,
+                    "text": text,
+                    "rect": pad_line_rect(rect),
+                    "font_alias": font_alias,
+                }
+            )
+
+    return pdf_blocks
+
+
 def fit_textbox(
     page,
     rect,
@@ -996,12 +1039,21 @@ def build_pdf(json_path, input_dir, method, lang, select):
         result["image_used"] = str(image_path)
 
         data = json.loads(json_path.read_text(encoding="utf-8"))
-        texts, polys = extract_ocr_data(data)
-        items = build_items(texts, polys, method, select)
-        blocks = build_text_blocks(items, method, select)
 
         with Image.open(image_path) as img:
             width, height = img.size
+
+        if method == "PaddleVL" or select == "PaddleVL":
+            texts, polys = extract_ocr_data(data)
+            items = build_items(texts, polys, method, select)
+            blocks = build_text_blocks(items, method, select)
+        else:
+            blocks = build_text_blocks_from_ordered_lines(data, page_width=width)
+
+            if not blocks:
+                texts, polys = extract_ocr_data(data)
+                items = build_items(texts, polys, method, select)
+                blocks = build_text_blocks(items, method, select)
 
         doc = fitz.open()
         page = doc.new_page(width=width, height=height)
