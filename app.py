@@ -160,7 +160,10 @@ def choose_folder(current_value=""):
 
 def update_grid_overlap_control(method, tile_strategy):
     supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
-    show_fixed_grid_controls = supports_tiling and (tile_strategy or "grid") == "grid"
+    show_fixed_grid_controls = supports_tiling and (tile_strategy or "grid") in {
+        "grid",
+        "grid_doclayout_v3",
+    }
 
     return gr.update(visible=show_fixed_grid_controls, interactive=supports_tiling)
 
@@ -321,12 +324,14 @@ with gr.Blocks(css=APP_CSS) as demo:
                 ("Fixed grid", "grid"),
                 ("Content boxes (CV)", "content_boxes"),
                 ("PP-DocLayoutV3 Layout", "doclayout_v3"),
+                ("3x1 + PP-DocLayoutV3", "grid_doclayout_v3"),
             ],
             value="grid",
             label="Tile Strategy",
             info=(
-                "Use fixed 3x1 tiles, OpenCV content boxes, or PaddleX "
-                "PP-DocLayoutV3 layout regions with reading order."
+                "Use fixed 3x1 tiles, OpenCV content boxes, PaddleX "
+                "PP-DocLayoutV3 regions, or PP-DocLayoutV3 inside each "
+                "3x1 band."
             ),
         )
 

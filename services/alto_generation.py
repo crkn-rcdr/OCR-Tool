@@ -1,4 +1,5 @@
 import json
+import os
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +8,16 @@ from xml.dom import minidom
 from numbers import Number
 
 from PIL import Image
+
+
+ALTO_PROFILE_ABBYY_LIKE = "abbyy_like"
+ALTO_PROFILE_LEGACY = "legacy"
+ALTO_NS_V3 = "http://www.loc.gov/standards/alto/ns-v3#"
+ALTO_NS_V4 = "http://www.loc.gov/standards/alto/ns-v4#"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
+DOCLAYOUT_TILE_STRATEGIES = {"doclayout_v3", "grid_doclayout_v3"}
+TITLE_LABELS = {"doc_title", "paragraph_title", "title"}
 
 
 def get_image_dimensions(image_path: Path) -> Tuple[int, int]:
@@ -79,12 +90,17 @@ def box_to_rect(box) -> Tuple[float, float, float, float]:
     return float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))
 
 
-def make_ocr_item(text, box, score=None):
+def make_ocr_item(text, box, score=None, line_index=None):
     return {
-        "text": text,
+        "text": clean_alto_text(text),
         "box": normalize_box(box),
         "score": score,
+        "line_index": line_index,
     }
+
+
+def clean_alto_text(text) -> str:
+    return str(text).replace("\n", " ").strip()
 
 
 def extract_source_ocr_payload(data):
@@ -116,12 +132,20 @@ def extract_word_level_lines(ocr_payload):
             continue
 
         string_items = []
+        line_score = rec_scores[index] if index < len(rec_scores) else None
 
         for word_text, word_box in zip(words, boxes):
-            if not word_text or not str(word_text).strip():
+            if not word_text or not clean_alto_text(word_text):
                 continue
 
-            string_items.append(make_ocr_item(word_text, word_box))
+            string_items.append(
+                make_ocr_item(
+                    word_text,
+                    word_box,
+                    score=line_score,
+                    line_index=index,
+                )
+            )
 
         if not string_items:
             continue
@@ -136,8 +160,9 @@ def extract_word_level_lines(ocr_payload):
         lines.append(
             {
                 "box": normalize_box(line_box),
-                "score": rec_scores[index] if index < len(rec_scores) else None,
+                "score": line_score,
                 "strings": string_items,
+                "index": index,
             }
         )
 
@@ -206,6 +231,7 @@ def build_alto_lines(data):
                 "text": it["text"],
                 "box": it["box"],
                 "score": it.get("score"),
+                "line_index": it.get("line_index"),
                 "rect": (x1, y1, x2, y2),
                 "center_y": center_y,
                 "center_x": center_x,
@@ -229,8 +255,17 @@ def build_alto_lines(data):
                 # finalize current line
                 current.sort(key=lambda x: x["rect"][0])
                 line_box = calculate_line_box([c["box"] for c in current])
-                strings = [{"text": c["text"], "box": c["box"], "score": c.get("score")} for c in current]
-                lines.append({"box": line_box, "score": None, "strings": strings})
+                line_score = average_scores(c.get("score") for c in current)
+                strings = [
+                    {
+                        "text": c["text"],
+                        "box": c["box"],
+                        "score": c.get("score", line_score),
+                        "line_index": c.get("line_index"),
+                    }
+                    for c in current
+                ]
+                lines.append({"box": line_box, "score": line_score, "strings": strings})
 
                 current = [s]
                 current_y = s["center_y"]
@@ -239,8 +274,17 @@ def build_alto_lines(data):
         if current:
             current.sort(key=lambda x: x["rect"][0])
             line_box = calculate_line_box([c["box"] for c in current])
-            strings = [{"text": c["text"], "box": c["box"], "score": c.get("score")} for c in current]
-            lines.append({"box": line_box, "score": None, "strings": strings})
+            line_score = average_scores(c.get("score") for c in current)
+            strings = [
+                {
+                    "text": c["text"],
+                    "box": c["box"],
+                    "score": c.get("score", line_score),
+                    "line_index": c.get("line_index"),
+                }
+                for c in current
+            ]
+            lines.append({"box": line_box, "score": line_score, "strings": strings})
 
         # Sort lines top-to-bottom
         lines.sort(key=lambda line: box_sort_key(line["box"]))
@@ -255,6 +299,13 @@ def calculate_line_box(boxes):
     return [hpos, vpos, hpos + width, vpos + height]
 
 
+def average_scores(scores) -> float | None:
+    values = [float(score) for score in scores if isinstance(score, Number)]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def box_sort_key(box):
     x1, y1, x2, y2 = box_to_rect(box)
     return (y1, x1, y2, x2)
@@ -263,11 +314,22 @@ def box_sort_key(box):
 def box_to_alto_attrs(box, scale):
     x1, y1, x2, y2 = box_to_rect(box)
     return {
-        "HPOS": str(x1 * scale),
-        "VPOS": str(y1 * scale),
-        "WIDTH": str((x2 - x1) * scale),
-        "HEIGHT": str((y2 - y1) * scale),
+        "HPOS": format_alto_number(x1 * scale),
+        "VPOS": format_alto_number(y1 * scale),
+        "WIDTH": format_alto_number((x2 - x1) * scale),
+        "HEIGHT": format_alto_number((y2 - y1) * scale),
     }
+
+
+def format_alto_number(value) -> str:
+    value = float(value)
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def format_alto_confidence(value) -> str:
+    return f"{float(value):.6f}".rstrip("0").rstrip(".")
 
 
 def detect_columns(lines, page_width, min_valley_width_ratio=0.03):
@@ -416,6 +478,324 @@ def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
     return blocks
 
 
+def build_alto_blocks(data, lines, select_paddlevl, page_width):
+    tile_blocks = build_blocks_from_doclayout_tiles(data, lines)
+    if tile_blocks:
+        return tile_blocks
+
+    return group_lines_into_blocks(
+        lines,
+        select_paddlevl,
+        page_width=page_width,
+    )
+
+
+def build_blocks_from_doclayout_tiles(data, lines):
+    tile_processing = data.get("tile_processing") or {}
+    strategy = tile_processing.get("strategy")
+    if strategy not in DOCLAYOUT_TILE_STRATEGIES:
+        return []
+
+    tiles = normalize_doclayout_tiles(tile_processing.get("tiles") or [])
+    if not tiles:
+        return []
+
+    line_assignments = {tile["index"]: [] for tile in tiles}
+    unassigned_lines = []
+
+    for line in lines:
+        tile = find_best_tile_for_line(line, tiles)
+        if tile is None:
+            unassigned_lines.append(line)
+        else:
+            line_assignments[tile["index"]].append(line)
+
+    blocks = []
+    for tile in sorted(tiles, key=tile_sort_key):
+        tile_lines = line_assignments.get(tile["index"]) or []
+        if not tile_lines:
+            continue
+
+        tile_lines.sort(key=lambda line: box_sort_key(line["box"]))
+        blocks.append(
+            {
+                "box": calculate_line_box([line["box"] for line in tile_lines]),
+                "lines": tile_lines,
+                "tile": tile,
+                "label": tile.get("label"),
+            }
+        )
+
+    if unassigned_lines:
+        blocks.extend(
+            group_lines_into_blocks(
+                unassigned_lines,
+                select_paddlevl=False,
+                page_width=None,
+            )
+        )
+
+    return blocks
+
+
+def normalize_doclayout_tiles(raw_tiles):
+    tiles = []
+
+    for index, tile in enumerate(raw_tiles):
+        bbox = normalize_rect(tile.get("bbox") or tile.get("nominal_bbox"))
+        if bbox is None:
+            continue
+
+        nominal_bbox = normalize_rect(tile.get("nominal_bbox")) or bbox
+        tiles.append(
+            {
+                "index": index,
+                "bbox": bbox,
+                "nominal_bbox": nominal_bbox,
+                "label": tile.get("label"),
+                "order": tile.get("order"),
+                "row": tile.get("row"),
+                "col": tile.get("col"),
+                "score": tile.get("score"),
+            }
+        )
+
+    return tiles
+
+
+def normalize_rect(value):
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+
+    try:
+        x1, y1, x2, y2 = [float(v) for v in value]
+    except (TypeError, ValueError):
+        return None
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return [x1, y1, x2, y2]
+
+
+def tile_sort_key(tile):
+    order = tile.get("order")
+    row = tile.get("row")
+    col = tile.get("col")
+    bbox = tile["bbox"]
+
+    return (
+        numeric_or_default(order, tile["index"]),
+        numeric_or_default(row, tile["index"]),
+        numeric_or_default(col, 0),
+        bbox[1],
+        bbox[0],
+    )
+
+
+def numeric_or_default(value, default):
+    return value if isinstance(value, Number) else default
+
+
+def find_best_tile_for_line(line, tiles):
+    line_rect = list(box_to_rect(line["box"]))
+    center_x = (line_rect[0] + line_rect[2]) / 2.0
+    center_y = (line_rect[1] + line_rect[3]) / 2.0
+    line_area = max(1.0, rect_area(line_rect))
+    best_tile = None
+    best_score = None
+
+    for tile in tiles:
+        nominal_bbox = tile["nominal_bbox"]
+        bbox = tile["bbox"]
+        overlap = rect_overlap_area(line_rect, bbox)
+        overlap_ratio = overlap / line_area
+
+        if rect_contains_point(nominal_bbox, center_x, center_y):
+            tier = 3
+            area = rect_area(nominal_bbox)
+        elif rect_contains_point(bbox, center_x, center_y):
+            tier = 2
+            area = rect_area(bbox)
+        elif overlap > 0:
+            tier = 1
+            area = rect_area(bbox)
+        else:
+            continue
+
+        score = (tier, overlap_ratio, -area, -tile["index"])
+        if best_score is None or score > best_score:
+            best_score = score
+            best_tile = tile
+
+    return best_tile
+
+
+def rect_contains_point(rect, x, y):
+    return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
+
+
+def rect_area(rect):
+    return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
+
+
+def rect_overlap_area(left, right):
+    x1 = max(left[0], right[0])
+    y1 = max(left[1], right[1])
+    x2 = min(left[2], right[2])
+    y2 = min(left[3], right[3])
+    return rect_area([x1, y1, x2, y2])
+
+
+def annotate_block_hyphenation(blocks):
+    for block in blocks:
+        lines = block.get("lines") or []
+        for index, line in enumerate(lines[:-1]):
+            last_item = last_string_item(line)
+            first_next_item = first_string_item(lines[index + 1])
+            if not last_item or not first_next_item:
+                continue
+
+            last_text = clean_alto_text(last_item.get("text", ""))
+            next_text = clean_alto_text(first_next_item.get("text", ""))
+            if not is_hyphenated_line_break(last_text, next_text):
+                continue
+
+            prefix = last_text.rstrip("-\u00ad")
+            subs_content = f"{prefix}{next_text}"
+            last_item["text"] = prefix
+            last_item["subs_type"] = "HypPart1"
+            last_item["subs_content"] = subs_content
+            last_item["add_hyp"] = True
+            first_next_item["subs_type"] = "HypPart2"
+            first_next_item["subs_content"] = subs_content
+
+
+def first_string_item(line):
+    for item in line.get("strings") or []:
+        if clean_alto_text(item.get("text", "")):
+            return item
+    return None
+
+
+def last_string_item(line):
+    for item in reversed(line.get("strings") or []):
+        if clean_alto_text(item.get("text", "")):
+            return item
+    return None
+
+
+def is_hyphenated_line_break(last_text, next_text):
+    if not last_text.endswith(("-", "\u00ad")):
+        return False
+
+    prefix = last_text.rstrip("-\u00ad")
+    return (
+        len(prefix) >= 2
+        and any(char.isalpha() for char in prefix)
+        and len(next_text) >= 2
+        and next_text[0].islower()
+    )
+
+
+def should_insert_sp(left_item, right_item):
+    left = clean_alto_text(left_item.get("text", ""))
+    right = clean_alto_text(right_item.get("text", ""))
+    if not left or not right or left_item.get("add_hyp"):
+        return False
+
+    if right[0] in ".,;:!?)]}%\u201d\u2019":
+        return False
+    if left[-1] in "([{\u201c\u2018":
+        return False
+    if left in {"$", "£", "#"}:
+        return False
+
+    return True
+
+
+def sp_attrs_between(left_item, right_item, line, scale):
+    left = list(box_to_rect(left_item["box"]))
+    right = list(box_to_rect(right_item["box"]))
+    line_rect = list(box_to_rect(line["box"]))
+    line_height = max(1.0, line_rect[3] - line_rect[1])
+    gap = right[0] - left[2]
+
+    if gap <= 0:
+        gap = max(1.0, min(line_height * 0.35, 12.0))
+
+    y1 = min(left[1], right[1], line_rect[1])
+    y2 = max(left[3], right[3], line_rect[3])
+    return box_to_alto_attrs([left[2], y1, left[2] + gap, y2], scale)
+
+
+def resolve_alto_profile():
+    profile = os.environ.get("OCR_ALTO_PROFILE", ALTO_PROFILE_ABBYY_LIKE)
+    profile = profile.strip().lower().replace("-", "_").replace(" ", "_")
+    if profile in {"legacy", "v3", "inch1200"}:
+        return ALTO_PROFILE_LEGACY
+    return ALTO_PROFILE_ABBYY_LIKE
+
+
+def alto_scale_and_unit(profile, dpi):
+    if profile == ALTO_PROFILE_LEGACY:
+        return 1200.0 / dpi, "inch1200"
+    return 1.0, "pixel"
+
+
+def create_alto_root(profile):
+    if profile == ALTO_PROFILE_LEGACY:
+        return ET.Element("alto", xmlns=ALTO_NS_V3)
+
+    return ET.Element(
+        "alto",
+        {
+            "xmlns": ALTO_NS_V4,
+            "xmlns:xlink": XLINK_NS,
+            "xmlns:xsi": XSI_NS,
+            "xsi:schemaLocation": (
+                f"{ALTO_NS_V4} http://www.loc.gov/standards/alto/v4/alto-4-2.xsd"
+            ),
+        },
+    )
+
+
+def add_processing_description(alto, profile, file_name, measurement_unit):
+    desc = ET.SubElement(alto, "Description")
+    ET.SubElement(desc, "MeasurementUnit").text = measurement_unit
+
+    source_info = ET.SubElement(desc, "sourceImageInformation")
+    ET.SubElement(source_info, "fileName").text = file_name
+
+    if profile == ALTO_PROFILE_LEGACY:
+        ocr_proc = ET.SubElement(desc, "OCRProcessing", ID="ID0")
+        step = ET.SubElement(ocr_proc, "ocrProcessingStep")
+    else:
+        step = ET.SubElement(desc, "Processing", ID="IdOcr")
+
+    ET.SubElement(step, "processingDateTime").text = datetime.now().isoformat()
+
+    software = ET.SubElement(step, "processingSoftware")
+    ET.SubElement(software, "softwareName").text = "PaddleOCR"
+    ET.SubElement(software, "softwareVersion").text = "3.1.0"
+
+
+def add_alto_styles(alto):
+    styles = ET.SubElement(alto, "Styles")
+    ET.SubElement(styles, "TextStyle", ID="font_regular", FONTFAMILY="Unknown")
+    ET.SubElement(
+        styles,
+        "TextStyle",
+        ID="font_title",
+        FONTFAMILY="Unknown",
+        FONTSTYLE="bold",
+    )
+
+
+def block_style_id(block):
+    return "font_title" if block.get("label") in TITLE_LABELS else "font_regular"
+
+
 def generate_alto(
     json_file: Path,
     image: Path,
@@ -444,14 +824,14 @@ def generate_alto(
     The function:
         1. Reads OCR results from JSON
         2. Reads image width and height
-        3. Converts pixel coordinates to ALTO "inch1200" coordinates
+        3. Uses Abbyy-like pixel ALTO by default, or legacy inch1200 if requested
         4. Builds an ALTO XML structure
         5. Saves the XML file locally
 
     Args:
         json_file: Path to the OCR JSON file.
         image: Path to the source image.
-        dpi: Image DPI used to convert pixels to inch1200 units.
+        dpi: Image DPI used when legacy inch1200 output is requested.
         output_dir: Directory where the XML file will be saved.
 
     Returns:
@@ -472,10 +852,8 @@ def generate_alto(
     # Get original image dimensions in pixels.
     width, height = get_image_dimensions(image)
 
-    # ALTO uses "inch1200" as the measurement unit here.
-    # If image coordinates are in pixels, convert pixels to inch1200
-    # using the image DPI.
-    scale = 1200.0 / dpi
+    profile = resolve_alto_profile()
+    scale, measurement_unit = alto_scale_and_unit(profile, dpi)
 
     # Extract all OCR boxes for calculating the global text block.
     boxes = [
@@ -483,21 +861,6 @@ def generate_alto(
         for line in lines
         for string_item in line["strings"]
     ]
-    if boxes:
-        # Calculate the overall text block that contains all OCR strings.
-        hpos, vpos, block_width, block_height = calculate_textblock(boxes)
-
-        # Convert page and text block coordinates from pixels to inch1200.
-        hpos *= scale
-        vpos *= scale
-        block_width *= scale
-        block_height *= scale
-    else:
-        hpos = 0
-        vpos = 0
-        block_width = 0
-        block_height = 0
-
     page_width = width * scale
     page_height = height * scale
 
@@ -505,27 +868,13 @@ def generate_alto(
     ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
     # Create the ALTO root element.
-    alto = ET.Element(
-        "alto",
-        xmlns="http://www.loc.gov/standards/alto/ns-v3#",
-    )
+    alto = create_alto_root(profile)
 
     # ------------------------------------------------------------------
     # Description section
     # ------------------------------------------------------------------
-    desc = ET.SubElement(alto, "Description")
-    ET.SubElement(desc, "MeasurementUnit").text = "inch1200"
-
-    source_info = ET.SubElement(desc, "sourceImageInformation")
-    ET.SubElement(source_info, "fileName").text = file_name
-
-    ocr_proc = ET.SubElement(desc, "OCRProcessing", ID="ID0")
-    step = ET.SubElement(ocr_proc, "ocrProcessingStep")
-    ET.SubElement(step, "processingDateTime").text = datetime.now().isoformat()
-
-    software = ET.SubElement(step, "processingSoftware")
-    ET.SubElement(software, "softwareName").text = "PaddleOCR"
-    ET.SubElement(software, "softwareVersion").text = "3.1.0"
+    add_processing_description(alto, profile, file_name, measurement_unit)
+    add_alto_styles(alto)
 
     # ------------------------------------------------------------------
     # Layout section
@@ -537,8 +886,8 @@ def generate_alto(
         "Page",
         {
             "ID": "Page1",
-            "WIDTH": str(page_width),
-            "HEIGHT": str(page_height),
+            "WIDTH": format_alto_number(page_width),
+            "HEIGHT": format_alto_number(page_height),
             "PHYSICAL_IMG_NR": "1",
         },
     )
@@ -550,13 +899,14 @@ def generate_alto(
         {
             "HPOS": "0",
             "VPOS": "0",
-            "WIDTH": str(page_width),
-            "HEIGHT": str(page_height),
+            "WIDTH": format_alto_number(page_width),
+            "HEIGHT": format_alto_number(page_height),
         },
     )
 
-    # Group lines into TextBlocks (use layout blocks from PaddleVL when available).
-    blocks = group_lines_into_blocks(lines, select_paddlevl)
+    # Group lines into TextBlocks. DocLayout-tiled JSON preserves its detected
+    # content regions here so ALTO consumers see article-like blocks.
+    blocks = build_alto_blocks(data, lines, select_paddlevl, width)
 
     if not blocks:
         # Fallback: if we have individual string boxes, use their overall box;
@@ -566,10 +916,17 @@ def generate_alto(
         else:
             blocks = [{"box": [0, 0, width, height], "lines": lines}]
 
+    annotate_block_hyphenation(blocks)
+
     # Create a TextBlock element for each block and add TextLine/String children.
-    for block in blocks:
+    for block_index, block in enumerate(blocks, start=1):
         tb_attrs = box_to_alto_attrs(block["box"], scale)
-        tb_attrs["{http://www.w3.org/1999/xlink}type"] = "simple"
+        tb_attrs["ID"] = f"Page1_Block{block_index}"
+        tb_attrs["STYLEREFS"] = block_style_id(block)
+        if lang:
+            tb_attrs["LANG"] = lang
+        if profile == ALTO_PROFILE_LEGACY:
+            tb_attrs[f"{{{XLINK_NS}}}type"] = "simple"
 
         text_block = ET.SubElement(print_space, "TextBlock", tb_attrs)
 
@@ -580,9 +937,15 @@ def generate_alto(
                 box_to_alto_attrs(line["box"], scale),
             )
 
-            for string_item in line["strings"]:
+            string_items = [
+                item
+                for item in line["strings"]
+                if clean_alto_text(item.get("text", ""))
+            ]
+
+            for string_index, string_item in enumerate(string_items):
                 attrs = {
-                    "CONTENT": string_item["text"],
+                    "CONTENT": clean_alto_text(string_item["text"]),
                     **box_to_alto_attrs(string_item["box"], scale),
                 }
 
@@ -591,9 +954,27 @@ def generate_alto(
 
                 wc = string_item.get("score")
                 if wc is not None:
-                    attrs["WC"] = str(wc)
+                    attrs["WC"] = format_alto_confidence(wc)
+
+                subs_type = string_item.get("subs_type")
+                subs_content = string_item.get("subs_content")
+                if subs_type and subs_content:
+                    attrs["SUBS_TYPE"] = subs_type
+                    attrs["SUBS_CONTENT"] = subs_content
 
                 ET.SubElement(text_line, "String", attrs)
+
+                if string_item.get("add_hyp"):
+                    ET.SubElement(text_line, "HYP", {"CONTENT": "\u00ad"})
+
+                if string_index < len(string_items) - 1:
+                    next_item = string_items[string_index + 1]
+                    if should_insert_sp(string_item, next_item):
+                        ET.SubElement(
+                            text_line,
+                            "SP",
+                            sp_attrs_between(string_item, next_item, line, scale),
+                        )
 
     # Convert XML tree to formatted XML bytes.
     xml_bytes = minidom.parseString(

@@ -23,14 +23,17 @@ DEFAULT_TILE_COLS = 1
 DEFAULT_TILE_OVERLAP_PX = 48
 DEFAULT_CONTENT_BOX_PADDING_PX = 8
 DEFAULT_DOCLAYOUT_PADDING_PX = 16
+DEFAULT_DOCLAYOUT_THRESHOLD = 0.30
 DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
 TILE_STRATEGY_GRID = "grid"
 TILE_STRATEGY_CONTENT_BOXES = "content_boxes"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
+TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
 SUPPORTED_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_CONTENT_BOXES,
     TILE_STRATEGY_DOCLAYOUT_V3,
+    TILE_STRATEGY_GRID_DOCLAYOUT_V3,
 }
 DOCLAYOUT_TEXT_LABELS = {
     "abstract",
@@ -165,16 +168,44 @@ def run_tiled_local_ocr(
             else doclayout_padding_value
         ),
     )
+    doclayout_threshold = clamp_float(
+        opt.get("tile_doclayout_threshold"),
+        DEFAULT_DOCLAYOUT_THRESHOLD,
+        0.01,
+        1.0,
+    )
+    doclayout_recovery_enabled = bool(opt.get("tile_doclayout_recovery", True))
     overlap_px = grid_overlap_px
 
     with tempfile.TemporaryDirectory(prefix="ocr_tiles_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
+        if tile_strategy == TILE_STRATEGY_GRID_DOCLAYOUT_V3:
+            overlap_px = grid_overlap_px
+            grid_doclayout_tiles = build_grid_doclayout_tiles(
+                image_path,
+                temp_dir,
+                grid_rows=grid_rows,
+                grid_cols=grid_cols,
+                grid_overlap_px=grid_overlap_px,
+                padding_px=doclayout_padding_px,
+                threshold=doclayout_threshold,
+                include_grid_recovery=doclayout_recovery_enabled,
+            )
+            if grid_doclayout_tiles:
+                tiles = grid_doclayout_tiles
+                grid_rows = max(1, len(tiles))
+                grid_cols = 1
+            else:
+                tile_strategy = TILE_STRATEGY_GRID
+
         if tile_strategy == TILE_STRATEGY_DOCLAYOUT_V3:
             overlap_px = doclayout_padding_px
             doclayout_tiles = build_doclayout_tiles(
                 image_path,
                 temp_dir,
                 padding_px=doclayout_padding_px,
+                threshold=doclayout_threshold,
+                include_recovery_tile=doclayout_recovery_enabled,
             )
             if doclayout_tiles:
                 tiles = doclayout_tiles
@@ -251,6 +282,11 @@ def resolve_tile_strategy(opt: dict) -> str:
         "pp_doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
+        "3x1_doclayout_v3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "3x1_doclayout": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "grid_doclayout": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "grid_pp_doclayout_v3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
+        "grid_pp_doclayoutv3": TILE_STRATEGY_GRID_DOCLAYOUT_V3,
     }
     strategy = strategy_aliases.get(strategy, strategy)
     return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
@@ -355,8 +391,10 @@ def build_doclayout_tiles(
     image_path: Path,
     temp_dir: Path,
     padding_px: int = DEFAULT_DOCLAYOUT_PADDING_PX,
+    threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
+    include_recovery_tile: bool = True,
 ) -> list[TileSpec]:
-    boxes = detect_doclayout_boxes(image_path)
+    boxes = detect_doclayout_boxes(image_path, threshold=threshold)
     tiles = []
 
     with Image.open(image_path) as image:
@@ -395,13 +433,197 @@ def build_doclayout_tiles(
                 )
             )
 
+        if include_recovery_tile and tiles:
+            tiles.append(
+                TileSpec(
+                    row=len(tiles),
+                    col=0,
+                    left=0,
+                    top=0,
+                    right=image_width,
+                    bottom=image_height,
+                    nominal_left=0,
+                    nominal_top=0,
+                    nominal_right=image_width,
+                    nominal_bottom=image_height,
+                    path=image_path,
+                    label="layout_recovery",
+                    order=len(tiles),
+                )
+            )
+
     return tiles
 
 
-def detect_doclayout_boxes(image_path: Path) -> list[dict[str, Any]]:
+def build_grid_doclayout_tiles(
+    image_path: Path,
+    temp_dir: Path,
+    grid_rows: int = DEFAULT_TILE_ROWS,
+    grid_cols: int = DEFAULT_TILE_COLS,
+    grid_overlap_px: int = DEFAULT_TILE_OVERLAP_PX,
+    padding_px: int = DEFAULT_DOCLAYOUT_PADDING_PX,
+    threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
+    include_grid_recovery: bool = True,
+) -> list[TileSpec]:
+    grid_source_dir = temp_dir / "grid_doclayout_sources"
+    grid_source_dir.mkdir(exist_ok=True)
+    source_tiles = build_image_tiles(
+        image_path,
+        grid_source_dir,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        overlap_px=grid_overlap_px,
+    )
+    tiles: list[TileSpec] = []
+
+    for source_tile in source_tiles:
+        boxes = detect_doclayout_boxes(source_tile.path, threshold=threshold)
+        if not boxes:
+            tiles.append(
+                copy_tile_with_sequence(
+                    source_tile,
+                    len(tiles),
+                    label="grid_fallback",
+                )
+            )
+            continue
+
+        tiles.extend(
+            build_doclayout_tiles_from_source_tile(
+                source_tile,
+                boxes,
+                temp_dir,
+                start_index=len(tiles),
+                padding_px=padding_px,
+            )
+        )
+        if include_grid_recovery:
+            tiles.append(
+                copy_tile_with_sequence(
+                    source_tile,
+                    len(tiles),
+                    label="grid_recovery",
+                )
+            )
+
+    return tiles
+
+
+def build_doclayout_tiles_from_source_tile(
+    source_tile: TileSpec,
+    boxes: list[dict[str, Any]],
+    temp_dir: Path,
+    start_index: int,
+    padding_px: int,
+) -> list[TileSpec]:
+    tiles: list[TileSpec] = []
+
+    with Image.open(source_tile.path) as image:
+        image_width, image_height = image.size
+        padding_px = max(0, int(padding_px))
+
+        for item in boxes:
+            x0, y0, x1, y1 = item["bbox"]
+            nominal_left = clamp_int(x0, 0, image_width - 1)
+            nominal_top = clamp_int(y0, 0, image_height - 1)
+            nominal_right = clamp_int(x1, nominal_left + 1, image_width)
+            nominal_bottom = clamp_int(y1, nominal_top + 1, image_height)
+
+            if not local_box_center_is_in_source_nominal(
+                source_tile,
+                (nominal_left, nominal_top, nominal_right, nominal_bottom),
+            ):
+                continue
+
+            left = max(0, nominal_left - padding_px)
+            top = max(0, nominal_top - padding_px)
+            right = min(image_width, nominal_right + padding_px)
+            bottom = min(image_height, nominal_bottom + padding_px)
+            tile_index = start_index + len(tiles)
+            tile_path = (
+                temp_dir
+                / f"{source_tile.path.stem}__doclayout_{tile_index:03d}.png"
+            )
+
+            image.crop((left, top, right, bottom)).save(tile_path)
+            tiles.append(
+                TileSpec(
+                    row=tile_index,
+                    col=0,
+                    left=source_tile.left + left,
+                    top=source_tile.top + top,
+                    right=source_tile.left + right,
+                    bottom=source_tile.top + bottom,
+                    nominal_left=source_tile.left + nominal_left,
+                    nominal_top=source_tile.top + nominal_top,
+                    nominal_right=source_tile.left + nominal_right,
+                    nominal_bottom=source_tile.top + nominal_bottom,
+                    path=tile_path,
+                    label=item.get("label"),
+                    score=item.get("score"),
+                    order=tile_index,
+                )
+            )
+
+    if not tiles:
+        return [
+            copy_tile_with_sequence(
+                source_tile,
+                start_index,
+                label="grid_fallback",
+            )
+        ]
+
+    return tiles
+
+
+def local_box_center_is_in_source_nominal(
+    source_tile: TileSpec,
+    local_box: tuple[int, int, int, int],
+) -> bool:
+    center_x = source_tile.left + ((local_box[0] + local_box[2]) / 2.0)
+    center_y = source_tile.top + ((local_box[1] + local_box[3]) / 2.0)
+
+    return (
+        source_tile.nominal_left <= center_x <= source_tile.nominal_right
+        and source_tile.nominal_top <= center_y <= source_tile.nominal_bottom
+    )
+
+
+def copy_tile_with_sequence(
+    tile: TileSpec,
+    sequence_index: int,
+    label: str | None = None,
+) -> TileSpec:
+    return TileSpec(
+        row=sequence_index,
+        col=0,
+        left=tile.left,
+        top=tile.top,
+        right=tile.right,
+        bottom=tile.bottom,
+        nominal_left=tile.nominal_left,
+        nominal_top=tile.nominal_top,
+        nominal_right=tile.nominal_right,
+        nominal_bottom=tile.nominal_bottom,
+        path=tile.path,
+        label=label or tile.label,
+        score=tile.score,
+        order=sequence_index,
+    )
+
+
+def detect_doclayout_boxes(
+    image_path: Path,
+    threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
+) -> list[dict[str, Any]]:
     try:
         model = get_doclayout_model()
-        output = model.predict(str(image_path), batch_size=1)
+        output = model.predict(
+            str(image_path),
+            batch_size=1,
+            threshold=threshold,
+        )
     except Exception as exc:
         print(
             f"[WARN] PP-DocLayoutV3 layout analysis failed for {image_path}: {exc}",
@@ -1134,6 +1356,19 @@ def merge_boxes_into_reading_rows(
 
 def clamp_int(value: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(int(value), max_value))
+
+
+def clamp_float(
+    value: Any,
+    default: float,
+    min_value: float,
+    max_value: float,
+) -> float:
+    try:
+        parsed = default if value is None else float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(min_value, min(parsed, max_value))
 
 
 def infer_tile_json(tile_path: Path, opt: dict) -> dict[str, Any]:

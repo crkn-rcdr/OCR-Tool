@@ -12,6 +12,7 @@ from services.txt_generation import generate_txt_file
 from services.tile_ocr import (
     DEFAULT_CONTENT_BOX_PADDING_PX,
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOCLAYOUT_THRESHOLD,
     run_tiled_local_ocr,
     supports_tiled_ocr,
 )
@@ -54,8 +55,25 @@ def describe_tiling(opt):
             if padding_value is None
             else padding_value
         )
+        threshold = float(opt.get("tile_doclayout_threshold", DEFAULT_DOCLAYOUT_THRESHOLD))
         padding_label = f", {padding}px padding" if padding > 0 else ""
-        return f"PP-DocLayoutV3 tiled OCR{padding_label}"
+        return f"PP-DocLayoutV3 tiled OCR{padding_label}, threshold {threshold:g}"
+
+    if strategy == "grid_doclayout_v3":
+        padding_value = opt.get("tile_doclayout_padding_px")
+        padding = int(
+            DEFAULT_DOCLAYOUT_PADDING_PX
+            if padding_value is None
+            else padding_value
+        )
+        overlap = int(opt.get("tile_overlap_px", 0) or 0)
+        threshold = float(opt.get("tile_doclayout_threshold", DEFAULT_DOCLAYOUT_THRESHOLD))
+        overlap_label = f", {overlap}px band overlap" if overlap > 0 else ""
+        padding_label = f", {padding}px layout padding" if padding > 0 else ""
+        return (
+            "3x1 + PP-DocLayoutV3 tiled OCR"
+            f"{overlap_label}{padding_label}, threshold {threshold:g}"
+        )
 
     overlap = int(opt.get("tile_overlap_px", 0) or 0)
     overlap_label = f", {overlap}px overlap" if overlap > 0 else ""

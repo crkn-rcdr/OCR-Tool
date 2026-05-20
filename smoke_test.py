@@ -77,11 +77,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tile-strategy",
-        choices=["grid", "content_boxes", "doclayout_v3"],
+        choices=["grid", "content_boxes", "doclayout_v3", "grid_doclayout_v3"],
         default="grid",
         help=(
             "Tile strategy: fixed grid, OpenCV content boxes, or "
-            "PP-DocLayoutV3 layout regions."
+            "PP-DocLayoutV3 layout regions. Use grid_doclayout_v3 to run "
+            "PP-DocLayoutV3 inside each fixed 3x1 band."
         ),
     )
     parser.add_argument(
@@ -101,6 +102,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional PP-DocLayoutV3 tile padding, in pixels.",
+    )
+    parser.add_argument(
+        "--tile-doclayout-threshold",
+        type=float,
+        default=None,
+        help="Optional PP-DocLayoutV3 detection threshold. Lower values recover more blocks.",
+    )
+    parser.add_argument(
+        "--disable-doclayout-recovery",
+        action="store_true",
+        help="Disable the fallback OCR tile added to recover DocLayout missed regions.",
     )
     return parser.parse_args()
 
@@ -122,6 +134,13 @@ def build_options(args: argparse.Namespace) -> dict:
         opt["tile_content_padding_px"] = max(0, args.tile_content_padding_px)
     if args.tile_doclayout_padding_px is not None:
         opt["tile_doclayout_padding_px"] = max(0, args.tile_doclayout_padding_px)
+    if args.tile_doclayout_threshold is not None:
+        opt["tile_doclayout_threshold"] = max(
+            0.01,
+            min(args.tile_doclayout_threshold, 1.0),
+        )
+    if args.disable_doclayout_recovery:
+        opt["tile_doclayout_recovery"] = False
 
     if args.method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
         opt.update(
