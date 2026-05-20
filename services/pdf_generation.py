@@ -10,7 +10,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from services.alto_generation import build_ordered_blocks, generate_alto, line_to_text
-from services.ocr_logger import OCRLoggerManger
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -1132,7 +1132,16 @@ def build_pdf(json_path, input_dir, method, lang, select):
     return result
 
 
-def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recursive=True):
+def main(
+    output_dir,
+    input_dir,
+    method,
+    lang,
+    select=None,
+    log_dir="logs",
+    recursive=True,
+    run_options=None,
+):
     """
     Generate searchable PDF and ALTO XML files
     from OCR JSON results.
@@ -1162,6 +1171,18 @@ def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recurs
 
     summary_logger, error_logger, summary_log_path, error_log_path = (
         OCRLoggerManger.setup(method)
+    )
+    pdf_options = dict(run_options or {})
+    pdf_options.setdefault("method", method)
+    if lang is not None:
+        pdf_options.setdefault("lang", lang)
+    log_run_configuration(
+        summary_logger,
+        pdf_options,
+        select=select,
+        input_path=input_dir,
+        output_root=output_dir,
+        stage="PDF/ALTO",
     )
 
     output_dir = Path(output_dir)

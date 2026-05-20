@@ -15,24 +15,23 @@ import numpy as np
 from PIL import Image
 
 from engine import engine
+from services.ocr_defaults import (
+    DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TILE_OVERLAP_PX,
+)
 
 SUPPORTED_TILING_METHODS = {"PP-OCRv5", "PP-StructureV3"}
 TILE_GRID_SIZE = 3
 DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
-DEFAULT_TILE_OVERLAP_PX = 48
-DEFAULT_CONTENT_BOX_PADDING_PX = 8
-DEFAULT_DOCLAYOUT_PADDING_PX = 16
-DEFAULT_DOCLAYOUT_THRESHOLD = 0.30
 DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
 TILE_STRATEGY_GRID = "grid"
-TILE_STRATEGY_CONTENT_BOXES = "content_boxes"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
 TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
 DEFAULT_TILE_STRATEGY = TILE_STRATEGY_GRID_DOCLAYOUT_V3
 SUPPORTED_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
-    TILE_STRATEGY_CONTENT_BOXES,
     TILE_STRATEGY_DOCLAYOUT_V3,
     TILE_STRATEGY_GRID_DOCLAYOUT_V3,
 }
@@ -151,15 +150,6 @@ def run_tiled_local_ocr(
         0,
         int(DEFAULT_TILE_OVERLAP_PX if overlap_value is None else overlap_value),
     )
-    content_padding_value = opt.get("tile_content_padding_px")
-    content_padding_px = max(
-        0,
-        int(
-            DEFAULT_CONTENT_BOX_PADDING_PX
-            if content_padding_value is None
-            else content_padding_value
-        ),
-    )
     doclayout_padding_value = opt.get("tile_doclayout_padding_px")
     doclayout_padding_px = max(
         0,
@@ -215,20 +205,6 @@ def run_tiled_local_ocr(
             else:
                 tile_strategy = TILE_STRATEGY_GRID
 
-        if tile_strategy == TILE_STRATEGY_CONTENT_BOXES:
-            overlap_px = content_padding_px
-            content_tiles = build_content_box_tiles(
-                image_path,
-                temp_dir,
-                padding_px=content_padding_px,
-            )
-            if content_tiles:
-                tiles = content_tiles
-                grid_rows = max(1, len(tiles))
-                grid_cols = 1
-            else:
-                tile_strategy = TILE_STRATEGY_GRID
-
         if tile_strategy == TILE_STRATEGY_GRID:
             overlap_px = grid_overlap_px
             tiles = build_image_tiles(
@@ -240,13 +216,32 @@ def run_tiled_local_ocr(
             )
 
         tile_results = []
+        tile_errors = []
 
         for tile in tiles:
-            tile_json = infer_tile_json(tile.path, tile_opt)
+            try:
+                tile_json = infer_tile_json(tile.path, tile_opt)
+            except Exception as exc:
+                tile_errors.append({"tile": tile, "error": str(exc)})
+                print(
+                    (
+                        "[WARN] OCR failed for tile "
+                        f"{tile.path.name} ({tile.label or 'tile'}): {exc}"
+                    ),
+                    flush=True,
+                )
+                continue
+
             tile_results.append({"tile": tile, "json": tile_json})
 
+    if not tile_results:
+        error_summary = "; ".join(
+            f"{item['tile'].path.name}: {item['error']}" for item in tile_errors[:5]
+        )
+        raise RuntimeError(f"No tiled OCR output was produced. {error_summary}")
+
     if effective_method == "PP-OCRv5":
-        return merge_ppocr_tile_results(
+        merged = merge_ppocr_tile_results(
             tile_results,
             image_path,
             grid_rows,
@@ -254,8 +249,10 @@ def run_tiled_local_ocr(
             overlap_px,
             tile_strategy,
         )
+        add_tile_errors_to_metadata(merged, tile_errors)
+        return merged
 
-    return merge_ppstructure_tile_results(
+    merged = merge_ppstructure_tile_results(
         tile_results,
         image_path,
         grid_rows,
@@ -263,6 +260,42 @@ def run_tiled_local_ocr(
         overlap_px,
         tile_strategy,
     )
+    add_tile_errors_to_metadata(merged, tile_errors)
+    return merged
+
+
+def add_tile_errors_to_metadata(
+    merged: dict[str, Any],
+    tile_errors: list[dict[str, Any]],
+) -> None:
+    if not tile_errors:
+        return
+
+    tile_processing = merged.setdefault("tile_processing", {})
+    tile_processing["failed_tiles"] = [
+        {
+            "row": item["tile"].row,
+            "col": item["tile"].col,
+            "bbox": [
+                item["tile"].left,
+                item["tile"].top,
+                item["tile"].right,
+                item["tile"].bottom,
+            ],
+            "nominal_bbox": [
+                item["tile"].nominal_left,
+                item["tile"].nominal_top,
+                item["tile"].nominal_right,
+                item["tile"].nominal_bottom,
+            ],
+            "label": item["tile"].label,
+            "score": item["tile"].score,
+            "order": item["tile"].order,
+            "path": item["tile"].path.name,
+            "error": item["error"],
+        }
+        for item in tile_errors
+    ]
 
 
 def resolve_tile_grid(
@@ -348,7 +381,7 @@ def build_image_tiles(
 def build_content_box_tiles(
     image_path: Path,
     temp_dir: Path,
-    padding_px: int = DEFAULT_CONTENT_BOX_PADDING_PX,
+    padding_px: int = 8,
 ) -> list[TileSpec]:
     boxes = detect_content_boxes(image_path)
     tiles = []

@@ -1,6 +1,19 @@
 import argparse
 from pathlib import Path
 
+from services.ocr_defaults import (
+    DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TEXT_DET_BOX_THRESH,
+    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+    DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_THRESH,
+    DEFAULT_TEXT_DET_UNCLIP_RATIO,
+    DEFAULT_TEXT_REC_SCORE_THRESH,
+    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+    DEFAULT_TILE_OVERLAP_PX,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT = (
     REPO_ROOT
@@ -42,8 +55,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--text-det-thresh",
         type=float,
-        default=0.3,
+        default=DEFAULT_TEXT_DET_THRESH,
         help="Text detection threshold.",
+    )
+    parser.add_argument(
+        "--text-det-limit-type",
+        choices=["max", "min"],
+        default=DEFAULT_TEXT_DET_LIMIT_TYPE,
+        help="Text detection resize policy.",
+    )
+    parser.add_argument(
+        "--text-det-limit-side-len",
+        type=int,
+        default=DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+        help="Text detection side length limit.",
+    )
+    parser.add_argument(
+        "--text-det-box-thresh",
+        type=float,
+        default=DEFAULT_TEXT_DET_BOX_THRESH,
+        help="Text detection box threshold.",
+    )
+    parser.add_argument(
+        "--text-det-unclip-ratio",
+        type=float,
+        default=DEFAULT_TEXT_DET_UNCLIP_RATIO,
+        help="Text detection unclip ratio.",
+    )
+    parser.add_argument(
+        "--text-rec-score-thresh",
+        type=float,
+        default=DEFAULT_TEXT_REC_SCORE_THRESH,
+        help="Text recognition score threshold.",
+    )
+    parser.add_argument(
+        "--text-recognition-batch-size",
+        type=int,
+        default=DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+        help="Text recognition batch size.",
     )
     parser.add_argument(
         "--use-doc-orientation-classify",
@@ -77,36 +126,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tile-strategy",
-        choices=["grid", "content_boxes", "doclayout_v3", "grid_doclayout_v3"],
+        choices=["grid", "doclayout_v3", "grid_doclayout_v3"],
         default="grid_doclayout_v3",
         help=(
-            "Tile strategy: fixed grid, OpenCV content boxes, or "
-            "PP-DocLayoutV3 layout regions. Use grid_doclayout_v3 to run "
+            "Tile strategy: fixed grid or PP-DocLayoutV3 layout regions. "
+            "Use grid_doclayout_v3 to run "
             "PP-DocLayoutV3 inside each fixed 3x1 band."
         ),
     )
     parser.add_argument(
         "--tile-overlap-px",
         type=int,
-        default=48,
+        default=DEFAULT_TILE_OVERLAP_PX,
         help="Fixed 3x1 grid tile overlap, in pixels.",
-    )
-    parser.add_argument(
-        "--tile-content-padding-px",
-        type=int,
-        default=None,
-        help="Optional content-box tile padding, in pixels.",
     )
     parser.add_argument(
         "--tile-doclayout-padding-px",
         type=int,
-        default=None,
+        default=DEFAULT_DOCLAYOUT_PADDING_PX,
         help="Optional PP-DocLayoutV3 tile padding, in pixels.",
     )
     parser.add_argument(
         "--tile-doclayout-threshold",
         type=float,
-        default=None,
+        default=DEFAULT_DOCLAYOUT_THRESHOLD,
         help="Optional PP-DocLayoutV3 detection threshold. Lower values recover more blocks.",
     )
     parser.add_argument(
@@ -128,19 +171,13 @@ def build_options(args: argparse.Namespace) -> dict:
         "tile_rows": 3,
         "tile_cols": 1,
         "tile_overlap_px": max(0, args.tile_overlap_px),
-    }
-
-    if args.tile_content_padding_px is not None:
-        opt["tile_content_padding_px"] = max(0, args.tile_content_padding_px)
-    if args.tile_doclayout_padding_px is not None:
-        opt["tile_doclayout_padding_px"] = max(0, args.tile_doclayout_padding_px)
-    if args.tile_doclayout_threshold is not None:
-        opt["tile_doclayout_threshold"] = max(
+        "tile_doclayout_padding_px": max(0, args.tile_doclayout_padding_px),
+        "tile_doclayout_threshold": max(
             0.01,
             min(args.tile_doclayout_threshold, 1.0),
-        )
-    if args.disable_doclayout_recovery:
-        opt["tile_doclayout_recovery"] = False
+        ),
+        "tile_doclayout_recovery": not args.disable_doclayout_recovery,
+    }
 
     if args.method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
         opt.update(
@@ -148,6 +185,12 @@ def build_options(args: argparse.Namespace) -> dict:
                 "lang": args.language,
                 "use_textline_orientation": args.use_textline_orientation,
                 "text_det_thresh": args.text_det_thresh,
+                "text_det_limit_type": args.text_det_limit_type,
+                "text_det_limit_side_len": max(1, args.text_det_limit_side_len),
+                "text_det_box_thresh": max(0.0, min(args.text_det_box_thresh, 1.0)),
+                "text_det_unclip_ratio": max(0.1, args.text_det_unclip_ratio),
+                "text_rec_score_thresh": max(0.0, min(args.text_rec_score_thresh, 1.0)),
+                "text_recognition_batch_size": max(1, args.text_recognition_batch_size),
             }
         )
 

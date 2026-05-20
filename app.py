@@ -12,6 +12,18 @@ from pathlib import Path
 from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
+from services.ocr_defaults import (
+    DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_TEXT_DET_BOX_THRESH,
+    DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+    DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_THRESH,
+    DEFAULT_TEXT_DET_UNCLIP_RATIO,
+    DEFAULT_TEXT_REC_SCORE_THRESH,
+    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+    DEFAULT_TILE_OVERLAP_PX,
+)
 
 APP_CSS = """
 #fixed-header {
@@ -158,14 +170,24 @@ def choose_folder(current_value=""):
         return current_value
 
 
-def update_grid_overlap_control(method, tile_strategy):
+def update_tile_controls(method, tile_strategy):
     supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
-    show_fixed_grid_controls = supports_tiling and (tile_strategy or "grid_doclayout_v3") in {
+    strategy = tile_strategy or "grid_doclayout_v3"
+    show_fixed_grid_controls = supports_tiling and strategy in {
         "grid",
         "grid_doclayout_v3",
     }
+    show_doclayout_controls = supports_tiling and strategy in {
+        "doclayout_v3",
+        "grid_doclayout_v3",
+    }
 
-    return gr.update(visible=show_fixed_grid_controls, interactive=supports_tiling)
+    return (
+        gr.update(visible=show_fixed_grid_controls, interactive=supports_tiling),
+        gr.update(visible=show_doclayout_controls, interactive=supports_tiling),
+        gr.update(visible=show_doclayout_controls, interactive=supports_tiling),
+        gr.update(visible=show_doclayout_controls, interactive=supports_tiling),
+    )
 
 
 def update_options(method, tile_strategy):
@@ -179,15 +201,61 @@ def update_options(method, tile_strategy):
         else gr.update(interactive=False, value=False)
     )
     tile_strategy_update = gr.update(interactive=supports_tiling)
-    tile_overlap_update = update_grid_overlap_control(method, tile_strategy)
+    tile_control_updates = update_tile_controls(method, tile_strategy)
 
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
         tile_checkbox_update,
         tile_strategy_update,
-        tile_overlap_update,
+        *tile_control_updates,
     )
+
+
+def build_paddle_options(
+    language,
+    use_textline_orientation,
+    text_det_thresh,
+    text_det_limit_type,
+    text_det_limit_side_len,
+    text_det_box_thresh,
+    text_det_unclip_ratio,
+    text_rec_score_thresh,
+    text_recognition_batch_size,
+):
+    return {
+        "lang": language,
+        "use_textline_orientation": use_textline_orientation,
+        "text_det_thresh": float(
+            DEFAULT_TEXT_DET_THRESH if text_det_thresh is None else text_det_thresh
+        ),
+        "text_det_limit_type": text_det_limit_type or DEFAULT_TEXT_DET_LIMIT_TYPE,
+        "text_det_limit_side_len": int(
+            DEFAULT_TEXT_DET_LIMIT_SIDE_LEN
+            if text_det_limit_side_len is None
+            else text_det_limit_side_len
+        ),
+        "text_det_box_thresh": float(
+            DEFAULT_TEXT_DET_BOX_THRESH
+            if text_det_box_thresh is None
+            else text_det_box_thresh
+        ),
+        "text_det_unclip_ratio": float(
+            DEFAULT_TEXT_DET_UNCLIP_RATIO
+            if text_det_unclip_ratio is None
+            else text_det_unclip_ratio
+        ),
+        "text_rec_score_thresh": float(
+            DEFAULT_TEXT_REC_SCORE_THRESH
+            if text_rec_score_thresh is None
+            else text_rec_score_thresh
+        ),
+        "text_recognition_batch_size": int(
+            DEFAULT_TEXT_RECOGNITION_BATCH_SIZE
+            if text_recognition_batch_size is None
+            else text_recognition_batch_size
+        ),
+    }
 
 
 def submit_config(
@@ -203,7 +271,16 @@ def submit_config(
     tile_source_images,
     tile_strategy,
     tile_overlap_px,
+    tile_doclayout_padding_px,
+    tile_doclayout_threshold,
+    tile_doclayout_recovery,
     text_det_thresh,
+    text_det_limit_type,
+    text_det_limit_side_len,
+    text_det_box_thresh,
+    text_det_unclip_ratio,
+    text_rec_score_thresh,
+    text_recognition_batch_size,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -228,7 +305,22 @@ def submit_config(
         "tile_strategy": tile_strategy or "grid_doclayout_v3",
         "tile_rows": 3,
         "tile_cols": 1,
-        "tile_overlap_px": int(tile_overlap_px) if tile_overlap_px is not None else 48,
+        "tile_overlap_px": (
+            int(tile_overlap_px)
+            if tile_overlap_px is not None
+            else DEFAULT_TILE_OVERLAP_PX
+        ),
+        "tile_doclayout_padding_px": (
+            int(tile_doclayout_padding_px)
+            if tile_doclayout_padding_px is not None
+            else DEFAULT_DOCLAYOUT_PADDING_PX
+        ),
+        "tile_doclayout_threshold": (
+            float(tile_doclayout_threshold)
+            if tile_doclayout_threshold is not None
+            else DEFAULT_DOCLAYOUT_THRESHOLD
+        ),
+        "tile_doclayout_recovery": bool(tile_doclayout_recovery),
     }
 
     if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
@@ -236,14 +328,21 @@ def submit_config(
         return
 
     yield "Downloading models... OCR will start after the download is complete."
+    paddle_options = build_paddle_options(
+        language,
+        use_textline_orientation,
+        text_det_thresh,
+        text_det_limit_type,
+        text_det_limit_side_len,
+        text_det_box_thresh,
+        text_det_unclip_ratio,
+        text_rec_score_thresh,
+        text_recognition_batch_size,
+    )
 
     # Start to run the OCR job based on the selected method and options
     if method in ["PP-StructureV3","PP-OCRv5"]:
-        opt.update({
-            "lang": language,
-            "use_textline_orientation": use_textline_orientation,
-            "text_det_thresh": text_det_thresh
-        })
+        opt.update(paddle_options)
       
         for message in run_ocr_job(input_path, output_root, opt):
             yield message
@@ -259,9 +358,7 @@ def submit_config(
     elif method == "Auto Routing":
         opt.update({
             "use_layout_detection": use_layout_detection,
-            "lang": language,
-            "use_textline_orientation": use_textline_orientation,
-            "text_det_thresh": text_det_thresh
+            **paddle_options,
         })
         for message in run_auto_job(input_path, output_root, opt):
             yield message
@@ -322,26 +419,45 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_strategy = gr.Dropdown(
             choices=[
                 ("Fixed grid", "grid"),
-                ("Content boxes (CV)", "content_boxes"),
                 ("PP-DocLayoutV3 Layout", "doclayout_v3"),
                 ("3x1 + PP-DocLayoutV3", "grid_doclayout_v3"),
             ],
             value="grid_doclayout_v3",
             label="Tile Strategy",
             info=(
-                "Use fixed 3x1 tiles, OpenCV content boxes, PaddleX "
-                "PP-DocLayoutV3 regions, or PP-DocLayoutV3 inside each "
-                "3x1 band."
+                "Use fixed 3x1 tiles, PaddleX PP-DocLayoutV3 regions, "
+                "or PP-DocLayoutV3 inside each 3x1 band."
             ),
         )
 
         tile_overlap_px = gr.Slider(
             minimum=0,
             maximum=256,
-            value=48,
+            value=DEFAULT_TILE_OVERLAP_PX,
             step=4,
             label="Tile Overlap (px)",
             info="Overlap for fixed 3x1 grid tiles before deduping.",
+        )
+
+        tile_doclayout_padding_px = gr.Slider(
+            minimum=0,
+            maximum=128,
+            value=DEFAULT_DOCLAYOUT_PADDING_PX,
+            step=4,
+            label="DocLayout Padding (px)",
+        )
+
+        tile_doclayout_threshold = gr.Slider(
+            minimum=0.01,
+            maximum=1.0,
+            value=DEFAULT_DOCLAYOUT_THRESHOLD,
+            step=0.01,
+            label="DocLayout Threshold",
+        )
+
+        tile_doclayout_recovery = gr.Checkbox(
+            label="Use DocLayout recovery tile.",
+            value=True,
         )
 
     # PaddleVL-specific OCR options.
@@ -365,9 +481,58 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_thresh = gr.Slider(
         minimum=0.0,
         maximum=1.0,
-        value=0.3,
+        value=DEFAULT_TEXT_DET_THRESH,
         step=0.01,
         label="Text Detection Threshold"
+        )
+
+        text_det_limit_type = gr.Dropdown(
+            choices=[
+                ("Max side", "max"),
+                ("Min side", "min"),
+            ],
+            value=DEFAULT_TEXT_DET_LIMIT_TYPE,
+            label="Text Detection Limit Type",
+        )
+
+        text_det_limit_side_len = gr.Slider(
+            minimum=512,
+            maximum=10000,
+            value=DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+            step=32,
+            label="Text Detection Limit Side Length",
+        )
+
+        text_det_box_thresh = gr.Slider(
+            minimum=0.0,
+            maximum=1.0,
+            value=DEFAULT_TEXT_DET_BOX_THRESH,
+            step=0.01,
+            label="Text Detection Box Threshold",
+        )
+
+        text_det_unclip_ratio = gr.Slider(
+            minimum=1.0,
+            maximum=4.0,
+            value=DEFAULT_TEXT_DET_UNCLIP_RATIO,
+            step=0.1,
+            label="Text Detection Unclip Ratio",
+        )
+
+        text_rec_score_thresh = gr.Slider(
+            minimum=0.0,
+            maximum=1.0,
+            value=DEFAULT_TEXT_REC_SCORE_THRESH,
+            step=0.01,
+            label="Text Recognition Score Threshold",
+        )
+
+        text_recognition_batch_size = gr.Slider(
+            minimum=1,
+            maximum=128,
+            value=DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+            step=1,
+            label="Text Recognition Batch Size",
         )
 
         # Enable text line orientation classification.
@@ -401,7 +566,16 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_source_images,
         tile_strategy,
         tile_overlap_px,
+        tile_doclayout_padding_px,
+        tile_doclayout_threshold,
+        tile_doclayout_recovery,
         text_det_thresh,
+        text_det_limit_type,
+        text_det_limit_side_len,
+        text_det_box_thresh,
+        text_det_unclip_ratio,
+        text_rec_score_thresh,
+        text_recognition_batch_size,
     ]
 
     # Update visible OCR option sections
@@ -415,13 +589,21 @@ with gr.Blocks(css=APP_CSS) as demo:
             tile_source_images,
             tile_strategy,
             tile_overlap_px,
+            tile_doclayout_padding_px,
+            tile_doclayout_threshold,
+            tile_doclayout_recovery,
         ]
     )
 
     tile_strategy.change(
-        fn=update_grid_overlap_control,
+        fn=update_tile_controls,
         inputs=[method_radio, tile_strategy],
-        outputs=tile_overlap_px,
+        outputs=[
+            tile_overlap_px,
+            tile_doclayout_padding_px,
+            tile_doclayout_threshold,
+            tile_doclayout_recovery,
+        ],
     )
 
 
@@ -488,7 +670,16 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_source_images,
         tile_strategy,
         tile_overlap_px,
+        tile_doclayout_padding_px,
+        tile_doclayout_threshold,
+        tile_doclayout_recovery,
         text_det_thresh,
+        text_det_limit_type,
+        text_det_limit_side_len,
+        text_det_box_thresh,
+        text_det_unclip_ratio,
+        text_rec_score_thresh,
+        text_recognition_batch_size,
     ],
     outputs=output
     ).then(

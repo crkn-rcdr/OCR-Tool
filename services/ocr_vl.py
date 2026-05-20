@@ -9,7 +9,7 @@ import requests
 
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
-from services.ocr_logger import OCRLoggerManger
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
 
 import services.ocr_pp as ocr_pp
@@ -162,6 +162,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
     lang = opt.get("lang")
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
+    log_run_configuration(
+        summary_logger,
+        opt,
+        select=select,
+        input_path=input_path,
+        output_root=output_root,
+        stage="PaddleVL OCR",
+    )
     
     success_count = 0
     failure_count = 0
@@ -210,7 +218,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         messages.append(f"Text file created: {txt_path}")
                         yield "\n".join(messages)
                     else:
-                        generate_pdf_and_alto(json_path, input_path, method, lang, select)
+                        generate_pdf_and_alto(
+                            json_path,
+                            input_path,
+                            method,
+                            lang,
+                            select,
+                            run_options=opt,
+                        )
                         yield "\n".join(messages)
            
             except Exception as e: 
@@ -262,7 +277,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                             messages.append(f"Text file created: {txt_path}")
                             yield "\n".join(messages)
                         else:
-                            generate_pdf_and_alto(json_path, img, method, lang, select)
+                            generate_pdf_and_alto(
+                                json_path,
+                                img,
+                                method,
+                                lang,
+                                select,
+                                run_options=opt,
+                            )
                             yield "\n".join(messages)
 
                 except Exception as e: 

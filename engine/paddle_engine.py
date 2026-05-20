@@ -1,9 +1,31 @@
 import threading
 from .paddlex_compat import apply_headless_opencv_patch
+from services.ocr_defaults import (
+    DEFAULT_TEXT_DET_BOX_THRESH,
+    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+    DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_THRESH,
+    DEFAULT_TEXT_DET_UNCLIP_RATIO,
+    DEFAULT_TEXT_REC_SCORE_THRESH,
+    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+)
 
 apply_headless_opencv_patch()
 from paddleocr import PPStructureV3
 from paddleocr import PaddleOCR  
+
+
+def option_or_default(opt: dict, key: str, default):
+    value = opt.get(key)
+    return default if value is None else value
+
+
+def normalize_text_det_limit_type(value):
+    value = str(value or DEFAULT_TEXT_DET_LIMIT_TYPE).strip().lower()
+    if value not in {"max", "min"}:
+        return DEFAULT_TEXT_DET_LIMIT_TYPE
+    return value
+
 
 class PaddleEngine:
     """
@@ -42,7 +64,47 @@ class PaddleEngine:
                 "use_textline_orientation", False
             ),
             "lang": opt.get("lang"),
-            "text_det_thresh": opt.get("text_det_thresh"),
+            "text_det_thresh": option_or_default(
+                opt,
+                "text_det_thresh",
+                DEFAULT_TEXT_DET_THRESH,
+            ),
+            "text_det_limit_side_len": int(
+                option_or_default(
+                    opt,
+                    "text_det_limit_side_len",
+                    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+                )
+            ),
+            "text_det_limit_type": normalize_text_det_limit_type(
+                option_or_default(
+                    opt,
+                    "text_det_limit_type",
+                    DEFAULT_TEXT_DET_LIMIT_TYPE,
+                )
+            ),
+            "text_det_box_thresh": option_or_default(
+                opt,
+                "text_det_box_thresh",
+                DEFAULT_TEXT_DET_BOX_THRESH,
+            ),
+            "text_det_unclip_ratio": option_or_default(
+                opt,
+                "text_det_unclip_ratio",
+                DEFAULT_TEXT_DET_UNCLIP_RATIO,
+            ),
+            "text_rec_score_thresh": option_or_default(
+                opt,
+                "text_rec_score_thresh",
+                DEFAULT_TEXT_REC_SCORE_THRESH,
+            ),
+            "text_recognition_batch_size": int(
+                option_or_default(
+                    opt,
+                    "text_recognition_batch_size",
+                    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+                )
+            ),
         }
 
     def single_instance_engine(self,opt:dict):
@@ -67,6 +129,12 @@ class PaddleEngine:
             "use_doc_unwarping": params["use_doc_unwarping"],
             "use_textline_orientation": params["use_textline_orientation"],
             "text_det_thresh": params["text_det_thresh"],
+            "text_det_limit_side_len": params["text_det_limit_side_len"],
+            "text_det_limit_type": params["text_det_limit_type"],
+            "text_det_box_thresh": params["text_det_box_thresh"],
+            "text_det_unclip_ratio": params["text_det_unclip_ratio"],
+            "text_rec_score_thresh": params["text_rec_score_thresh"],
+            "text_recognition_batch_size": params["text_recognition_batch_size"],
         }
 
         if params["lang"] is not None:

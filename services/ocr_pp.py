@@ -7,12 +7,12 @@ import time
 
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
-from services.ocr_logger import OCRLoggerManger
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
 from services.tile_ocr import (
-    DEFAULT_CONTENT_BOX_PADDING_PX,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_STRATEGY,
     run_tiled_local_ocr,
     supports_tiled_ocr,
@@ -39,16 +39,6 @@ STOP_FLAG = False
 def describe_tiling(opt):
     strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
 
-    if strategy == "content_boxes":
-        padding_value = opt.get("tile_content_padding_px")
-        padding = int(
-            DEFAULT_CONTENT_BOX_PADDING_PX
-            if padding_value is None
-            else padding_value
-        )
-        padding_label = f", {padding}px padding" if padding > 0 else ""
-        return f"content-box tiled OCR{padding_label}"
-
     if strategy == "doclayout_v3":
         padding_value = opt.get("tile_doclayout_padding_px")
         padding = int(
@@ -67,7 +57,12 @@ def describe_tiling(opt):
             if padding_value is None
             else padding_value
         )
-        overlap = int(opt.get("tile_overlap_px", 0) or 0)
+        overlap_value = opt.get("tile_overlap_px")
+        overlap = int(
+            DEFAULT_TILE_OVERLAP_PX
+            if overlap_value is None
+            else overlap_value
+        )
         threshold = float(opt.get("tile_doclayout_threshold", DEFAULT_DOCLAYOUT_THRESHOLD))
         overlap_label = f", {overlap}px band overlap" if overlap > 0 else ""
         padding_label = f", {padding}px layout padding" if padding > 0 else ""
@@ -76,7 +71,12 @@ def describe_tiling(opt):
             f"{overlap_label}{padding_label}, threshold {threshold:g}"
         )
 
-    overlap = int(opt.get("tile_overlap_px", 0) or 0)
+    overlap_value = opt.get("tile_overlap_px")
+    overlap = int(
+        DEFAULT_TILE_OVERLAP_PX
+        if overlap_value is None
+        else overlap_value
+    )
     overlap_label = f", {overlap}px overlap" if overlap > 0 else ""
     return f"3x1 tiled OCR{overlap_label}"
 
@@ -123,6 +123,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
+    log_run_configuration(
+        summary_logger,
+        opt,
+        select=select,
+        input_path=input_path,
+        output_root=output_root,
+        stage="OCR",
+    )
     generate_text_file = opt.get("generate_text_file", False)
     lang = opt.get("lang", "None")
     tile_source_images = opt.get("tile_source_images", False)
@@ -179,7 +187,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                 else:
                     # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
-                    generate_pdf_and_alto(final_json, input_path, method, lang,select)
+                    generate_pdf_and_alto(
+                        final_json,
+                        input_path,
+                        method,
+                        lang,
+                        select,
+                        run_options=opt,
+                    )
                     yield "\n".join(messages)
 
             except Exception as e:
@@ -261,7 +276,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 messages.append(f"Text file created: {txt_path}")
                                 yield "\n".join(messages)
                         else:
-                            generate_pdf_and_alto(out_dir, folder, method, lang,select)
+                            generate_pdf_and_alto(
+                                out_dir,
+                                folder,
+                                method,
+                                lang,
+                                select,
+                                run_options=opt,
+                            )
                             messages.append(f"PDF/ALTO generated for folder: {folder.name}")
                             yield "\n".join(messages)
 
