@@ -54,6 +54,17 @@ def apply_post_ocr_vl_check(
 ) -> dict[str, Any]:
     json_path = Path(json_path)
     out_dir = Path(out_dir)
+    progress_path = post_ocr_vl_progress_path(json_path)
+    max_words_enabled = bool(opt.get("post_ocr_vl_max_words_enabled", False))
+    max_words = (
+        parse_int(
+            opt.get("post_ocr_vl_max_words"),
+            DEFAULT_POST_OCR_VL_MAX_WORDS,
+            minimum=0,
+        )
+        if max_words_enabled
+        else 0
+    )
 
     metadata: dict[str, Any] = {
         "enabled": True,
@@ -63,11 +74,8 @@ def apply_post_ocr_vl_check(
             "post_ocr_vl_candidate_mode",
             DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
         ),
-        "max_words": parse_int(
-            opt.get("post_ocr_vl_max_words"),
-            DEFAULT_POST_OCR_VL_MAX_WORDS,
-            minimum=1,
-        ),
+        "max_words_enabled": max_words_enabled,
+        "max_words": max_words,
         "padding_px": parse_int(
             opt.get("post_ocr_vl_padding_px"),
             DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -86,6 +94,7 @@ def apply_post_ocr_vl_check(
         "save_tiles": bool(
             opt.get("post_ocr_vl_save_tiles", DEFAULT_POST_OCR_VL_SAVE_TILES)
         ),
+        "progress_output": str(progress_path),
         "corrections": [],
     }
 
@@ -93,16 +102,47 @@ def apply_post_ocr_vl_check(
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception as exc:
         metadata["error"] = f"Unable to read OCR JSON: {exc}"
+        write_post_ocr_vl_progress(
+            progress_path,
+            metadata,
+            status="error",
+            error=metadata["error"],
+        )
         return metadata
 
     ocr_payload = get_ocr_payload(payload)
+    suspicious_word_count = len(
+        collect_word_candidates(
+            ocr_payload,
+            mode="suspicious",
+            max_words=0,
+            low_confidence_threshold=metadata["low_confidence_threshold"],
+        )
+    )
     candidates = collect_word_candidates(
         ocr_payload,
         mode=metadata["candidate_mode"],
-        max_words=metadata["max_words"],
+        max_words=0,
         low_confidence_threshold=metadata["low_confidence_threshold"],
     )
+    metadata["qualified_count"] = len(candidates)
+    if max_words > 0:
+        candidates = candidates[:max_words]
     metadata["candidate_count"] = len(candidates)
+    metadata["suspicious_word_count"] = suspicious_word_count
+
+    write_post_ocr_vl_progress(
+        progress_path,
+        metadata,
+        status="running" if candidates else "completed",
+        source_json=str(json_path),
+        suspicious_word_count=suspicious_word_count,
+        qualified_word_count=metadata["qualified_count"],
+        total_words_to_check=metadata["candidate_count"],
+        current_position=0,
+        current_word=None,
+        last_completed_position=0,
+    )
 
     if not candidates:
         payload["post_ocr_vl_check"] = metadata
@@ -112,6 +152,12 @@ def apply_post_ocr_vl_check(
     image_path = resolve_image_path(payload, json_path)
     if image_path is None:
         metadata["error"] = "Could not resolve the source image path for word crops."
+        write_post_ocr_vl_progress(
+            progress_path,
+            metadata,
+            status="error",
+            error=metadata["error"],
+        )
         payload["post_ocr_vl_check"] = metadata
         write_json(json_path, payload)
         return metadata
@@ -120,15 +166,36 @@ def apply_post_ocr_vl_check(
     tile_dir = out_dir / "_post_ocr_vl_tiles" / json_path.stem
     if metadata["save_tiles"]:
         tile_dir.mkdir(parents=True, exist_ok=True)
+        metadata["tile_dir"] = str(tile_dir)
 
     backend_order = backends_for_request(metadata["backend"])
     applied_count = 0
+    saved_tile_count = 0
 
     with Image.open(image_path) as image:
         image = image.convert("RGB")
 
-        for candidate in candidates:
+        for position, candidate in enumerate(candidates, start=1):
             record = candidate_record(candidate)
+            write_post_ocr_vl_progress(
+                progress_path,
+                metadata,
+                status="running",
+                source_json=str(json_path),
+                image_path=str(image_path),
+                suspicious_word_count=suspicious_word_count,
+                qualified_word_count=metadata["qualified_count"],
+                total_words_to_check=metadata["candidate_count"],
+                current_position=position,
+                current_word=candidate.text,
+                current_line_index=candidate.line_index,
+                current_word_index=candidate.word_index,
+                current_line_score=candidate.line_score,
+                current_weirdness=candidate.weirdness,
+                last_completed_position=position - 1,
+                applied_count=applied_count,
+                saved_tile_count=saved_tile_count,
+            )
 
             try:
                 tile, crop_box = crop_word_tile(
@@ -139,6 +206,24 @@ def apply_post_ocr_vl_check(
             except Exception as exc:
                 record["error"] = f"Unable to crop word tile: {exc}"
                 metadata["corrections"].append(record)
+                write_post_ocr_vl_progress(
+                    progress_path,
+                    metadata,
+                    status="running",
+                    source_json=str(json_path),
+                    image_path=str(image_path),
+                    suspicious_word_count=suspicious_word_count,
+                    qualified_word_count=metadata["qualified_count"],
+                    total_words_to_check=metadata["candidate_count"],
+                    current_position=position,
+                    current_word=candidate.text,
+                    current_line_index=candidate.line_index,
+                    current_word_index=candidate.word_index,
+                    last_completed_position=position,
+                    applied_count=applied_count,
+                    saved_tile_count=saved_tile_count,
+                    last_error=record["error"],
+                )
                 continue
 
             record["crop_box"] = crop_box
@@ -151,6 +236,7 @@ def apply_post_ocr_vl_check(
                 )
                 tile.save(tile_path)
                 record["tile_path"] = str(tile_path)
+                saved_tile_count += 1
 
             results = []
             for backend in backend_order:
@@ -187,8 +273,43 @@ def apply_post_ocr_vl_check(
                 record["applied"] = False
 
             metadata["corrections"].append(record)
+            write_post_ocr_vl_progress(
+                progress_path,
+                metadata,
+                status="running",
+                source_json=str(json_path),
+                image_path=str(image_path),
+                suspicious_word_count=suspicious_word_count,
+                qualified_word_count=metadata["qualified_count"],
+                total_words_to_check=metadata["candidate_count"],
+                current_position=position,
+                current_word=candidate.text,
+                current_line_index=candidate.line_index,
+                current_word_index=candidate.word_index,
+                selected_text=record["selected_text"],
+                correction_reason=record["reason"],
+                last_completed_position=position,
+                applied_count=applied_count,
+                saved_tile_count=saved_tile_count,
+            )
 
     metadata["applied_count"] = applied_count
+    metadata["saved_tile_count"] = saved_tile_count
+    write_post_ocr_vl_progress(
+        progress_path,
+        metadata,
+        status="completed",
+        source_json=str(json_path),
+        image_path=str(image_path),
+        suspicious_word_count=suspicious_word_count,
+        qualified_word_count=metadata["qualified_count"],
+        total_words_to_check=metadata["candidate_count"],
+        current_position=metadata["candidate_count"],
+        current_word=None,
+        last_completed_position=metadata["candidate_count"],
+        applied_count=applied_count,
+        saved_tile_count=saved_tile_count,
+    )
     payload["post_ocr_vl_check"] = metadata
     write_json(json_path, payload)
     return metadata
@@ -226,7 +347,9 @@ def collect_word_candidates(
 
         for word_index, word in enumerate(words):
             text = str(word or "")
-            if not is_word_token(text):
+            if mode == "suspicious" and not is_word_token(text):
+                continue
+            if mode != "suspicious" and not is_ocr_token(text):
                 continue
             if word_index >= len(boxes):
                 continue
@@ -257,7 +380,7 @@ def collect_word_candidates(
             )
 
     if mode == "all":
-        return candidates[:max_words]
+        return candidates[:max_words] if max_words > 0 else candidates
 
     candidates.sort(
         key=lambda item: (
@@ -267,7 +390,7 @@ def collect_word_candidates(
             item.word_index,
         )
     )
-    return candidates[:max_words]
+    return candidates[:max_words] if max_words > 0 else candidates
 
 
 def is_word_token(text: str) -> bool:
@@ -280,6 +403,14 @@ def is_word_token(text: str) -> bool:
     if len(normalized) < 2:
         return False
     return True
+
+
+def is_ocr_token(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    normalized = stripped.strip(".,:;!?()[]{}\"'")
+    return bool(normalized) and bool(re.search(r"[A-Za-z0-9]", normalized))
 
 
 def score_weirdness(
@@ -538,6 +669,34 @@ def candidate_record(candidate: WordCandidate) -> dict[str, Any]:
         "line_score": candidate.line_score,
         "weirdness": candidate.weirdness,
     }
+
+
+def post_ocr_vl_progress_path(json_path: Path) -> Path:
+    return json_path.with_name(f"{json_path.stem}.post_ocr_vl_progress.json")
+
+
+def write_post_ocr_vl_progress(
+    progress_path: Path,
+    metadata: dict[str, Any],
+    **updates: Any,
+) -> None:
+    payload = {
+        "status": updates.pop("status", "running"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "backend": metadata.get("backend"),
+        "candidate_mode": metadata.get("candidate_mode"),
+        "max_words_enabled": metadata.get("max_words_enabled"),
+        "max_words": metadata.get("max_words"),
+        "save_tiles": metadata.get("save_tiles"),
+        **updates,
+    }
+    try:
+        progress_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def clean_vl_text(text: Any) -> str:

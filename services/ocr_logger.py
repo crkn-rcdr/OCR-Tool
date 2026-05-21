@@ -57,6 +57,7 @@ OPTION_LABELS = {
     "post_ocr_vl_enabled": "Post-OCR VL word check",
     "post_ocr_vl_backend": "Post-OCR VL backend",
     "post_ocr_vl_candidate_mode": "Post-OCR VL candidate mode",
+    "post_ocr_vl_max_words_enabled": "Post-OCR VL max words enabled",
     "post_ocr_vl_max_words": "Post-OCR VL max words",
     "post_ocr_vl_padding_px": "Post-OCR VL padding px",
     "post_ocr_vl_low_confidence_threshold": "Post-OCR VL low confidence threshold",
@@ -102,6 +103,7 @@ OPTION_ORDER = [
     "post_ocr_vl_enabled",
     "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
+    "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
     "post_ocr_vl_padding_px",
     "post_ocr_vl_low_confidence_threshold",
@@ -134,6 +136,7 @@ TILE_DETAIL_KEYS = {
 POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
+    "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
     "post_ocr_vl_padding_px",
     "post_ocr_vl_low_confidence_threshold",
@@ -185,6 +188,13 @@ def option_applies_to_strategy(key, opt):
 
     if key == "post_ocr_vl_enabled":
         return method == "PP-OCRv5"
+
+    if key == "post_ocr_vl_max_words":
+        return (
+            method == "PP-OCRv5"
+            and bool(opt.get("post_ocr_vl_enabled"))
+            and bool(opt.get("post_ocr_vl_max_words_enabled"))
+        )
 
     if key in POST_OCR_VL_DETAIL_KEYS:
         return method == "PP-OCRv5" and bool(opt.get("post_ocr_vl_enabled"))

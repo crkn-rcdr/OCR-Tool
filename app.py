@@ -73,7 +73,7 @@ PPSTRUCTURE_TILE_STRATEGY_CHOICES = [
     ("Fixed 3x2 grid", "grid_3x2"),
 ]
 PPSTRUCTURE_TILE_STRATEGIES = {value for _, value in PPSTRUCTURE_TILE_STRATEGY_CHOICES}
-DEFAULT_TILE_STRATEGY = "grid_doclayout_v3"
+DEFAULT_TILE_STRATEGY = "grid_3x2_doclayout_v3"
 DEFAULT_PPSTRUCTURE_TILE_STRATEGY = "grid_3x2"
 
 # Define the list of supported languages for the dropdown menu
@@ -372,6 +372,7 @@ def build_post_ocr_vl_options(
     post_ocr_vl_enabled,
     post_ocr_vl_backend,
     post_ocr_vl_candidate_mode,
+    post_ocr_vl_max_words_enabled,
     post_ocr_vl_max_words,
     post_ocr_vl_padding_px,
     post_ocr_vl_low_confidence_threshold,
@@ -387,10 +388,15 @@ def build_post_ocr_vl_options(
         "post_ocr_vl_candidate_mode": (
             post_ocr_vl_candidate_mode or DEFAULT_POST_OCR_VL_CANDIDATE_MODE
         ),
+        "post_ocr_vl_max_words_enabled": bool(post_ocr_vl_max_words_enabled),
         "post_ocr_vl_max_words": int(
-            DEFAULT_POST_OCR_VL_MAX_WORDS
-            if post_ocr_vl_max_words is None
-            else post_ocr_vl_max_words
+            0
+            if not post_ocr_vl_max_words_enabled
+            else (
+                DEFAULT_POST_OCR_VL_MAX_WORDS
+                if post_ocr_vl_max_words is None
+                else post_ocr_vl_max_words
+            )
         ),
         "post_ocr_vl_padding_px": int(
             DEFAULT_POST_OCR_VL_PADDING_PX
@@ -443,6 +449,7 @@ def submit_config(
     post_ocr_vl_enabled,
     post_ocr_vl_backend,
     post_ocr_vl_candidate_mode,
+    post_ocr_vl_max_words_enabled,
     post_ocr_vl_max_words,
     post_ocr_vl_padding_px,
     post_ocr_vl_low_confidence_threshold,
@@ -535,6 +542,7 @@ def submit_config(
                 post_ocr_vl_enabled,
                 post_ocr_vl_backend,
                 post_ocr_vl_candidate_mode,
+                post_ocr_vl_max_words_enabled,
                 post_ocr_vl_max_words,
                 post_ocr_vl_padding_px,
                 post_ocr_vl_low_confidence_threshold,
@@ -647,9 +655,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         tile_source_images = gr.Checkbox(
-            label='Tile source images before OCR.',
-            value=False,
-            info="Available for PP-OCRv5, PP-StructureV3, and PERO-OCR.",
+            value=True,
+            label="Enable Tiling",
         )
 
         tile_strategy = gr.Dropdown(
@@ -695,18 +702,14 @@ with gr.Blocks(css=APP_CSS) as demo:
     # Optional PP-OCRv5 post-processing with word crops sent to a VL backend.
     with gr.Column(visible=True) as post_ocr_vl_options:
         post_ocr_vl_enabled = gr.Checkbox(
-            label="Use post-OCR VL word check.",
-            value=DEFAULT_POST_OCR_VL_ENABLED,
-            info=(
-                "After PP-OCRv5, crop selected word boxes and ask a VL backend "
-                "to verify or correct the word text."
-            ),
+            value=True,
+            label="Enable Post-OCR VL",
         )
 
         post_ocr_vl_backend = gr.Dropdown(
             choices=[
-                ("PaddleVL", "paddlevl"),
                 ("olmOCR", "olmocr"),
+                ("PaddleVL", "paddlevl"),
                 ("Both", "both"),
             ],
             value=DEFAULT_POST_OCR_VL_BACKEND,
@@ -723,12 +726,15 @@ with gr.Blocks(css=APP_CSS) as demo:
             label="Words to Check",
         )
 
-        post_ocr_vl_max_words = gr.Slider(
-            minimum=1,
-            maximum=500,
+        post_ocr_vl_max_words_enabled = gr.Checkbox(
+            value=False,
+            label="Enable Max Words Check",
+        )
+
+        post_ocr_vl_max_words = gr.Number(
             value=DEFAULT_POST_OCR_VL_MAX_WORDS,
-            step=1,
             label="Max Words to Check",
+            interactive=False,
         )
 
         post_ocr_vl_padding_px = gr.Slider(
@@ -753,8 +759,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         post_ocr_vl_save_tiles = gr.Checkbox(
+            value=False,
             label="Save post-OCR VL word tiles.",
-            value=DEFAULT_POST_OCR_VL_SAVE_TILES,
         )
 
         post_ocr_vl_paddlevl_url = gr.Textbox(
@@ -869,11 +875,11 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         text_det_max_side_limit = gr.Slider(
-            minimum=4000,
-            maximum=12000,
-            value=DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
-            step=32,
-            label="Text Detection Max Side Limit",
+            minimum=1000,
+            maximum=20000,
+            value=12000,
+            step=1000,
+            label="Max Side Limit",
         )
 
         text_det_box_thresh = gr.Slider(
@@ -955,6 +961,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_enabled,
         post_ocr_vl_backend,
         post_ocr_vl_candidate_mode,
+        post_ocr_vl_max_words_enabled,
         post_ocr_vl_max_words,
         post_ocr_vl_padding_px,
         post_ocr_vl_low_confidence_threshold,
@@ -1004,6 +1011,13 @@ with gr.Blocks(css=APP_CSS) as demo:
         ],
     )
 
+    # Handle post-OCR VL max words enable/disable
+    post_ocr_vl_max_words_enabled.change(
+        fn=lambda enabled: gr.update(interactive=enabled),
+        inputs=post_ocr_vl_max_words_enabled,
+        outputs=post_ocr_vl_max_words,
+    )
+
 
 
     # Open a folder selection dialog for the input folder.
@@ -1030,12 +1044,21 @@ with gr.Blocks(css=APP_CSS) as demo:
             gr.update(interactive=True)
         ]
 
-    def after_run():
+    def after_run(post_ocr_vl_max_words_enabled_value):
         """
         Re-enable UI components after OCR processing completes.
         """
+        updates = []
+        for component in ui_components:
+            if component is post_ocr_vl_max_words:
+                updates.append(
+                    gr.update(interactive=bool(post_ocr_vl_max_words_enabled_value))
+                )
+            else:
+                updates.append(gr.update(interactive=True))
+
         return [
-            *[gr.update(interactive=True) for _ in ui_components],
+            *updates,
             gr.update(interactive=False)
         ]
 
@@ -1084,6 +1107,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_enabled,
         post_ocr_vl_backend,
         post_ocr_vl_candidate_mode,
+        post_ocr_vl_max_words_enabled,
         post_ocr_vl_max_words,
         post_ocr_vl_padding_px,
         post_ocr_vl_low_confidence_threshold,
@@ -1102,7 +1126,7 @@ with gr.Blocks(css=APP_CSS) as demo:
     outputs=output
     ).then(
     fn=after_run,
-    inputs=None,
+    inputs=post_ocr_vl_max_words_enabled,
     outputs=[*ui_components, stop_btn]
     )
 
