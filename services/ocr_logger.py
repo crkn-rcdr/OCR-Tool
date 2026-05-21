@@ -48,6 +48,23 @@ OPTION_LABELS = {
     "text_det_unclip_ratio": "Text detection unclip ratio",
     "text_rec_score_thresh": "Text recognition score threshold",
     "text_recognition_batch_size": "Text recognition batch size",
+    "pero_source_path": "PERO Python module path",
+    "pero_config_path": "PERO config.ini path",
+    "pero_device": "PERO device",
+    "pero_gpu_id": "PERO GPU id",
+    "pero_min_line_confidence": "PERO min line confidence",
+    "pero_save_pagexml": "Save PERO PAGE XML",
+    "post_ocr_vl_enabled": "Post-OCR VL word check",
+    "post_ocr_vl_backend": "Post-OCR VL backend",
+    "post_ocr_vl_candidate_mode": "Post-OCR VL candidate mode",
+    "post_ocr_vl_max_words": "Post-OCR VL max words",
+    "post_ocr_vl_padding_px": "Post-OCR VL padding px",
+    "post_ocr_vl_low_confidence_threshold": "Post-OCR VL low confidence threshold",
+    "post_ocr_vl_apply_corrections": "Apply post-OCR VL corrections",
+    "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
+    "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
+    "post_ocr_vl_olmocr_url": "Post-OCR olmOCR URL",
+    "post_ocr_vl_olmocr_model": "Post-OCR olmOCR model",
 }
 
 OPTION_ORDER = [
@@ -76,6 +93,23 @@ OPTION_ORDER = [
     "text_det_unclip_ratio",
     "text_rec_score_thresh",
     "text_recognition_batch_size",
+    "pero_source_path",
+    "pero_config_path",
+    "pero_device",
+    "pero_gpu_id",
+    "pero_min_line_confidence",
+    "pero_save_pagexml",
+    "post_ocr_vl_enabled",
+    "post_ocr_vl_backend",
+    "post_ocr_vl_candidate_mode",
+    "post_ocr_vl_max_words",
+    "post_ocr_vl_padding_px",
+    "post_ocr_vl_low_confidence_threshold",
+    "post_ocr_vl_apply_corrections",
+    "post_ocr_vl_save_tiles",
+    "post_ocr_vl_paddlevl_url",
+    "post_ocr_vl_olmocr_url",
+    "post_ocr_vl_olmocr_model",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -96,6 +130,18 @@ TILE_DETAIL_KEYS = {
     "tile_strategy",
     *GRID_TILE_KEYS,
     *DOCLAYOUT_TILE_KEYS,
+}
+POST_OCR_VL_DETAIL_KEYS = {
+    "post_ocr_vl_backend",
+    "post_ocr_vl_candidate_mode",
+    "post_ocr_vl_max_words",
+    "post_ocr_vl_padding_px",
+    "post_ocr_vl_low_confidence_threshold",
+    "post_ocr_vl_apply_corrections",
+    "post_ocr_vl_save_tiles",
+    "post_ocr_vl_paddlevl_url",
+    "post_ocr_vl_olmocr_url",
+    "post_ocr_vl_olmocr_model",
 }
 
 DOCLAYOUT_DEFAULT_OPTIONS = {
@@ -136,6 +182,12 @@ def option_applies_to_strategy(key, opt):
 
     if method != "PP-OCRv5" and key == "text_det_max_side_limit":
         return False
+
+    if key == "post_ocr_vl_enabled":
+        return method == "PP-OCRv5"
+
+    if key in POST_OCR_VL_DETAIL_KEYS:
+        return method == "PP-OCRv5" and bool(opt.get("post_ocr_vl_enabled"))
 
     if key == "tile_source_images":
         return True
@@ -261,6 +313,9 @@ def models_for_run(opt, select=None):
         models.append("OCR/layout pipeline: PP-StructureV3")
     elif effective_method == "PaddleVL":
         models.append("Layout parsing pipeline: PaddleOCR-VL API service")
+    elif effective_method == "PERO-OCR":
+        models.append("OCR pipeline: PERO-OCR PageParser")
+        models.append("Text layout/recognition: PERO engine config")
     elif method:
         models.append(f"Primary pipeline: {method}")
 
@@ -271,12 +326,16 @@ def models_for_run(opt, select=None):
         strategy_label = TILE_STRATEGY_LABELS.get(str(tile_strategy), str(tile_strategy))
         models.append(f"Tile OCR strategy: {strategy_label}")
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and preprocessing_steps:
+    if opt.get("post_ocr_vl_enabled") and effective_method == "PP-OCRv5":
+        backend = opt.get("post_ocr_vl_backend") or "paddlevl"
+        models.append(f"Post-OCR word check: {backend}")
+
+    if effective_method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"} and preprocessing_steps:
         models.append(
             f"Image preprocessing: {format_preprocessing_steps(preprocessing_steps)}"
         )
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and ignore_black_border:
+    if effective_method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"} and ignore_black_border:
         models.append("Image preprocessing: crop black border and offset OCR geometry")
 
     models.append("PDF text layer: PyMuPDF")

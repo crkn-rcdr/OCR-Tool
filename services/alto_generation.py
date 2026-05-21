@@ -234,6 +234,16 @@ def extract_line_level_items(source_payload, select_paddlevl):
 
 
 def build_alto_lines(data):
+    ocr_blocks = data.get("ocr_blocks")
+    if isinstance(ocr_blocks, list) and ocr_blocks:
+        lines = [
+            line
+            for block in ocr_blocks
+            for line in block.get("lines", [])
+            if line.get("strings")
+        ]
+        return lines, False
+
     source_payload, select_paddlevl = extract_source_ocr_payload(data)
 
     if not select_paddlevl:
@@ -557,6 +567,14 @@ def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
 
 
 def build_alto_blocks(data, lines, select_paddlevl, page_width):
+    ocr_blocks = data.get("ocr_blocks")
+    if isinstance(ocr_blocks, list) and ocr_blocks:
+        return [
+            block
+            for block in ocr_blocks
+            if block.get("lines") and block.get("box")
+        ]
+
     tile_blocks = build_blocks_from_doclayout_tiles(data, lines)
     if tile_blocks:
         return tile_blocks

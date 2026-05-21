@@ -1,5 +1,7 @@
-# PaddleOCR Pipeline
-This project is an OCR tool for internal CRKN staff, built on the PaddleOCR product suite. It provides PP-OCRv5, PP-StructureV3, and PaddleOCR-VL as internal OCR solutions.
+# OCR Pipeline
+This project is an OCR tool for internal CRKN staff. It provides PP-OCRv5,
+PP-StructureV3, PaddleOCR-VL, and an optional PERO-OCR backend as internal OCR
+solutions.
 
 ## PaddleOCR Product Suite Installation
 
@@ -99,6 +101,15 @@ fixed-grid tiling, but its own layout parser makes PP-DocLayout-inclusive
 tiling redundant. It is usually not the first choice for dense historical
 newspaper text.
 
+**PERO-OCR**
+
+Use this when you want to compare against PERO-OCR's historical-document OCR
+pipeline. PERO runs through its Python `PageParser` module using a PERO
+`config.ini`; the app then converts the result into the same JSON, TXT, PDF,
+and ALTO flow used by the Paddle backends. Preprocessing, black-border
+cropping, fixed-grid tiling, and PP-DocLayoutV3 tiling are still available
+before PERO receives each image or tile.
+
 **PaddleVL**
 
 Use this when you specifically want the PaddleOCR-VL service. It requires the
@@ -148,7 +159,7 @@ normal horizontal English newspaper pages.
 
 ### Image Preprocessing
 
-Preprocessing runs before local Paddle OCR and before tiling. If any
+Preprocessing runs before local OCR and before tiling. If any
 preprocessing step is selected, the app saves a PNG under `_preprocessed/` next
 to the OCR output so you can inspect what Paddle saw.
 
@@ -241,21 +252,21 @@ large newspaper pages because it reduces both tile height and tile width.
 
 Uses Paddle's layout detector to find layout regions and OCR those regions.
 This can improve layout targeting, but pure layout-only tiling may miss content
-if layout detection misses a region. This option is shown for PP-OCRv5, not
-PP-StructureV3.
+if layout detection misses a region. This option is shown for PP-OCRv5 and
+PERO-OCR, not PP-StructureV3.
 
 `3x1 + PP-DocLayoutV3`
 
 First splits into three horizontal bands, then runs DocLayout inside each band.
 This was a strong earlier default for tall pages. This option is shown for
-PP-OCRv5, not PP-StructureV3.
+PP-OCRv5 and PERO-OCR, not PP-StructureV3.
 
 `3x2 + PP-DocLayoutV3`
 
 First splits into a 3 by 2 grid, then runs DocLayout inside each tile. This is
 the best starting point for very large, dense newspaper scans because it keeps
 tiles smaller and still uses layout detection inside each tile. This option is
-shown for PP-OCRv5, not PP-StructureV3.
+shown for PP-OCRv5 and PERO-OCR, not PP-StructureV3.
 
 **Tile Overlap**
 
@@ -279,6 +290,70 @@ content is being missed.
 
 Leave this on for important OCR runs. It adds a fallback OCR pass to recover
 areas DocLayout may have missed.
+
+### PERO-OCR Options
+
+These controls map to PERO's Python/module and `parse_folder.py`/`PageParser`
+surface rather than invented OCR thresholds.
+
+**PERO Python Module Path**
+
+Path to a local `pero-ocr` checkout when `pero_ocr` is not installed into the
+active Python environment. Windows `C:\...` paths are accepted when running
+under WSL.
+
+**PERO config.ini Path**
+
+Required. This is the PERO engine configuration passed to
+`PageParser(config, config_path=...)`. Relative paths inside the config are
+resolved against the config file's folder.
+
+**PERO Device**
+
+Matches PERO's `parse_folder.py --device` choices: `gpu` or `cpu`.
+
+**PERO GPU ID**
+
+Optional. Matches PERO's `parse_folder.py --gpu-id`; leave blank to use
+PERO/PyTorch's default CUDA device.
+
+**PERO Min Line Confidence**
+
+Overrides PERO `PAGE_PARSER` option
+`FILTER_CONFIDENT_LINES_THRESHOLD`. Use `-1` to leave PERO confidence filtering
+disabled.
+
+**Save native PERO PAGE XML**
+
+Writes PERO's own PAGE XML beside the app JSON. The app still generates its
+normal PDF and ALTO outputs from the normalized JSON.
+
+### Post-OCR VL Word Check
+
+This optional PP-OCRv5 post-processing step uses PP-OCR word boxes
+(`text_word` / `text_word_boxes`) to crop small word tiles from the source page.
+Each tile can be sent to either PaddleOCR-VL or an OpenAI-compatible olmOCR
+server. The checker records all backend responses in the JSON under
+`post_ocr_vl_check`, saves the word crops under `_post_ocr_vl_tiles`, and can
+rewrite accepted one-word corrections into `text_word` and `rec_texts` before
+TXT, PDF, and ALTO are generated.
+
+**Post-OCR VL Backend**
+
+Choose `PaddleVL` to reuse the existing local `/layout-parsing` service, or
+`olmOCR` to call an OpenAI-compatible `/chat/completions` server running an
+olmOCR model.
+
+**Words to Check**
+
+`Suspicious words` ranks odd-looking or low-confidence word boxes first.
+`Low-confidence lines` checks words whose PP-OCR line score is below the
+threshold. `All words in reading order` is exhaustive and can be slow.
+
+**Apply accepted VL corrections**
+
+Leave this on to update the normalized OCR JSON when the VL response is a clean
+single-word correction. Turn it off to save audit metadata and tiles only.
 
 ### Paddle OCR Detection Options
 
@@ -404,6 +479,39 @@ python smoke_test.py \
   --text-det-max-side-limit 4000
 ```
 
+Run PP-OCRv5 with the post-OCR VL word checker in audit mode:
+
+```bash
+python smoke_test.py \
+  --method PP-OCRv5 \
+  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
+  --output output-smoke-post-vl \
+  --tile-source-images \
+  --tile-strategy grid_3x2_doclayout_v3 \
+  --post-ocr-vl-check \
+  --post-ocr-vl-backend paddlevl \
+  --post-ocr-vl-candidate-mode suspicious \
+  --post-ocr-vl-max-words 25 \
+  --post-ocr-vl-no-apply
+```
+
+Run the same page through PERO-OCR with the shared preprocessing/tiling layer:
+
+```bash
+python smoke_test.py \
+  --method PERO-OCR \
+  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
+  --output output-smoke-pero \
+  --pero-source-path /mnt/c/Users/BrittnyLapierre/Documents/pero-ocr \
+  --pero-config-path /path/to/pero-engine/config.ini \
+  --pero-device gpu \
+  --tile-source-images \
+  --tile-strategy grid_3x2_doclayout_v3 \
+  --tile-overlap-px 96 \
+  --tile-doclayout-padding-px 32 \
+  --tile-doclayout-threshold 0.20
+```
+
 ## Client Usage
 1. Click the Windows Start icon.
 2. In the pop-up window, select Launcher.
@@ -428,6 +536,11 @@ python smoke_test.py \
 - The engine includes a small PaddleX compatibility patch so `opencv-contrib-python-headless` is accepted in WSL.
 - The Gradio app now starts even if `tkinter` is unavailable; in that case, paste `/mnt/c/...` paths manually instead of using the browse buttons.
 - The bundled test corpus lives under `testdata/source`, so smoke tests are portable across machines.
+- PERO-OCR is optional. Install `pero-ocr` and its runtime dependencies into
+  the active environment or point the app at a local checkout with
+  `PERO_OCR_SOURCE_PATH` / the UI field, and provide a PERO engine `config.ini`.
+- Post-OCR olmOCR checks use `OLMOCR_API_URL`, `OLMOCR_MODEL`, and optional
+  `OLMOCR_API_KEY` when calling external providers.
   
 ## Project Structure
 
@@ -447,7 +560,9 @@ OCR-Tool/
 │   ├── __init__.py
 │   ├── auto_ocr.py                      # Automatically routes images to PP-StructureV3 or PaddleOCR-VL based on image quality
 │   ├── ocr_pp.py                        # PP-OCRv5 and PP-StructureV3 OCR processing
+│   ├── pero_ocr.py                      # Optional PERO-OCR PageParser integration
 │   ├── ocr_vl.py                        # PaddleOCR-VL OCR processing
+│   ├── post_ocr_vl.py                   # Optional PP-OCR word-crop VL correction
 │   ├── image_preprocessing.py           # Optional crop, cleanup, contrast, binarization, and deskew steps before OCR
 │   ├── tile_ocr.py                      # Fixed-grid and PP-DocLayoutV3 tiled OCR logic
 │   ├── alto_generation.py               # Generates ALTO XML files from OCR results

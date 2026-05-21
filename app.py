@@ -15,6 +15,22 @@ from services.auto_ocr import run_auto_job
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_PERO_CONFIG_PATH,
+    DEFAULT_PERO_DEVICE,
+    DEFAULT_PERO_GPU_ID,
+    DEFAULT_PERO_MIN_LINE_CONFIDENCE,
+    DEFAULT_PERO_SOURCE_PATH,
+    DEFAULT_OLMOCR_API_URL,
+    DEFAULT_OLMOCR_MODEL,
+    DEFAULT_PADDLE_VL_API_URL,
+    DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_ENABLED,
+    DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
+    DEFAULT_POST_OCR_VL_MAX_WORDS,
+    DEFAULT_POST_OCR_VL_PADDING_PX,
+    DEFAULT_POST_OCR_VL_SAVE_TILES,
     DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_DOCLAYOUT_THRESHOLD,
@@ -29,6 +45,8 @@ from services.ocr_defaults import (
     PREPROCESSING_STEP_CHOICES,
 )
 from services.tile_ocr import tile_grid_for_strategy
+
+LOCAL_OCR_METHODS = {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"}
 
 APP_CSS = """
 #fixed-header {
@@ -204,7 +222,7 @@ def tile_strategy_choices_for_method(method):
 
 
 def update_tile_controls(method, tile_strategy):
-    supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
+    supports_tiling = method in LOCAL_OCR_METHODS
     strategy = coerce_tile_strategy_for_method(method, tile_strategy)
     show_fixed_grid_controls = supports_tiling and strategy in {
         "grid",
@@ -230,8 +248,13 @@ def update_options(method, tile_strategy):
     """
     Update visible UI options based on the selected OCR method.
     """
-    supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
-    supports_preprocessing = method in ["PP-OCRv5", "PP-StructureV3", "Auto Routing"]
+    supports_tiling = method in LOCAL_OCR_METHODS
+    supports_preprocessing = method in [
+        "PP-OCRv5",
+        "PP-StructureV3",
+        "PERO-OCR",
+        "Auto Routing",
+    ]
     effective_tile_strategy = coerce_tile_strategy_for_method(method, tile_strategy)
     tile_checkbox_update = (
         gr.update(interactive=True)
@@ -258,6 +281,8 @@ def update_options(method, tile_strategy):
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
+        gr.update(visible=(method == "PERO-OCR")),
+        gr.update(visible=(method == "PP-OCRv5")),
         preprocessing_update,
         black_border_update,
         tile_checkbox_update,
@@ -319,6 +344,76 @@ def build_paddle_options(
     }
 
 
+def build_pero_options(
+    pero_source_path,
+    pero_config_path,
+    pero_device,
+    pero_gpu_id,
+    pero_min_line_confidence,
+    pero_save_pagexml,
+):
+    return {
+        "pero_source_path": pero_source_path or DEFAULT_PERO_SOURCE_PATH,
+        "pero_config_path": pero_config_path or DEFAULT_PERO_CONFIG_PATH,
+        "pero_device": pero_device or DEFAULT_PERO_DEVICE,
+        "pero_gpu_id": (
+            pero_gpu_id if pero_gpu_id not in ("", None) else DEFAULT_PERO_GPU_ID
+        ),
+        "pero_min_line_confidence": (
+            float(pero_min_line_confidence)
+            if pero_min_line_confidence is not None
+            else DEFAULT_PERO_MIN_LINE_CONFIDENCE
+        ),
+        "pero_save_pagexml": bool(pero_save_pagexml),
+    }
+
+
+def build_post_ocr_vl_options(
+    post_ocr_vl_enabled,
+    post_ocr_vl_backend,
+    post_ocr_vl_candidate_mode,
+    post_ocr_vl_max_words,
+    post_ocr_vl_padding_px,
+    post_ocr_vl_low_confidence_threshold,
+    post_ocr_vl_apply_corrections,
+    post_ocr_vl_save_tiles,
+    post_ocr_vl_paddlevl_url,
+    post_ocr_vl_olmocr_url,
+    post_ocr_vl_olmocr_model,
+):
+    return {
+        "post_ocr_vl_enabled": bool(post_ocr_vl_enabled),
+        "post_ocr_vl_backend": post_ocr_vl_backend or DEFAULT_POST_OCR_VL_BACKEND,
+        "post_ocr_vl_candidate_mode": (
+            post_ocr_vl_candidate_mode or DEFAULT_POST_OCR_VL_CANDIDATE_MODE
+        ),
+        "post_ocr_vl_max_words": int(
+            DEFAULT_POST_OCR_VL_MAX_WORDS
+            if post_ocr_vl_max_words is None
+            else post_ocr_vl_max_words
+        ),
+        "post_ocr_vl_padding_px": int(
+            DEFAULT_POST_OCR_VL_PADDING_PX
+            if post_ocr_vl_padding_px is None
+            else post_ocr_vl_padding_px
+        ),
+        "post_ocr_vl_low_confidence_threshold": float(
+            DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD
+            if post_ocr_vl_low_confidence_threshold is None
+            else post_ocr_vl_low_confidence_threshold
+        ),
+        "post_ocr_vl_apply_corrections": bool(post_ocr_vl_apply_corrections),
+        "post_ocr_vl_save_tiles": bool(post_ocr_vl_save_tiles),
+        "post_ocr_vl_paddlevl_url": (
+            post_ocr_vl_paddlevl_url or DEFAULT_PADDLE_VL_API_URL
+        ),
+        "post_ocr_vl_olmocr_url": post_ocr_vl_olmocr_url or DEFAULT_OLMOCR_API_URL,
+        "post_ocr_vl_olmocr_model": (
+            post_ocr_vl_olmocr_model or DEFAULT_OLMOCR_MODEL
+        ),
+    }
+
+
 def submit_config(
     method,
     image_input_folder,
@@ -345,6 +440,23 @@ def submit_config(
     text_det_unclip_ratio,
     text_rec_score_thresh,
     text_recognition_batch_size,
+    post_ocr_vl_enabled,
+    post_ocr_vl_backend,
+    post_ocr_vl_candidate_mode,
+    post_ocr_vl_max_words,
+    post_ocr_vl_padding_px,
+    post_ocr_vl_low_confidence_threshold,
+    post_ocr_vl_apply_corrections,
+    post_ocr_vl_save_tiles,
+    post_ocr_vl_paddlevl_url,
+    post_ocr_vl_olmocr_url,
+    post_ocr_vl_olmocr_model,
+    pero_source_path,
+    pero_config_path,
+    pero_device,
+    pero_gpu_id,
+    pero_min_line_confidence,
+    pero_save_pagexml,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -391,11 +503,15 @@ def submit_config(
         "tile_doclayout_recovery": bool(tile_doclayout_recovery),
     }
 
-    if tile_source_images and method not in ["PP-OCRv5", "PP-StructureV3"]:
-        yield "Source-image tiling is currently available for PP-OCRv5 and PP-StructureV3 only."
+    if tile_source_images and method not in LOCAL_OCR_METHODS:
+        yield "Source-image tiling is currently available for PP-OCRv5, PP-StructureV3, and PERO-OCR only."
         return
 
-    yield "Downloading models... OCR will start after the download is complete."
+    if method == "PERO-OCR" and not (pero_config_path or DEFAULT_PERO_CONFIG_PATH):
+        yield "Please provide a PERO config.ini path before running PERO-OCR."
+        return
+
+    yield "Preparing OCR models... OCR will start after initialization is complete."
     paddle_options = build_paddle_options(
         language,
         use_textline_orientation,
@@ -414,7 +530,37 @@ def submit_config(
     # Start to run the OCR job based on the selected method and options
     if method in ["PP-StructureV3","PP-OCRv5"]:
         opt.update(paddle_options)
+        opt.update(
+            build_post_ocr_vl_options(
+                post_ocr_vl_enabled,
+                post_ocr_vl_backend,
+                post_ocr_vl_candidate_mode,
+                post_ocr_vl_max_words,
+                post_ocr_vl_padding_px,
+                post_ocr_vl_low_confidence_threshold,
+                post_ocr_vl_apply_corrections,
+                post_ocr_vl_save_tiles,
+                post_ocr_vl_paddlevl_url,
+                post_ocr_vl_olmocr_url,
+                post_ocr_vl_olmocr_model,
+            )
+        )
       
+        for message in run_ocr_job(input_path, output_root, opt):
+            yield message
+
+    elif method == "PERO-OCR":
+        opt.update(
+            build_pero_options(
+                pero_source_path,
+                pero_config_path,
+                pero_device,
+                pero_gpu_id,
+                pero_min_line_confidence,
+                pero_save_pagexml,
+            )
+        )
+
         for message in run_ocr_job(input_path, output_root, opt):
             yield message
 
@@ -443,10 +589,10 @@ with gr.Blocks(css=APP_CSS) as demo:
     # Create a fixed header section for the application title
     # and OCR method selection.
     with gr.Column(elem_id="fixed-header"):
-        gr.Markdown("## CRKN PaddleOCR Engine")
+        gr.Markdown("## CRKN OCR Engine")
 
         method_radio = gr.Radio(
-            choices=["PP-OCRv5","PP-StructureV3", "PaddleVL", "Auto Routing"],
+            choices=["PP-OCRv5","PP-StructureV3", "PERO-OCR", "PaddleVL", "Auto Routing"],
             label="Select Processing Method",
             value="PP-OCRv5"
         )
@@ -486,7 +632,7 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=list(DEFAULT_PREPROCESSING_STEPS),
             label="Image Preprocessing Steps",
             info=(
-                "Applied before local Paddle OCR and tiling. Active steps save "
+                "Applied before local OCR and tiling. Active steps save "
                 "a preprocessed PNG beside the OCR outputs."
             ),
         )
@@ -503,7 +649,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         tile_source_images = gr.Checkbox(
             label='Tile source images before OCR.',
             value=False,
-            info="Available for PP-OCRv5 and PP-StructureV3.",
+            info="Available for PP-OCRv5, PP-StructureV3, and PERO-OCR.",
         )
 
         tile_strategy = gr.Dropdown(
@@ -546,11 +692,144 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=True,
         )
 
+    # Optional PP-OCRv5 post-processing with word crops sent to a VL backend.
+    with gr.Column(visible=True) as post_ocr_vl_options:
+        post_ocr_vl_enabled = gr.Checkbox(
+            label="Use post-OCR VL word check.",
+            value=DEFAULT_POST_OCR_VL_ENABLED,
+            info=(
+                "After PP-OCRv5, crop selected word boxes and ask a VL backend "
+                "to verify or correct the word text."
+            ),
+        )
+
+        post_ocr_vl_backend = gr.Dropdown(
+            choices=[
+                ("PaddleVL", "paddlevl"),
+                ("olmOCR", "olmocr"),
+                ("Both", "both"),
+            ],
+            value=DEFAULT_POST_OCR_VL_BACKEND,
+            label="Post-OCR VL Backend",
+        )
+
+        post_ocr_vl_candidate_mode = gr.Dropdown(
+            choices=[
+                ("Suspicious words", "suspicious"),
+                ("Low-confidence lines", "low_confidence"),
+                ("All words in reading order", "all"),
+            ],
+            value=DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+            label="Words to Check",
+        )
+
+        post_ocr_vl_max_words = gr.Slider(
+            minimum=1,
+            maximum=500,
+            value=DEFAULT_POST_OCR_VL_MAX_WORDS,
+            step=1,
+            label="Max Words to Check",
+        )
+
+        post_ocr_vl_padding_px = gr.Slider(
+            minimum=0,
+            maximum=64,
+            value=DEFAULT_POST_OCR_VL_PADDING_PX,
+            step=1,
+            label="Word Tile Padding (px)",
+        )
+
+        post_ocr_vl_low_confidence_threshold = gr.Slider(
+            minimum=0.0,
+            maximum=1.0,
+            value=DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
+            step=0.01,
+            label="Low Confidence Threshold",
+        )
+
+        post_ocr_vl_apply_corrections = gr.Checkbox(
+            label="Apply accepted VL corrections to OCR text.",
+            value=DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+        )
+
+        post_ocr_vl_save_tiles = gr.Checkbox(
+            label="Save post-OCR VL word tiles.",
+            value=DEFAULT_POST_OCR_VL_SAVE_TILES,
+        )
+
+        post_ocr_vl_paddlevl_url = gr.Textbox(
+            label="PaddleVL API URL",
+            value=DEFAULT_PADDLE_VL_API_URL,
+            info="Used when backend is PaddleVL.",
+        )
+
+        post_ocr_vl_olmocr_url = gr.Textbox(
+            label="olmOCR OpenAI-Compatible API URL",
+            value=DEFAULT_OLMOCR_API_URL,
+            info="Used when backend is olmOCR; requests go to /chat/completions.",
+        )
+
+        post_ocr_vl_olmocr_model = gr.Textbox(
+            label="olmOCR Model",
+            value=DEFAULT_OLMOCR_MODEL,
+            info="Model name served by the OpenAI-compatible endpoint.",
+        )
+
     # PaddleVL-specific OCR options.
     with gr.Column(visible=False) as paddlevl_options:
         use_layout_detection = gr.Checkbox(
             label='Use layout detection during inference.',
             value=False
+        )
+
+    # PERO-OCR-specific options.
+    with gr.Column(visible=False) as pero_options:
+        pero_source_path = gr.Textbox(
+            label="PERO Python Module Path",
+            value=DEFAULT_PERO_SOURCE_PATH,
+            info=(
+                "Path to the local pero-ocr checkout if pero_ocr is not installed. "
+                "Windows C:\\ paths are accepted under WSL."
+            ),
+        )
+
+        pero_config_path = gr.Textbox(
+            label="PERO config.ini Path",
+            value=DEFAULT_PERO_CONFIG_PATH,
+            info="Required. This is the PERO engine config used by PageParser.",
+        )
+
+        pero_device = gr.Dropdown(
+            choices=[
+                ("GPU", "gpu"),
+                ("CPU", "cpu"),
+            ],
+            value=DEFAULT_PERO_DEVICE,
+            label="PERO Device",
+            info="Matches PERO parse_folder.py --device choices.",
+        )
+
+        pero_gpu_id = gr.Textbox(
+            label="PERO GPU ID",
+            value=DEFAULT_PERO_GPU_ID,
+            info="Optional. Matches PERO parse_folder.py --gpu-id.",
+        )
+
+        pero_min_line_confidence = gr.Slider(
+            minimum=-1.0,
+            maximum=1.0,
+            value=DEFAULT_PERO_MIN_LINE_CONFIDENCE,
+            step=0.01,
+            label="PERO Min Line Confidence",
+            info=(
+                "Overrides PAGE_PARSER FILTER_CONFIDENT_LINES_THRESHOLD. "
+                "-1 leaves PERO confidence filtering disabled."
+            ),
+        )
+
+        pero_save_pagexml = gr.Checkbox(
+            label="Save native PERO PAGE XML beside JSON.",
+            value=False,
         )
 
     # PaddleOCR-specific OCR options.
@@ -641,7 +920,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         stop_btn = gr.Button("Stop OCR",interactive=False)
 
     # Display OCR processing messages and results.
-    output = gr.Textbox(label="PaddleOCR Result", lines=20)
+    output = gr.Textbox(label="OCR Result", lines=20)
 
     # Store UI components for dynamic state updates.
     ui_components = [
@@ -673,6 +952,23 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_unclip_ratio,
         text_rec_score_thresh,
         text_recognition_batch_size,
+        post_ocr_vl_enabled,
+        post_ocr_vl_backend,
+        post_ocr_vl_candidate_mode,
+        post_ocr_vl_max_words,
+        post_ocr_vl_padding_px,
+        post_ocr_vl_low_confidence_threshold,
+        post_ocr_vl_apply_corrections,
+        post_ocr_vl_save_tiles,
+        post_ocr_vl_paddlevl_url,
+        post_ocr_vl_olmocr_url,
+        post_ocr_vl_olmocr_model,
+        pero_source_path,
+        pero_config_path,
+        pero_device,
+        pero_gpu_id,
+        pero_min_line_confidence,
+        pero_save_pagexml,
     ]
 
     # Update visible OCR option sections
@@ -683,6 +979,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         outputs=[
             paddleocr_options,
             paddlevl_options,
+            pero_options,
+            post_ocr_vl_options,
             preprocessing_steps,
             ignore_black_border,
             tile_source_images,
@@ -783,6 +1081,23 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_unclip_ratio,
         text_rec_score_thresh,
         text_recognition_batch_size,
+        post_ocr_vl_enabled,
+        post_ocr_vl_backend,
+        post_ocr_vl_candidate_mode,
+        post_ocr_vl_max_words,
+        post_ocr_vl_padding_px,
+        post_ocr_vl_low_confidence_threshold,
+        post_ocr_vl_apply_corrections,
+        post_ocr_vl_save_tiles,
+        post_ocr_vl_paddlevl_url,
+        post_ocr_vl_olmocr_url,
+        post_ocr_vl_olmocr_model,
+        pero_source_path,
+        pero_config_path,
+        pero_device,
+        pero_gpu_id,
+        pero_min_line_confidence,
+        pero_save_pagexml,
     ],
     outputs=output
     ).then(

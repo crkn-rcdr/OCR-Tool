@@ -4,6 +4,22 @@ from pathlib import Path
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_PERO_CONFIG_PATH,
+    DEFAULT_PERO_DEVICE,
+    DEFAULT_PERO_GPU_ID,
+    DEFAULT_PERO_MIN_LINE_CONFIDENCE,
+    DEFAULT_PERO_SOURCE_PATH,
+    DEFAULT_OLMOCR_API_URL,
+    DEFAULT_OLMOCR_MODEL,
+    DEFAULT_PADDLE_VL_API_URL,
+    DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_ENABLED,
+    DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
+    DEFAULT_POST_OCR_VL_MAX_WORDS,
+    DEFAULT_POST_OCR_VL_PADDING_PX,
+    DEFAULT_POST_OCR_VL_SAVE_TILES,
     DEFAULT_PREPROCESSING_PRESET,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_BOX_THRESH,
@@ -37,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--method",
-        choices=["PP-OCRv5", "PP-StructureV3", "PaddleVL", "Auto Routing"],
+        choices=["PP-OCRv5", "PP-StructureV3", "PERO-OCR", "PaddleVL", "Auto Routing"],
         default="PP-OCRv5",
         help="OCR method to test.",
     )
@@ -148,7 +164,7 @@ def parse_args() -> argparse.Namespace:
         dest="preprocessing_steps",
         default=None,
         help=(
-            "Image preprocessing step applied before local Paddle OCR. "
+            "Image preprocessing step applied before local OCR. "
             "Repeat this flag to select multiple steps."
         ),
     )
@@ -157,7 +173,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=DEFAULT_IGNORE_BLACK_BORDER,
         help=(
-            "Run local Paddle OCR on a detected page crop, then offset OCR "
+            "Run local OCR on a detected page crop, then offset OCR "
             "geometry back into the original image coordinates."
         ),
     )
@@ -204,6 +220,103 @@ def parse_args() -> argparse.Namespace:
         "--disable-doclayout-recovery",
         action="store_true",
         help="Disable the fallback OCR tile added to recover DocLayout missed regions.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-check",
+        action="store_true",
+        default=DEFAULT_POST_OCR_VL_ENABLED,
+        help="After PP-OCRv5, verify selected word boxes with a VL backend.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-backend",
+        choices=["paddlevl", "olmocr", "both"],
+        default=DEFAULT_POST_OCR_VL_BACKEND,
+        help="VL backend for post-OCR word checking.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-candidate-mode",
+        choices=["suspicious", "low_confidence", "all"],
+        default=DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+        help="Which PP-OCR word boxes to send to the VL checker.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-max-words",
+        type=int,
+        default=DEFAULT_POST_OCR_VL_MAX_WORDS,
+        help="Maximum number of word crops to check.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-padding-px",
+        type=int,
+        default=DEFAULT_POST_OCR_VL_PADDING_PX,
+        help="Padding around each word box before sending it to VL.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-low-confidence-threshold",
+        type=float,
+        default=DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
+        help="Line confidence threshold used by suspicious/low-confidence modes.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-no-apply",
+        action="store_false",
+        dest="post_ocr_vl_apply_corrections",
+        default=DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+        help="Run the VL check but do not rewrite OCR text.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-no-save-tiles",
+        action="store_false",
+        dest="post_ocr_vl_save_tiles",
+        default=DEFAULT_POST_OCR_VL_SAVE_TILES,
+        help="Do not save the cropped word tiles.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-paddlevl-url",
+        default=DEFAULT_PADDLE_VL_API_URL,
+        help="PaddleVL service URL for post-OCR word checks.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-olmocr-url",
+        default=DEFAULT_OLMOCR_API_URL,
+        help="OpenAI-compatible olmOCR API URL for post-OCR word checks.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-olmocr-model",
+        default=DEFAULT_OLMOCR_MODEL,
+        help="olmOCR model name served by the OpenAI-compatible endpoint.",
+    )
+    parser.add_argument(
+        "--pero-source-path",
+        default=DEFAULT_PERO_SOURCE_PATH,
+        help="Path to the local pero-ocr checkout if pero_ocr is not installed.",
+    )
+    parser.add_argument(
+        "--pero-config-path",
+        default=DEFAULT_PERO_CONFIG_PATH,
+        help="Required for PERO-OCR: path to the PERO config.ini file.",
+    )
+    parser.add_argument(
+        "--pero-device",
+        choices=["gpu", "cpu"],
+        default=DEFAULT_PERO_DEVICE,
+        help="PERO device. Matches parse_folder.py --device.",
+    )
+    parser.add_argument(
+        "--pero-gpu-id",
+        default=DEFAULT_PERO_GPU_ID,
+        help="Optional PERO GPU id. Matches parse_folder.py --gpu-id.",
+    )
+    parser.add_argument(
+        "--pero-min-line-confidence",
+        type=float,
+        default=DEFAULT_PERO_MIN_LINE_CONFIDENCE,
+        help="Override PAGE_PARSER FILTER_CONFIDENT_LINES_THRESHOLD. -1 disables it.",
+    )
+    parser.add_argument(
+        "--pero-save-pagexml",
+        action="store_true",
+        help="Save native PERO PAGE XML beside the app JSON.",
     )
     return parser.parse_args()
 
@@ -256,6 +369,38 @@ def build_options(args: argparse.Namespace) -> dict:
     if args.method in {"PaddleVL", "Auto Routing"}:
         opt["use_layout_detection"] = args.use_layout_detection
 
+    if args.method == "PP-OCRv5":
+        opt.update(
+            {
+                "post_ocr_vl_enabled": args.post_ocr_vl_check,
+                "post_ocr_vl_backend": args.post_ocr_vl_backend,
+                "post_ocr_vl_candidate_mode": args.post_ocr_vl_candidate_mode,
+                "post_ocr_vl_max_words": max(1, args.post_ocr_vl_max_words),
+                "post_ocr_vl_padding_px": max(0, args.post_ocr_vl_padding_px),
+                "post_ocr_vl_low_confidence_threshold": max(
+                    0.0,
+                    min(args.post_ocr_vl_low_confidence_threshold, 1.0),
+                ),
+                "post_ocr_vl_apply_corrections": args.post_ocr_vl_apply_corrections,
+                "post_ocr_vl_save_tiles": args.post_ocr_vl_save_tiles,
+                "post_ocr_vl_paddlevl_url": args.post_ocr_vl_paddlevl_url,
+                "post_ocr_vl_olmocr_url": args.post_ocr_vl_olmocr_url,
+                "post_ocr_vl_olmocr_model": args.post_ocr_vl_olmocr_model,
+            }
+        )
+
+    if args.method == "PERO-OCR":
+        opt.update(
+            {
+                "pero_source_path": args.pero_source_path,
+                "pero_config_path": args.pero_config_path,
+                "pero_device": args.pero_device,
+                "pero_gpu_id": args.pero_gpu_id,
+                "pero_min_line_confidence": args.pero_min_line_confidence,
+                "pero_save_pagexml": args.pero_save_pagexml,
+            }
+        )
+
     return opt
 
 
@@ -273,7 +418,7 @@ def main() -> int:
 
     opt = build_options(args)
 
-    if args.method in {"PP-OCRv5", "PP-StructureV3"}:
+    if args.method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"}:
         from services.ocr_pp import run_ocr_job
 
         iterator = run_ocr_job(input_path, output_path, opt)

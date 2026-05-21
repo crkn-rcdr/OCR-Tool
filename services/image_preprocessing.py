@@ -1,4 +1,4 @@
-"""Optional source-image preprocessing before local Paddle OCR."""
+"""Optional source-image preprocessing before local OCR."""
 
 from __future__ import annotations
 
