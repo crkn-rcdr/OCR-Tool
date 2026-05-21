@@ -3,6 +3,8 @@ from pathlib import Path
 
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_PREPROCESSING_PRESET,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
@@ -13,6 +15,9 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_REC_SCORE_THRESH,
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
+    PREPROCESSING_PRESET_TO_STEPS,
+    PREPROCESSING_PRESET_CHOICES,
+    PREPROCESSING_STEP_CHOICES,
 )
 from services.tile_ocr import tile_grid_for_strategy
 
@@ -21,8 +26,8 @@ DEFAULT_INPUT = (
     REPO_ROOT
     / "testdata"
     / "source"
-    / "aeu.00037_19470820"
-    / "aeu.00037_19470820.1.jpg"
+    / "small"
+    / "image.jpg"
 )
 
 
@@ -128,6 +133,35 @@ def parse_args() -> argparse.Namespace:
         help="Generate TXT output instead of PDF/ALTO output.",
     )
     parser.add_argument(
+        "--preprocessing-preset",
+        choices=[value for _, value in PREPROCESSING_PRESET_CHOICES],
+        default=DEFAULT_PREPROCESSING_PRESET,
+        help=(
+            "Legacy single image preprocessing preset. Ignored when "
+            "--preprocessing-step is provided."
+        ),
+    )
+    parser.add_argument(
+        "--preprocessing-step",
+        action="append",
+        choices=[value for _, value in PREPROCESSING_STEP_CHOICES],
+        dest="preprocessing_steps",
+        default=None,
+        help=(
+            "Image preprocessing step applied before local Paddle OCR. "
+            "Repeat this flag to select multiple steps."
+        ),
+    )
+    parser.add_argument(
+        "--crop-black-border",
+        action="store_true",
+        default=DEFAULT_IGNORE_BLACK_BORDER,
+        help=(
+            "Run local Paddle OCR on a detected page crop, then offset OCR "
+            "geometry back into the original image coordinates."
+        ),
+    )
+    parser.add_argument(
         "--tile-source-images",
         action="store_true",
         help="Split each source image into tiles before running local OCR.",
@@ -176,11 +210,20 @@ def parse_args() -> argparse.Namespace:
 
 def build_options(args: argparse.Namespace) -> dict:
     tile_rows, tile_cols = tile_grid_for_strategy(args.tile_strategy)
+    preprocessing_steps = args.preprocessing_steps
+    if preprocessing_steps is None:
+        preprocessing_steps = PREPROCESSING_PRESET_TO_STEPS.get(
+            args.preprocessing_preset,
+            [],
+        )
+
     opt = {
         "method": args.method,
         "use_doc_orientation_classify": args.use_doc_orientation_classify,
         "use_doc_unwarping": args.use_doc_unwarping,
         "generate_text_file": args.generate_text_file,
+        "preprocessing_steps": preprocessing_steps,
+        "ignore_black_border": args.crop_black_border,
         "tile_source_images": args.tile_source_images,
         "tile_strategy": args.tile_strategy,
         "tile_rows": tile_rows,

@@ -134,18 +134,40 @@ def extract_word_level_lines(ocr_payload):
 
     lines = []
 
-    for index, (words, boxes) in enumerate(zip(text_word_lines, text_word_box_lines)):
+    line_count = max(len(rec_texts), len(text_word_lines), len(text_word_box_lines))
+
+    for index in range(line_count):
+        words = text_word_lines[index] if index < len(text_word_lines) else []
+        boxes = text_word_box_lines[index] if index < len(text_word_box_lines) else []
+        line_text = rec_texts[index] if index < len(rec_texts) else None
+        line_score = rec_scores[index] if index < len(rec_scores) else None
+
         if not words or not boxes:
+            if line_text and index < len(rec_polys):
+                line_box = normalize_box(rec_polys[index])
+                lines.append(
+                    {
+                        "box": line_box,
+                        "score": line_score,
+                        "strings": [
+                            make_ocr_item(
+                                line_text,
+                                line_box,
+                                score=line_score,
+                                line_index=index,
+                            )
+                        ],
+                        "index": index,
+                    }
+                )
             continue
 
-        line_text = rec_texts[index] if index < len(rec_texts) else None
         words, boxes = merge_apostrophe_word_boxes(
             words,
             boxes,
             line_text=line_text,
         )
         string_items = []
-        line_score = rec_scores[index] if index < len(rec_scores) else None
 
         for word_text, word_box in zip(words, boxes):
             if not word_text or not clean_alto_text(word_text):
@@ -179,7 +201,7 @@ def extract_word_level_lines(ocr_payload):
             }
         )
 
-    lines.sort(key=lambda line: box_sort_key(line["box"]))
+    lines = sort_lines_reading_order(lines)
     return lines
 
 
@@ -299,9 +321,7 @@ def build_alto_lines(data):
             ]
             lines.append({"box": line_box, "score": line_score, "strings": strings})
 
-        # Sort lines top-to-bottom
-        lines.sort(key=lambda line: box_sort_key(line["box"]))
-        return lines
+        return sort_lines_reading_order(lines)
 
     lines = group_words_into_lines(items)
     return lines, select_paddlevl
@@ -322,6 +342,51 @@ def average_scores(scores) -> float | None:
 def box_sort_key(box):
     x1, y1, x2, y2 = box_to_rect(box)
     return (y1, x1, y2, x2)
+
+
+def sort_lines_reading_order(lines):
+    if len(lines) < 2:
+        return list(lines)
+
+    structured = []
+    for line in lines:
+        x1, y1, x2, y2 = box_to_rect(line["box"])
+        structured.append(
+            {
+                "line": line,
+                "rect": (x1, y1, x2, y2),
+                "center_y": (y1 + y2) / 2.0,
+                "height": max(1.0, y2 - y1),
+            }
+        )
+
+    heights = sorted(item["height"] for item in structured)
+    median_h = heights[len(heights) // 2] if heights else 12.0
+    line_threshold = max(5.0, median_h * 0.35)
+
+    structured.sort(key=lambda item: (item["center_y"], item["rect"][0]))
+    rows = []
+    current = [structured[0]]
+    current_y = structured[0]["center_y"]
+
+    for item in structured[1:]:
+        if abs(item["center_y"] - current_y) <= line_threshold:
+            current.append(item)
+            current_y = sum(entry["center_y"] for entry in current) / len(current)
+        else:
+            rows.append(current)
+            current = [item]
+            current_y = item["center_y"]
+
+    if current:
+        rows.append(current)
+
+    ordered = []
+    for row in rows:
+        row.sort(key=lambda item: item["rect"][0])
+        ordered.extend(item["line"] for item in row)
+
+    return ordered
 
 
 def box_to_alto_attrs(box, scale):
@@ -462,7 +527,7 @@ def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
         median_h = sorted(heights)[len(heights) // 2] if heights else 12.0
         gap_threshold = max(8.0, median_h * 0.8)
 
-        sorted_lines = sorted(col_lines, key=lambda l: box_to_rect(l["box"])[1])
+        sorted_lines = sort_lines_reading_order(col_lines)
 
         current = [sorted_lines[0]]
         _, cur_y1, _, cur_y2 = box_to_rect(sorted_lines[0]["box"])
@@ -606,7 +671,7 @@ def build_blocks_from_doclayout_tiles(data, lines):
         if not tile_lines:
             continue
 
-        tile_lines.sort(key=lambda line: box_sort_key(line["box"]))
+        tile_lines = sort_lines_reading_order(tile_lines)
         blocks.append(
             {
                 "box": calculate_line_box([line["box"] for line in tile_lines]),

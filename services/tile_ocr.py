@@ -1492,12 +1492,13 @@ def merge_ppocr_tile_results(
     tile_strategy: str,
 ) -> dict[str, Any]:
     first = tile_results[0]["json"] if tile_results else {}
-    entries = dedupe_overlapping_entries(collect_ocr_entries(tile_results))
+    entries = collect_ocr_entries(tile_results)
     # Attempt to rejoin tokens that were split at tile seams.
     # Compute vertical seam x positions from the fixed grid so DocLayout subtiles
     # still know where the source image was split.
     seam_positions = grid_vertical_seams(image_path, grid_cols)
     entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
+    entries = dedupe_overlapping_entries(entries)
 
     merged = {
         "input_path": str(image_path),
@@ -1611,11 +1612,10 @@ def merge_nested_overall_ocr(
             )
         )
 
-    entries = dedupe_overlapping_entries(entries)
-    entries.sort(key=lambda entry: geometry_sort_key(entry["rec_poly"]))
     # Merge possible fragments created by tiling, using fixed-grid seam positions.
     seam_positions = grid_vertical_seams(image_path, grid_cols)
     entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
+    entries = dedupe_overlapping_entries(entries)
 
     merged = {
         "input_path": str(image_path),
@@ -1898,6 +1898,7 @@ def text_has_contained_duplicate_shape(left: Any, right: Any) -> bool:
     return (
         truncated_prefix_match(longer, shorter)
         or truncated_suffix_match(longer, shorter)
+        or clipped_text_overlap_match(longer, shorter)
     )
 
 
@@ -1921,6 +1922,21 @@ def truncated_suffix_match(longer: str, shorter: str) -> bool:
             return True
 
     return False
+
+
+def clipped_text_overlap_match(longer: str, shorter: str) -> bool:
+    match = SequenceMatcher(None, longer, shorter).find_longest_match(
+        0,
+        len(longer),
+        0,
+        len(shorter),
+    )
+    if match.size < max(4, int(len(shorter) * 0.72)):
+        return False
+
+    short_edge = match.b <= 2 or match.b + match.size >= len(shorter) - 2
+    long_edge = match.a <= 2 or match.a + match.size >= len(longer) - 2
+    return short_edge and long_edge
 
 
 def text_similarity(left: Any, right: Any) -> float:
@@ -1996,7 +2012,7 @@ def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[fl
 
     heights = sorted(s["height"] for s in structured)
     median_h = heights[len(heights) // 2] if heights else 12.0
-    line_thr = max(8.0, median_h * 0.6)
+    line_thr = max(5.0, median_h * 0.35)
 
     structured.sort(key=lambda s: (s["center_y"], s["bbox"][0]))
     lines = []
@@ -2042,8 +2058,27 @@ def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[fl
             nxt_bbox = list(s["bbox"])
             gap = nxt_bbox[0] - cur_bbox[2]
             touches_seam = touches_vertical_seam(cur_bbox, nxt_bbox, seam_x, char_w)
+            overlap_text = overlapping_fragment_text(cur_text, nxt_text, cur_bbox, nxt_bbox)
 
-            if should_merge_across_seam(gap, char_w, cur_text, nxt_text, touches_seam, seam_x):
+            if overlap_text is not None:
+                if overlap_text != cur_text:
+                    cur_text = overlap_text
+                    cur_bbox[2] = max(cur_bbox[2], nxt_bbox[2])
+                    cur_bbox[1] = min(cur_bbox[1], nxt_bbox[1])
+                    cur_bbox[3] = max(cur_bbox[3], nxt_bbox[3])
+                    cur_changed = True
+                    cur_text_words = None
+                    cur_text_word_boxes = None
+
+                    if cur_score is None:
+                        cur_score = s["entry"].get("score")
+                    elif s["entry"].get("score") is not None:
+                        cur_score = (cur_score + s["entry"].get("score")) / 2.0
+
+                    if cur_angle is None and "angle" in s["entry"]:
+                        cur_angle = s["entry"].get("angle")
+
+            elif should_merge_across_seam(gap, char_w, cur_text, nxt_text, touches_seam, seam_x):
                 separator = seam_separator(cur_text, nxt_text, gap, char_w)
                 cur_text = cur_text + separator + nxt_text
                 cur_bbox[2] = max(cur_bbox[2], nxt_bbox[2])
@@ -2109,6 +2144,63 @@ def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[fl
     return merged_entries
 
 
+def overlapping_fragment_text(
+    left_text: str,
+    right_text: str,
+    left_bbox: list[float],
+    right_bbox: list[float],
+) -> str | None:
+    if not left_text or not right_text:
+        return None
+
+    overlap_ratio = bbox_overlap_ratio(left_bbox, right_bbox)
+    if overlap_ratio < 0.72:
+        return None
+
+    left_norm = normalize_for_dedupe(left_text)
+    right_norm = normalize_for_dedupe(right_text)
+    if len(left_norm) < 4 or len(right_norm) < 4:
+        return None
+
+    overlap_len = suffix_prefix_overlap_length(left_norm, right_norm)
+    if overlap_len <= 0:
+        return None
+
+    required = max(10, int(min(len(left_norm), len(right_norm)) * 0.55))
+    if overlap_len < required:
+        return None
+
+    suffix_start = raw_index_after_normalized_chars(right_text, overlap_len)
+    suffix = right_text[suffix_start:]
+
+    if not suffix.strip():
+        return left_text
+
+    return left_text + suffix
+
+
+def suffix_prefix_overlap_length(left_norm: str, right_norm: str) -> int:
+    max_len = min(len(left_norm), len(right_norm))
+
+    for size in range(max_len, 3, -1):
+        if left_norm[-size:] == right_norm[:size]:
+            return size
+
+    return 0
+
+
+def raw_index_after_normalized_chars(text: str, normalized_count: int) -> int:
+    seen = 0
+
+    for index, char in enumerate(text):
+        if char.isalnum():
+            seen += 1
+            if seen >= normalized_count:
+                return index + 1
+
+    return len(text)
+
+
 def touches_vertical_seam(
     left_bbox: list[float],
     right_bbox: list[float],
@@ -2125,7 +2217,6 @@ def touches_vertical_seam(
     return any(
         abs(left_bbox[2] - sx) <= eps
         or abs(right_bbox[0] - sx) <= eps
-        or (left_bbox[0] <= sx <= right_bbox[2] and right_bbox[0] - left_bbox[2] <= eps)
         for sx in seam_x
     )
 

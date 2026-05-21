@@ -4,6 +4,9 @@ from pathlib import Path
 
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_PREPROCESSING_PRESET,
+    DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
@@ -13,6 +16,9 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_DET_UNCLIP_RATIO,
     DEFAULT_TEXT_REC_SCORE_THRESH,
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+    PREPROCESSING_PRESET_TO_STEPS,
+    PREPROCESSING_PRESET_LABELS,
+    PREPROCESSING_STEP_LABELS,
 )
 
 OPTION_LABELS = {
@@ -23,6 +29,9 @@ OPTION_LABELS = {
     "use_textline_orientation": "Textline orientation",
     "use_layout_detection": "PaddleVL layout detection",
     "generate_text_file": "Generate TXT instead of PDF/ALTO",
+    "preprocessing_steps": "Image preprocessing steps",
+    "preprocessing_preset": "Image preprocessing preset",
+    "ignore_black_border": "Crop black border before OCR",
     "tile_source_images": "Tile OCR enabled",
     "tile_strategy": "Tile strategy",
     "tile_rows": "Tile rows",
@@ -49,6 +58,8 @@ OPTION_ORDER = [
     "use_textline_orientation",
     "use_layout_detection",
     "generate_text_file",
+    "preprocessing_steps",
+    "ignore_black_border",
     "tile_source_images",
     "tile_strategy",
     "tile_rows",
@@ -104,14 +115,27 @@ PADDLE_DEFAULT_OPTIONS = {
     "text_recognition_batch_size": f"{DEFAULT_TEXT_RECOGNITION_BATCH_SIZE} (default)",
 }
 
+PREPROCESSING_DEFAULT_OPTIONS = {
+    "preprocessing_steps": "None (default)",
+    "ignore_black_border": (
+        "on (default)" if DEFAULT_IGNORE_BLACK_BORDER else "off (default)"
+    ),
+}
+
+PREPROCESSING_STEP_ORDER = tuple(PREPROCESSING_STEP_LABELS)
+
 
 def tile_strategy_from_options(opt):
     return str(opt.get("tile_strategy") or "").strip()
 
 
 def option_applies_to_strategy(key, opt):
+    method = opt.get("method")
     tile_enabled = bool(opt.get("tile_source_images", False))
     strategy = tile_strategy_from_options(opt)
+
+    if method != "PP-OCRv5" and key == "text_det_max_side_limit":
+        return False
 
     if key == "tile_source_images":
         return True
@@ -141,11 +165,51 @@ def default_paddle_options(opt):
     method = opt.get("method")
     if method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
         for key, value in PADDLE_DEFAULT_OPTIONS.items():
+            if method != "PP-OCRv5" and key == "text_det_max_side_limit":
+                continue
             if key not in opt:
                 yield key, value
 
 
+def default_preprocessing_options(opt):
+    for key, value in PREPROCESSING_DEFAULT_OPTIONS.items():
+        if key == "preprocessing_steps" and "preprocessing_preset" in opt:
+            continue
+        if key not in opt:
+            yield key, value
+
+
+def preprocessing_steps_from_options(opt):
+    if "preprocessing_steps" in opt:
+        selected = opt.get("preprocessing_steps") or []
+        if isinstance(selected, str):
+            selected = [
+                step.strip()
+                for step in selected.replace(";", ",").split(",")
+                if step.strip()
+            ]
+    else:
+        preset = str(opt.get("preprocessing_preset") or DEFAULT_PREPROCESSING_PRESET)
+        selected = PREPROCESSING_PRESET_TO_STEPS.get(preset, DEFAULT_PREPROCESSING_STEPS)
+
+    selected_set = {str(step) for step in selected}
+    return [step for step in PREPROCESSING_STEP_ORDER if step in selected_set]
+
+
+def format_preprocessing_steps(value):
+    selected = preprocessing_steps_from_options({"preprocessing_steps": value})
+    if not selected:
+        return "None"
+    return ", ".join(PREPROCESSING_STEP_LABELS.get(step, step) for step in selected)
+
+
 def format_option_value(key, value):
+    if key == "preprocessing_steps":
+        return format_preprocessing_steps(value)
+
+    if key == "preprocessing_preset":
+        return PREPROCESSING_PRESET_LABELS.get(str(value), str(value))
+
     if key == "tile_strategy":
         return TILE_STRATEGY_LABELS.get(str(value), str(value))
 
@@ -158,6 +222,7 @@ def format_option_value(key, value):
 def iter_selected_options(opt):
     seen = set()
     defaults = {
+        **dict(default_preprocessing_options(opt)),
         **dict(default_strategy_options(opt)),
         **dict(default_paddle_options(opt)),
     }
@@ -180,6 +245,8 @@ def models_for_run(opt, select=None):
     effective_method = select or method
     tile_enabled = bool(opt.get("tile_source_images", False))
     tile_strategy = opt.get("tile_strategy")
+    preprocessing_steps = preprocessing_steps_from_options(opt)
+    ignore_black_border = bool(opt.get("ignore_black_border", DEFAULT_IGNORE_BLACK_BORDER))
     models = []
 
     if select and select != method:
@@ -203,6 +270,14 @@ def models_for_run(opt, select=None):
     if tile_enabled:
         strategy_label = TILE_STRATEGY_LABELS.get(str(tile_strategy), str(tile_strategy))
         models.append(f"Tile OCR strategy: {strategy_label}")
+
+    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and preprocessing_steps:
+        models.append(
+            f"Image preprocessing: {format_preprocessing_steps(preprocessing_steps)}"
+        )
+
+    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and ignore_black_border:
+        models.append("Image preprocessing: crop black border and offset OCR geometry")
 
     models.append("PDF text layer: PyMuPDF")
     models.append("ALTO writer: local ALTO generator")

@@ -65,16 +65,344 @@ To test the OCR pipeline in WSL without the Gradio UI, run:
 ```bash
 python smoke_test.py
 ```
-That defaults to `testdata/source/aeu.00037_19470820/aeu.00037_19470820.1.jpg`.
+That defaults to `testdata/source/small/image.jpg`.
 
 To target a different bundled folder or image, use a repo-relative path:
 ```bash
 python smoke_test.py \
   --method PP-OCRv5 \
-  --input testdata/source/oocihm.N_00219_18600707 \
+  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
   --output output-smoke
 ```
 Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
+
+## Plain-Language Option Guide
+
+This app has a lot of knobs because newspaper OCR is not one problem. A small,
+clean page needs different settings than a giant scan with black borders,
+faint text, many columns, and warped paper. Start simple, then add options only
+when the output tells you why they are needed.
+
+### Processing Method
+
+**PP-OCRv5**
+
+Use this for most OCR runs. It is the main text-recognition path and usually
+the best choice when you care about raw word count, TXT output, ALTO, and
+searchable PDF text.
+
+**PP-StructureV3**
+
+Use this when layout structure matters more than plain OCR text, or when you
+want to compare Paddle's structure pipeline against PP-OCRv5. It can work with
+fixed-grid tiling, but its own layout parser makes PP-DocLayout-inclusive
+tiling redundant. It is usually not the first choice for dense historical
+newspaper text.
+
+**PaddleVL**
+
+Use this when you specifically want the PaddleOCR-VL service. It requires the
+Docker service to be running. It is slower and service-based, but can help with
+some layout-heavy or visually difficult documents.
+
+**Auto Routing**
+
+Use this only for mixed batches where you want the app to choose between local
+Paddle OCR and PaddleVL based on image quality checks. For controlled testing,
+pick the engine directly so results are easier to compare.
+
+### Input And Output
+
+**Image Input Folder**
+
+Choose either one image or a folder. Folder runs preserve the folder structure
+under the output directory.
+
+**Output Folder**
+
+Choose where JSON, TXT, PDF, ALTO, logs, and any preprocessed images should be
+written.
+
+### Common OCR Options
+
+**Generate a text file with OCR results for each image**
+
+Turn this on when you only want TXT output and want to skip searchable PDF and
+ALTO generation. Leave it off when you want PDF and ALTO.
+
+**Use document orientation classification**
+
+Use this if pages may be rotated 90, 180, or 270 degrees. Leave it off for
+known upright scans. It adds another model step.
+
+**Use document image unwarping**
+
+Use this for camera photos, book curvature, or visibly warped pages. Leave it
+off for flat newspaper scans unless you are testing it directly. It can change
+geometry and may not help clean scans.
+
+**Use textline orientation classification**
+
+Use this if individual text lines may be rotated or vertical. Leave it off for
+normal horizontal English newspaper pages.
+
+### Image Preprocessing
+
+Preprocessing runs before local Paddle OCR and before tiling. If any
+preprocessing step is selected, the app saves a PNG under `_preprocessed/` next
+to the OCR output so you can inspect what Paddle saw.
+
+**Crop black border before OCR**
+
+Use this for scans with a dark scanner bed or black frame around the page. The
+app crops to the detected page area for OCR, then offsets OCR boxes back into
+the original image coordinates for PDF and ALTO. This is safer than painting
+the border white because it keeps final coordinates aligned to the original
+image.
+
+**Light clean**
+
+Use this for mild speckle or scanner noise. It applies a conservative denoise.
+It is safe to combine with `Background flatten` and `Contrast / CLAHE`.
+
+**Background flatten**
+
+Use this for uneven page background, shadows, yellowing, or gray paper. This is
+often the best first preprocessing step for historical newspapers.
+
+**Contrast / CLAHE**
+
+Use this when text is faint or low contrast. It boosts local contrast. It is a
+good partner for `Background flatten`.
+
+**Deskew**
+
+Use this only when the page is visibly tilted. If the page is already straight,
+leave it off. The deskew step is conservative, but any rotation can still make
+box alignment more delicate.
+
+**Sauvola binary**
+
+Use this as an experiment when faint text is still missed after background
+flattening and contrast. It can improve separation between text and background,
+but it can also damage punctuation, thin letters, and textured newspaper
+print. Do not make this your first default for dense newspaper pages.
+
+Recommended preprocessing starting points:
+
+```text
+Clean scans:
+  No preprocessing
+
+Historical newspaper with black scanner border:
+  Crop black border before OCR
+
+Uneven newspaper background:
+  Crop black border before OCR
+  Light clean
+  Background flatten
+  Contrast / CLAHE
+
+Very faint text experiment:
+  Crop black border before OCR
+  Light clean
+  Background flatten
+  Sauvola binary
+```
+
+### Tiling Options
+
+Tiling splits a large page into smaller OCR jobs, then merges the results back
+into one page. Use tiling for large scans, dense newspapers, and any image
+where Paddle logs messages like:
+
+```text
+Resized image size (...) exceeds max_side_limit of 4000. Resizing to fit within limit.
+```
+
+**Tile source images before OCR**
+
+Turn this on for large newspaper scans. Leave it off for small images or quick
+sanity checks.
+
+**Tile Strategy**
+
+`Fixed 3x1 grid`
+
+Splits the page into three horizontal bands. Useful for tall pages, but it can
+still leave very wide tiles on large broadsheet scans.
+
+`Fixed 3x2 grid`
+
+Splits the page into three rows and two columns. This is a good default for
+large newspaper pages because it reduces both tile height and tile width.
+
+`PP-DocLayoutV3 Layout`
+
+Uses Paddle's layout detector to find layout regions and OCR those regions.
+This can improve layout targeting, but pure layout-only tiling may miss content
+if layout detection misses a region. This option is shown for PP-OCRv5, not
+PP-StructureV3.
+
+`3x1 + PP-DocLayoutV3`
+
+First splits into three horizontal bands, then runs DocLayout inside each band.
+This was a strong earlier default for tall pages. This option is shown for
+PP-OCRv5, not PP-StructureV3.
+
+`3x2 + PP-DocLayoutV3`
+
+First splits into a 3 by 2 grid, then runs DocLayout inside each tile. This is
+the best starting point for very large, dense newspaper scans because it keeps
+tiles smaller and still uses layout detection inside each tile. This option is
+shown for PP-OCRv5, not PP-StructureV3.
+
+**Tile Overlap**
+
+Overlap gives OCR a little repeated context at tile boundaries. Use `96` px as
+a good default. If you see duplicated short fragments near tile edges, try
+lowering it. If you see missing words at tile boundaries, try raising it.
+
+**DocLayout Padding**
+
+Padding expands each detected layout region before OCR. Use `32` px as a good
+default. Raise it if text is clipped at region edges. Lower it if neighboring
+columns bleed into each other.
+
+**DocLayout Threshold**
+
+Lower values detect more layout regions. Use `0.20` as a recall-friendly
+default. Raise it if DocLayout produces too many noisy regions. Lower it if
+content is being missed.
+
+**Use DocLayout recovery tile**
+
+Leave this on for important OCR runs. It adds a fallback OCR pass to recover
+areas DocLayout may have missed.
+
+### Paddle OCR Detection Options
+
+These options affect Paddle's text detector and recognizer. For most newspaper
+testing, start with the current defaults and change one thing at a time.
+
+**Language**
+
+Choose the expected OCR language. Use English for English newspaper pages. If
+left blank, Paddle's default behavior is used.
+
+**Text Detection Threshold**
+
+Lower means more text candidates are kept. Higher means fewer, cleaner
+candidates. Use `0.20` for difficult newspaper scans where recall matters.
+
+**Text Detection Limit Type**
+
+Use `max` for large scans. It limits based on the long side of the image or
+tile.
+
+**Text Detection Limit Side Length**
+
+This is Paddle's target side length before detection. Use `9984` when tiling is
+on and you want to preserve detail.
+
+**Text Detection Max Side Limit**
+
+This is the hard maximum side limit used to avoid PaddleX resizing warnings and
+memory blowups. Use `4000` as the safe default. If you see max-side warnings,
+prefer smaller tiles rather than raising this first. This control is shown for
+PP-OCRv5 only.
+
+**Text Detection Box Threshold**
+
+Controls which detected text boxes survive post-processing. Use `0.30` as a
+stable default. Lower it only if faint words are being missed and noise is
+acceptable.
+
+**Text Detection Unclip Ratio**
+
+Expands detected text boxes. Use `2.0` as a default. Raise it if boxes are too
+tight and characters are clipped. Lower it if adjacent lines or columns merge.
+
+**Text Recognition Score Threshold**
+
+Controls filtering by recognition confidence. Use `0.0` when word count and
+recall are the priority. Raise it only when you want to suppress low-confidence
+text and are willing to lose words.
+
+**Text Recognition Batch Size**
+
+Use `32` on CPU or memory-limited machines. On a GPU workstation, try `64` if
+memory is comfortable. Batch size mostly affects speed, not OCR quality.
+
+### Recommended Recipes
+
+For `testdata/source/large/oocihm.N_00155_18750610.4.jpg`, start here:
+
+```text
+Method: PP-OCRv5
+Language: English
+Crop black border before OCR: on
+Image preprocessing steps: Light clean, Background flatten, Contrast / CLAHE
+Tile source images: on
+Tile strategy: 3x2 + PP-DocLayoutV3
+Tile overlap: 96
+DocLayout padding: 32
+DocLayout threshold: 0.20
+DocLayout recovery tile: on
+Text detection threshold: 0.20
+Text detection limit type: max
+Text detection limit side length: 9984
+Text detection max side limit: 4000
+Text detection box threshold: 0.30
+Text detection unclip ratio: 2.0
+Text recognition score threshold: 0.0
+Text recognition batch size: 32 on CPU, 64 on GPU
+```
+
+For fast debugging:
+
+```text
+Method: PP-OCRv5
+Generate TXT: on
+Tile source images: on
+Tile strategy: Fixed 3x2 grid
+Image preprocessing: off
+```
+
+For comparing against ABBYY:
+
+```text
+Generate PDF/ALTO: on
+Generate TXT: off
+Keep Text recognition score threshold at 0.0
+Compare word count first, then reading order and box placement
+Change only one option between runs
+```
+
+### CLI Examples
+
+Run the large newspaper page with the recommended local OCR settings:
+
+```bash
+python smoke_test.py \
+  --method PP-OCRv5 \
+  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
+  --output output-smoke-large \
+  --language en \
+  --crop-black-border \
+  --preprocessing-step light_clean \
+  --preprocessing-step background_flatten \
+  --preprocessing-step contrast \
+  --tile-source-images \
+  --tile-strategy grid_3x2_doclayout_v3 \
+  --tile-overlap-px 96 \
+  --tile-doclayout-padding-px 32 \
+  --tile-doclayout-threshold 0.20 \
+  --text-det-thresh 0.20 \
+  --text-det-limit-type max \
+  --text-det-limit-side-len 9984 \
+  --text-det-max-side-limit 4000
+```
 
 ## Client Usage
 1. Click the Windows Start icon.
@@ -104,7 +432,7 @@ Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
 ## Project Structure
 
 ```text
-paddle_pipeline/
+OCR-Tool/
 ├── app.py                               # Main application entry point
 ├── testdata/
 │   └── source/                          # Bundled OCR smoke-test corpus
@@ -120,11 +448,14 @@ paddle_pipeline/
 │   ├── auto_ocr.py                      # Automatically routes images to PP-StructureV3 or PaddleOCR-VL based on image quality
 │   ├── ocr_pp.py                        # PP-OCRv5 and PP-StructureV3 OCR processing
 │   ├── ocr_vl.py                        # PaddleOCR-VL OCR processing
+│   ├── image_preprocessing.py           # Optional crop, cleanup, contrast, binarization, and deskew steps before OCR
+│   ├── tile_ocr.py                      # Fixed-grid and PP-DocLayoutV3 tiled OCR logic
 │   ├── alto_generation.py               # Generates ALTO XML files from OCR results
 │   ├── pdf_generation.py                # Generates searchable PDF files from OCR results
 │   ├── txt_generation.py                # Generates TXT output files from OCR results
 │   ├── email_notify.py                  # Sends summary and error notification emails
 │   ├── ocr_logger.py                    # Logging configuration and OCR log management
+│   ├── ocr_defaults.py                  # Shared default values for UI, CLI, logs, and Paddle setup
 │   ├── constants.py                     # Shared constants and configuration values
 │   │
 │   └── fonts/                           # Font files used for PDF generation

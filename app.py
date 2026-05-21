@@ -14,6 +14,8 @@ from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
@@ -24,6 +26,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_REC_SCORE_THRESH,
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
+    PREPROCESSING_STEP_CHOICES,
 )
 from services.tile_ocr import tile_grid_for_strategy
 
@@ -39,6 +42,21 @@ APP_CSS = """
     padding-top: 100px !important;
 }
 """
+
+FULL_TILE_STRATEGY_CHOICES = [
+    ("Fixed 3x1 grid", "grid"),
+    ("Fixed 3x2 grid", "grid_3x2"),
+    ("PP-DocLayoutV3 Layout", "doclayout_v3"),
+    ("3x1 + PP-DocLayoutV3", "grid_doclayout_v3"),
+    ("3x2 + PP-DocLayoutV3", "grid_3x2_doclayout_v3"),
+]
+PPSTRUCTURE_TILE_STRATEGY_CHOICES = [
+    ("Fixed 3x1 grid", "grid"),
+    ("Fixed 3x2 grid", "grid_3x2"),
+]
+PPSTRUCTURE_TILE_STRATEGIES = {value for _, value in PPSTRUCTURE_TILE_STRATEGY_CHOICES}
+DEFAULT_TILE_STRATEGY = "grid_doclayout_v3"
+DEFAULT_PPSTRUCTURE_TILE_STRATEGY = "grid_3x2"
 
 # Define the list of supported languages for the dropdown menu
 LANGUAGE_CHOICES = [
@@ -172,9 +190,22 @@ def choose_folder(current_value=""):
         return current_value
 
 
+def coerce_tile_strategy_for_method(method, tile_strategy):
+    strategy = tile_strategy or DEFAULT_TILE_STRATEGY
+    if method == "PP-StructureV3" and strategy not in PPSTRUCTURE_TILE_STRATEGIES:
+        return DEFAULT_PPSTRUCTURE_TILE_STRATEGY
+    return strategy
+
+
+def tile_strategy_choices_for_method(method):
+    if method == "PP-StructureV3":
+        return PPSTRUCTURE_TILE_STRATEGY_CHOICES
+    return FULL_TILE_STRATEGY_CHOICES
+
+
 def update_tile_controls(method, tile_strategy):
     supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
-    strategy = tile_strategy or "grid_doclayout_v3"
+    strategy = coerce_tile_strategy_for_method(method, tile_strategy)
     show_fixed_grid_controls = supports_tiling and strategy in {
         "grid",
         "grid_3x2",
@@ -200,20 +231,39 @@ def update_options(method, tile_strategy):
     Update visible UI options based on the selected OCR method.
     """
     supports_tiling = method in ["PP-OCRv5", "PP-StructureV3"]
+    supports_preprocessing = method in ["PP-OCRv5", "PP-StructureV3", "Auto Routing"]
+    effective_tile_strategy = coerce_tile_strategy_for_method(method, tile_strategy)
     tile_checkbox_update = (
         gr.update(interactive=True)
         if supports_tiling
         else gr.update(interactive=False, value=False)
     )
-    tile_strategy_update = gr.update(interactive=supports_tiling)
-    tile_control_updates = update_tile_controls(method, tile_strategy)
+    tile_strategy_update = gr.update(
+        choices=tile_strategy_choices_for_method(method),
+        value=effective_tile_strategy,
+        interactive=supports_tiling,
+    )
+    preprocessing_update = (
+        gr.update(interactive=True)
+        if supports_preprocessing
+        else gr.update(interactive=False, value=list(DEFAULT_PREPROCESSING_STEPS))
+    )
+    black_border_update = (
+        gr.update(interactive=True)
+        if supports_preprocessing
+        else gr.update(interactive=False, value=DEFAULT_IGNORE_BLACK_BORDER)
+    )
+    tile_control_updates = update_tile_controls(method, effective_tile_strategy)
 
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
+        preprocessing_update,
+        black_border_update,
         tile_checkbox_update,
         tile_strategy_update,
         *tile_control_updates,
+        gr.update(visible=(method == "PP-OCRv5")),
     )
 
 
@@ -279,6 +329,8 @@ def submit_config(
     use_textline_orientation,
     use_layout_detection,
     generate_text_file,
+    preprocessing_steps,
+    ignore_black_border,
     tile_source_images,
     tile_strategy,
     tile_overlap_px,
@@ -307,15 +359,18 @@ def submit_config(
 
     input_path = Path(image_input_folder)
     output_root = Path(output_folder)
-    tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy or "grid_doclayout_v3")
+    tile_strategy = coerce_tile_strategy_for_method(method, tile_strategy)
+    tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy)
     
     opt = {
         "method": method,
         "use_doc_orientation_classify": use_doc_orientation_classify,
         "use_doc_unwarping": use_doc_unwarping,
         "generate_text_file": generate_text_file,
+        "preprocessing_steps": list(preprocessing_steps or []),
+        "ignore_black_border": bool(ignore_black_border),
         "tile_source_images": tile_source_images,
-        "tile_strategy": tile_strategy or "grid_doclayout_v3",
+        "tile_strategy": tile_strategy,
         "tile_rows": tile_rows,
         "tile_cols": tile_cols,
         "tile_overlap_px": (
@@ -353,6 +408,8 @@ def submit_config(
         text_rec_score_thresh,
         text_recognition_batch_size,
     )
+    if method != "PP-OCRv5":
+        paddle_options.pop("text_det_max_side_limit", None)
 
     # Start to run the OCR job based on the selected method and options
     if method in ["PP-StructureV3","PP-OCRv5"]:
@@ -424,6 +481,25 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=False
         )
 
+        preprocessing_steps = gr.CheckboxGroup(
+            choices=PREPROCESSING_STEP_CHOICES,
+            value=list(DEFAULT_PREPROCESSING_STEPS),
+            label="Image Preprocessing Steps",
+            info=(
+                "Applied before local Paddle OCR and tiling. Active steps save "
+                "a preprocessed PNG beside the OCR outputs."
+            ),
+        )
+
+        ignore_black_border = gr.Checkbox(
+            label="Crop black border before OCR.",
+            value=DEFAULT_IGNORE_BLACK_BORDER,
+            info=(
+                "Runs OCR on the detected page crop, then offsets OCR geometry "
+                "back into the original image coordinates."
+            ),
+        )
+
         tile_source_images = gr.Checkbox(
             label='Tile source images before OCR.',
             value=False,
@@ -431,14 +507,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         tile_strategy = gr.Dropdown(
-            choices=[
-                ("Fixed 3x1 grid", "grid"),
-                ("Fixed 3x2 grid", "grid_3x2"),
-                ("PP-DocLayoutV3 Layout", "doclayout_v3"),
-                ("3x1 + PP-DocLayoutV3", "grid_doclayout_v3"),
-                ("3x2 + PP-DocLayoutV3", "grid_3x2_doclayout_v3"),
-            ],
-            value="grid_doclayout_v3",
+            choices=FULL_TILE_STRATEGY_CHOICES,
+            value=DEFAULT_TILE_STRATEGY,
             label="Tile Strategy",
             info=(
                 "Use fixed tiles, PaddleX PP-DocLayoutV3 regions, "
@@ -587,6 +657,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_textline_orientation,
         use_layout_detection,
         generate_text_file,
+        preprocessing_steps,
+        ignore_black_border,
         tile_source_images,
         tile_strategy,
         tile_overlap_px,
@@ -611,12 +683,15 @@ with gr.Blocks(css=APP_CSS) as demo:
         outputs=[
             paddleocr_options,
             paddlevl_options,
+            preprocessing_steps,
+            ignore_black_border,
             tile_source_images,
             tile_strategy,
             tile_overlap_px,
             tile_doclayout_padding_px,
             tile_doclayout_threshold,
             tile_doclayout_recovery,
+            text_det_max_side_limit,
         ]
     )
 
@@ -692,6 +767,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_textline_orientation,
         use_layout_detection,
         generate_text_file,
+        preprocessing_steps,
+        ignore_black_border,
         tile_source_images,
         tile_strategy,
         tile_overlap_px,

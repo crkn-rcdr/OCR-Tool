@@ -9,11 +9,13 @@ from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
+from services.image_preprocessing import preprocess_image_for_ocr
 from services.tile_ocr import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_STRATEGY,
+    offset_nested_geometry,
     tile_grid_for_strategy,
     run_tiled_local_ocr,
     supports_tiled_ocr,
@@ -337,36 +339,88 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
     Run OCR for a single image and save the final JSON output.
     """
     final_json = out_dir / f"{image_path.stem}.json"
+    ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
+        image_path=image_path,
+        out_dir=out_dir,
+        opt=opt,
+    )
 
     if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
-        merged_json = run_tiled_local_ocr(image_path, opt, select=select)
+        merged_json = run_tiled_local_ocr(ocr_image_path, opt, select=select)
         normalize_ocr_word_boxes_in_payload(merged_json)
+        annotate_preprocessing_payload(merged_json, preprocess_metadata)
         final_json.write_text(
             json.dumps(merged_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return final_json
 
-    output = engine.infer(str(image_path), opt)
+    output = engine.infer(str(ocr_image_path), opt)
 
     for res in output:
         res.save_to_json(save_path=str(out_dir))
 
-    json_file = out_dir / f"{image_path.stem}_res.json"
+    json_file = out_dir / f"{ocr_image_path.stem}_res.json"
+    if not json_file.exists():
+        candidates = sorted(out_dir.glob(f"{ocr_image_path.stem}*.json"))
+        if not candidates:
+            raise FileNotFoundError(
+                f"No OCR JSON output was produced for image: {ocr_image_path.name}"
+            )
+        json_file = candidates[0]
+
     json_file.rename(final_json)
-    normalize_saved_ocr_json(final_json)
+    normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
 
     return final_json
 
 
-def normalize_saved_ocr_json(json_path: Path) -> None:
+def normalize_saved_ocr_json(
+    json_path: Path,
+    preprocess_metadata: dict | None = None,
+) -> None:
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception:
         return
 
-    if normalize_ocr_word_boxes_in_payload(payload):
+    changed = normalize_ocr_word_boxes_in_payload(payload)
+    changed = annotate_preprocessing_payload(payload, preprocess_metadata) or changed
+
+    if changed:
         json_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+
+def annotate_preprocessing_payload(
+    payload: dict,
+    preprocess_metadata: dict | None,
+) -> bool:
+    if not preprocess_metadata:
+        return False
+
+    metadata = dict(preprocess_metadata)
+
+    offset_x = int(metadata.get("coordinate_offset_x") or 0)
+    offset_y = int(metadata.get("coordinate_offset_y") or 0)
+    if offset_x or offset_y:
+        offset_payload = offset_nested_geometry(payload, offset_x, offset_y)
+        payload.clear()
+        payload.update(offset_payload)
+
+    payload["source_preprocessing"] = metadata
+    payload["original_input_path"] = metadata.get("original_input_path")
+    output_input_path = (
+        metadata.get("original_input_path")
+        if metadata.get("use_original_input_for_outputs")
+        else metadata.get("ocr_input_path")
+    )
+    payload["input_path"] = output_input_path
+
+    overall_ocr_res = payload.get("overall_ocr_res")
+    if isinstance(overall_ocr_res, dict):
+        overall_ocr_res["input_path"] = output_input_path
+
+    return True
