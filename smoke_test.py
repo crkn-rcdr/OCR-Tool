@@ -16,6 +16,7 @@ from services.ocr_defaults import (
     DEFAULT_POST_OCR_VL_BACKEND,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
     DEFAULT_POST_OCR_VL_ENABLED,
+    DEFAULT_POST_OCR_VL_GROUP_LINES,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -272,6 +273,13 @@ def parse_args() -> argparse.Namespace:
         help="Do not save the cropped word tiles.",
     )
     parser.add_argument(
+        "--post-ocr-vl-no-group-lines",
+        action="store_false",
+        dest="post_ocr_vl_group_lines",
+        default=DEFAULT_POST_OCR_VL_GROUP_LINES,
+        help="Disable grouped line crops for same-line olmOCR candidates.",
+    )
+    parser.add_argument(
         "--post-ocr-vl-paddlevl-url",
         default=DEFAULT_PADDLE_VL_API_URL,
         help="PaddleVL service URL for post-OCR word checks.",
@@ -383,6 +391,7 @@ def build_options(args: argparse.Namespace) -> dict:
                 ),
                 "post_ocr_vl_apply_corrections": args.post_ocr_vl_apply_corrections,
                 "post_ocr_vl_save_tiles": args.post_ocr_vl_save_tiles,
+                "post_ocr_vl_group_lines": args.post_ocr_vl_group_lines,
                 "post_ocr_vl_paddlevl_url": args.post_ocr_vl_paddlevl_url,
                 "post_ocr_vl_olmocr_url": args.post_ocr_vl_olmocr_url,
                 "post_ocr_vl_olmocr_model": args.post_ocr_vl_olmocr_model,

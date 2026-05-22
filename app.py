@@ -27,6 +27,7 @@ from services.ocr_defaults import (
     DEFAULT_POST_OCR_VL_BACKEND,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
     DEFAULT_POST_OCR_VL_ENABLED,
+    DEFAULT_POST_OCR_VL_GROUP_LINES,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -378,6 +379,7 @@ def build_post_ocr_vl_options(
     post_ocr_vl_low_confidence_threshold,
     post_ocr_vl_apply_corrections,
     post_ocr_vl_save_tiles,
+    post_ocr_vl_group_lines,
     post_ocr_vl_paddlevl_url,
     post_ocr_vl_olmocr_url,
     post_ocr_vl_olmocr_model,
@@ -410,6 +412,7 @@ def build_post_ocr_vl_options(
         ),
         "post_ocr_vl_apply_corrections": bool(post_ocr_vl_apply_corrections),
         "post_ocr_vl_save_tiles": bool(post_ocr_vl_save_tiles),
+        "post_ocr_vl_group_lines": bool(post_ocr_vl_group_lines),
         "post_ocr_vl_paddlevl_url": (
             post_ocr_vl_paddlevl_url or DEFAULT_PADDLE_VL_API_URL
         ),
@@ -455,6 +458,7 @@ def submit_config(
     post_ocr_vl_low_confidence_threshold,
     post_ocr_vl_apply_corrections,
     post_ocr_vl_save_tiles,
+    post_ocr_vl_group_lines,
     post_ocr_vl_paddlevl_url,
     post_ocr_vl_olmocr_url,
     post_ocr_vl_olmocr_model,
@@ -548,6 +552,7 @@ def submit_config(
                 post_ocr_vl_low_confidence_threshold,
                 post_ocr_vl_apply_corrections,
                 post_ocr_vl_save_tiles,
+                post_ocr_vl_group_lines,
                 post_ocr_vl_paddlevl_url,
                 post_ocr_vl_olmocr_url,
                 post_ocr_vl_olmocr_model,
@@ -763,6 +768,11 @@ with gr.Blocks(css=APP_CSS) as demo:
             label="Save post-OCR VL word tiles.",
         )
 
+        post_ocr_vl_group_lines = gr.Checkbox(
+            value=DEFAULT_POST_OCR_VL_GROUP_LINES,
+            label="Group same-line suspicious words for olmOCR.",
+        )
+
         post_ocr_vl_paddlevl_url = gr.Textbox(
             label="PaddleVL API URL",
             value=DEFAULT_PADDLE_VL_API_URL,
@@ -967,6 +977,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_low_confidence_threshold,
         post_ocr_vl_apply_corrections,
         post_ocr_vl_save_tiles,
+        post_ocr_vl_group_lines,
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_olmocr_url,
         post_ocr_vl_olmocr_model,
@@ -1113,6 +1124,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_low_confidence_threshold,
         post_ocr_vl_apply_corrections,
         post_ocr_vl_save_tiles,
+        post_ocr_vl_group_lines,
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_olmocr_url,
         post_ocr_vl_olmocr_model,
