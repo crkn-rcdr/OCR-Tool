@@ -7,12 +7,14 @@ import math
 import os
 import re
 import csv
+from difflib import SequenceMatcher
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from langdetect import DetectorFactory, LangDetectException, detect_langs
@@ -20,8 +22,8 @@ from PIL import Image
 from spellchecker import SpellChecker
 
 from services.ocr_defaults import (
-    DEFAULT_OLMOCR_API_URL,
-    DEFAULT_OLMOCR_MODEL,
+    DEFAULT_OLLAMA_OPENAI_API_URL,
+    DEFAULT_OLLAMA_OPENAI_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
@@ -36,6 +38,41 @@ from services.ocr_defaults import (
 logger = logging.getLogger(__name__)
 
 
+def _get_openai_compat_url(opt: dict[str, Any]) -> str:
+    return str(
+        opt.get("post_ocr_vl_ollama_openai_url")
+        or opt.get("post_ocr_vl_olmocr_url")
+        or DEFAULT_OLLAMA_OPENAI_API_URL
+    )
+
+
+def _get_openai_compat_model(opt: dict[str, Any]) -> str:
+    return str(
+        opt.get("post_ocr_vl_ollama_openai_model")
+        or opt.get("post_ocr_vl_olmocr_model")
+        or DEFAULT_OLLAMA_OPENAI_MODEL
+    )
+
+
+def _get_openai_compat_api_key(opt: dict[str, Any]) -> str | None:
+    return (
+        opt.get("post_ocr_vl_ollama_openai_api_key")
+        or opt.get("post_ocr_vl_olmocr_api_key")
+        or os.getenv("OLLAMA_OPENAI_API_KEY")
+        or os.getenv("OPENAI_COMPAT_API_KEY")
+        or os.getenv("OLMOCR_API_KEY")
+    )
+
+
+def _native_ollama_chat_url(server_url: str) -> str | None:
+    parsed = urlparse(server_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    if parsed.port != 11434:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/api/chat"
+
+
 POST_OCR_VL_METHODS = {"PP-OCRv5"}
 POST_OCR_VL_MAX_LINE_TARGETS = 8
 WORD_RE = re.compile(r"[A-Za-z0-9]")
@@ -43,6 +80,10 @@ ODD_CHAR_RE = re.compile(r"[^A-Za-z0-9'\u2019`.,:;!?()\\[\\]{}\\-/& ]")
 WORD_STRIP_CHARS = ".,:;!?()[]{}\"'`\u2018\u2019-–—"
 WORDISH_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
 LINE_TEXT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['\u2019][A-Za-z0-9]+)?")
+CONTROL_TAG_RE = re.compile(r"<\|[^>]*\|>")
+HTML_BREAK_TAG_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
+HTML_TAG_RE = re.compile(r"</?[^>]+>")
+OCR_WORDISH_RE = re.compile(r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*")
 LANGUAGE_KEYS = ("language", "lang", "ocr_language", "document_language")
 LANGUAGE_CONTAINERS = (
     "model_settings",
@@ -326,8 +367,12 @@ def apply_post_ocr_vl_check(
     metadata["line_text_fallback_candidate_count"] = sum(
         1 for candidate in candidates if candidate.source == "line_text"
     )
+    openai_model_name = _get_openai_compat_model(opt) if "olmocr" in backend_order else ""
     metadata["line_grouping_active"] = (
-        metadata["group_line_candidates"] and backend_order == ["olmocr"]
+        metadata["group_line_candidates"]
+        and backend_order == ["olmocr"]
+        and not _is_chandra_model(openai_model_name)
+        and not _is_deepseek_ocr_model(openai_model_name)
     )
     candidate_batches = group_candidate_batches(
         candidates,
@@ -1699,6 +1744,14 @@ def _build_word_correction_prompt(original_text: str, model_name: str = None) ->
             "Return only the corrected word text, nothing else. "
             f"Previous OCR reading: {original_text!r}"
         )
+
+    if model_name and _is_deepseek_ocr_model(model_name):
+        return (
+            "Extract the text in the image. "
+            "Return only the visible target word text with no tags, no boxes, no markdown, "
+            "and no explanation. "
+            f"Previous OCR reading: {original_text!r}"
+        )
     
     # Default prompt for general vision models
     return (
@@ -1709,15 +1762,13 @@ def _build_word_correction_prompt(original_text: str, model_name: str = None) ->
 
 
 def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str:
-    server_url = str(
-        opt.get("post_ocr_vl_olmocr_url") or DEFAULT_OLMOCR_API_URL
-    ).rstrip("/")
+    server_url = _get_openai_compat_url(opt).rstrip("/")
     completion_url = (
         server_url
         if server_url.endswith("/chat/completions")
         else f"{server_url}/chat/completions"
     )
-    model = str(opt.get("post_ocr_vl_olmocr_model") or DEFAULT_OLMOCR_MODEL)
+    model = _get_openai_compat_model(opt)
     prompt = _build_word_correction_prompt(original_text, model_name=model)
     payload = {
         "model": model,
@@ -1739,7 +1790,7 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         "max_tokens": 32,
     }
     headers = {"Content-Type": "application/json"}
-    api_key = opt.get("post_ocr_vl_olmocr_api_key") or os.getenv("OLMOCR_API_KEY")
+    api_key = _get_openai_compat_api_key(opt)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -1753,11 +1804,46 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
 
     data = response.json()
-    content = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
+    message = data.get("choices", [{}])[0].get("message", {})
+    content = message.get("content", "")
+    if _is_chandra_model(model):
+        if not str(content or "").strip():
+            native_url = _native_ollama_chat_url(server_url)
+            if native_url:
+                native_payload = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                            "images": [image_to_base64(tile)],
+                        }
+                    ],
+                    "stream": False,
+                    "think": False,
+                    "options": {
+                        "temperature": 0,
+                        "num_predict": 32,
+                    },
+                }
+                native_response = requests.post(
+                    native_url,
+                    headers=headers,
+                    json=native_payload,
+                    timeout=(10, 120),
+                )
+                if native_response.status_code == 200:
+                    native_data = native_response.json()
+                    content = native_data.get("message", {}).get("content", "") or content
+        return clean_vl_text(
+            _extract_chandra_word_candidate(content, original_text),
+            model_name=model,
+        )
+    if _is_deepseek_ocr_model(model):
+        return clean_vl_text(
+            _extract_deepseek_word_candidate(content, original_text),
+            model_name=model,
+        )
     return clean_vl_text(content, model_name=model)
 
 
@@ -1767,15 +1853,13 @@ def request_olmocr_line(
     candidates: list[WordCandidate],
     opt: dict,
 ) -> tuple[str, dict[tuple[int, int], str]]:
-    server_url = str(
-        opt.get("post_ocr_vl_olmocr_url") or DEFAULT_OLMOCR_API_URL
-    ).rstrip("/")
+    server_url = _get_openai_compat_url(opt).rstrip("/")
     completion_url = (
         server_url
         if server_url.endswith("/chat/completions")
         else f"{server_url}/chat/completions"
     )
-    model = str(opt.get("post_ocr_vl_olmocr_model") or DEFAULT_OLMOCR_MODEL)
+    model = _get_openai_compat_model(opt)
     line_index = candidates[0].line_index
     prompt = build_olmocr_line_prompt(ocr_payload, line_index, candidates, model_name=model)
     payload = {
@@ -1798,7 +1882,7 @@ def request_olmocr_line(
         "max_tokens": min(512, max(128, len(candidates) * 64)),
     }
     headers = {"Content-Type": "application/json"}
-    api_key = opt.get("post_ocr_vl_olmocr_api_key") or os.getenv("OLMOCR_API_KEY")
+    api_key = _get_openai_compat_api_key(opt)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -1862,6 +1946,19 @@ def build_olmocr_line_prompt(
             "- Repeat original text if correct\n"
             "- Never use placeholder strings like 'word' or 'text'\n"
             "- If you cannot read a word, repeat the original"
+        )
+
+    if model_name and _is_deepseek_ocr_model(model_name):
+        return (
+            "Extract the text in the image. "
+            "Return strict JSON only, with no tags, no markdown, and no explanation.\n\n"
+            "OCR line words by zero-based word_index:\n"
+            f"{indexed_line}\n\n"
+            "Target words to verify:\n"
+            f"{targets}\n\n"
+            "JSON schema:\n"
+            '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}\n'
+            "Include every target once. If a target is already correct or unreadable, repeat the original text."
         )
     
     # Default prompt for general vision models
@@ -2015,7 +2112,7 @@ def choose_line_correction(
     corrected = clean_vl_text(corrected_text)
     if not is_clean_correction(original_text, corrected):
         return None, "line_unclean_vl_text"
-    if normalize_for_compare(corrected) == normalize_for_compare(original_text):
+    if corrections_equivalent(corrected, original_text):
         return corrected, "unchanged"
     return corrected, "accepted"
 
@@ -2068,12 +2165,12 @@ def choose_correction(
     if not usable:
         return None, "no_clean_vl_text"
 
-    unique = {normalize_for_compare(text): text for text in usable}
+    unique = {normalize_for_acceptance(text): text for text in usable}
     if len(results) > 1 and len(unique) > 1:
         return None, "backend_disagreement"
 
     selected = usable[0]
-    if normalize_for_compare(selected) == normalize_for_compare(original_text):
+    if corrections_equivalent(selected, original_text):
         return selected, "unchanged"
 
     return selected, "accepted"
@@ -2105,6 +2202,7 @@ def apply_candidate_correction(
 
     apply_word_correction(
         ocr_payload,
+        candidate,
         candidate.line_index,
         candidate.word_index,
         corrected_text,
@@ -2157,6 +2255,7 @@ def line_text_replacement_span(
 
 def apply_word_correction(
     ocr_payload: dict[str, Any],
+    candidate: WordCandidate,
     line_index: int,
     word_index: int,
     corrected_text: str,
@@ -2171,7 +2270,11 @@ def apply_word_correction(
     words[word_index] = corrected_text
     rec_texts = ocr_payload.get("rec_texts")
     if isinstance(rec_texts, list) and line_index < len(rec_texts):
-        rec_texts[line_index] = "".join(str(part) for part in words)
+        line_text = str(rec_texts[line_index] or "")
+        replacement_span = line_text_replacement_span(line_text, candidate)
+        if replacement_span is not None:
+            start, end = replacement_span
+            rec_texts[line_index] = f"{line_text[:start]}{corrected_text}{line_text[end:]}"
 
 
 def candidate_record(candidate: WordCandidate) -> dict[str, Any]:
@@ -2239,6 +2342,14 @@ def _is_chandra_model(model_name: str) -> bool:
     return "chandra" in model_lower or "chandra-ocr" in model_lower
 
 
+def _is_deepseek_ocr_model(model_name: str) -> bool:
+    """Check if the model name indicates it's a DeepSeek OCR model."""
+    if not model_name:
+        return False
+    model_lower = model_name.lower()
+    return "deepseek-ocr" in model_lower or "deepseekocr" in model_lower
+
+
 def _parse_chandra_response(text: str) -> str:
     """
     Parse Chandra OCR model responses, which may return JSON or formatted text.
@@ -2267,6 +2378,101 @@ def _parse_chandra_response(text: str) -> str:
     return text
 
 
+def _strip_control_tag_artifacts(value: str) -> str:
+    """Extract user-visible text from model outputs that include control tags."""
+    if not value or not CONTROL_TAG_RE.search(value):
+        return value
+
+    segments = [
+        segment.strip()
+        for segment in CONTROL_TAG_RE.split(value)
+        if segment and segment.strip()
+    ]
+    for segment in reversed(segments):
+        cleaned = segment.strip().strip("{}[]()<>|+-,:;")
+        if WORD_RE.search(cleaned):
+            return cleaned
+
+    collapsed = CONTROL_TAG_RE.sub(" ", value)
+    collapsed = re.sub(r"\s+", " ", collapsed).strip()
+    return collapsed.strip("{}[]()<>|+-,:;")
+
+
+def _parse_deepseek_ocr_response(text: str) -> str:
+    """Normalize DeepSeek OCR raw outputs that may include control tags."""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+
+    # DeepSeek OCR may emit content through raw control-tagged text streams.
+    value = _strip_control_tag_artifacts(value)
+    value = HTML_BREAK_TAG_RE.sub("\n", value)
+    value = HTML_TAG_RE.sub(" ", value)
+    value = re.sub(r"^\+\s*", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _extract_best_word_candidate(text: str, original_text: str, minimum_score: float = 0.55) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+
+    normalized_original = normalize_for_compare(original_text)
+    if not normalized_original:
+        return value
+
+    raw_segments = [
+        segment.strip()
+        for segment in re.split(r"[\r\n]+", value)
+        if segment and segment.strip()
+    ]
+    token_candidates: list[str] = []
+    for segment in raw_segments or [value]:
+        token_candidates.append(segment)
+        token_candidates.extend(match.group(0) for match in OCR_WORDISH_RE.finditer(segment))
+
+    best_candidate = ""
+    best_score = float("-inf")
+    for candidate in token_candidates:
+        cleaned = candidate.strip().strip("{}[]()<>|+-,:;")
+        normalized_candidate = normalize_for_compare(cleaned)
+        if not normalized_candidate:
+            continue
+        score = SequenceMatcher(None, normalized_candidate, normalized_original).ratio()
+        if normalized_candidate == normalized_original:
+            score += 1.0
+        score -= max(0, len(cleaned.split()) - 1) * 0.2
+        score -= abs(len(normalized_candidate) - len(normalized_original)) * 0.03
+        if score > best_score:
+            best_candidate = cleaned
+            best_score = score
+
+    if best_candidate and best_score >= minimum_score:
+        return best_candidate
+    return ""
+
+
+def _extract_deepseek_word_candidate(text: str, original_text: str) -> str:
+    """Pick the most plausible single-word OCR result from DeepSeek output."""
+    value = _parse_deepseek_ocr_response(text)
+    if not value:
+        return ""
+    return _extract_best_word_candidate(value, original_text, minimum_score=0.55)
+
+
+def _extract_chandra_word_candidate(text: str, original_text: str) -> str:
+    """Pick the most plausible word from Chandra OCR-style content."""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+
+    value = HTML_BREAK_TAG_RE.sub("\n", value)
+    value = HTML_TAG_RE.sub(" ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return _extract_best_word_candidate(value, original_text, minimum_score=0.5)
+
+
 def clean_vl_text(text: Any, model_name: str = None) -> str:
     value = str(text or "").strip()
     if not value:
@@ -2277,9 +2483,14 @@ def clean_vl_text(text: Any, model_name: str = None) -> str:
         value = _parse_chandra_response(value)
         if not value:
             return ""
+    elif model_name and _is_deepseek_ocr_model(model_name):
+        value = _parse_deepseek_ocr_response(value)
+        if not value:
+            return ""
 
     value = re.sub(r"```(?:text|markdown|yaml)?", "", value, flags=re.IGNORECASE)
     value = value.replace("```", "").strip()
+    value = _strip_control_tag_artifacts(value)
 
     if "\n" in value:
         lines = [line.strip() for line in value.splitlines() if line.strip()]
@@ -2370,6 +2581,17 @@ def geometry_to_bbox(geometry: Any) -> list[float] | None:
 
 def normalize_for_compare(value: str) -> str:
     return re.sub(r"\W+", "", value.casefold())
+
+
+def normalize_for_acceptance(value: str) -> str:
+    return " ".join(
+        match.group(0).casefold()
+        for match in OCR_WORDISH_RE.finditer(str(value or ""))
+    )
+
+
+def corrections_equivalent(left: str, right: str) -> bool:
+    return normalize_for_acceptance(left) == normalize_for_acceptance(right)
 
 
 def safe_filename(value: str) -> str:

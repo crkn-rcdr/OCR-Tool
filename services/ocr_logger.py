@@ -65,8 +65,8 @@ OPTION_LABELS = {
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
     "post_ocr_vl_group_lines": "Group post-OCR VL same-line candidates",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
-    "post_ocr_vl_olmocr_url": "Post-OCR olmOCR URL",
-    "post_ocr_vl_olmocr_model": "Post-OCR olmOCR model",
+    "post_ocr_vl_ollama_openai_url": "Post-OCR Ollama OpenAI URL",
+    "post_ocr_vl_ollama_openai_model": "Post-OCR Ollama OpenAI model",
 }
 
 OPTION_ORDER = [
@@ -112,8 +112,8 @@ OPTION_ORDER = [
     "post_ocr_vl_save_tiles",
     "post_ocr_vl_group_lines",
     "post_ocr_vl_paddlevl_url",
-    "post_ocr_vl_olmocr_url",
-    "post_ocr_vl_olmocr_model",
+    "post_ocr_vl_ollama_openai_url",
+    "post_ocr_vl_ollama_openai_model",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -146,8 +146,8 @@ POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_save_tiles",
     "post_ocr_vl_group_lines",
     "post_ocr_vl_paddlevl_url",
-    "post_ocr_vl_olmocr_url",
-    "post_ocr_vl_olmocr_model",
+    "post_ocr_vl_ollama_openai_url",
+    "post_ocr_vl_ollama_openai_model",
 }
 
 DOCLAYOUT_DEFAULT_OPTIONS = {

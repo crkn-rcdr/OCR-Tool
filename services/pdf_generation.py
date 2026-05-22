@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent
 LATIN_FONT_PATH = BASE_DIR / "fonts" / "NotoSans-Regular.ttf"
 CJK_FONT_PATH = BASE_DIR / "fonts" / "NotoSansSC-Regular.ttf"
 
-LATIN_FONT_ALIAS = "LATIN"
+LATIN_FONT_ALIAS = "helv"
 CJK_FONT_ALIAS = "CJK"
 
 
@@ -1059,11 +1059,10 @@ def build_pdf(json_path, input_dir, method, lang, select):
         page = doc.new_page(width=width, height=height)
         page.insert_image(page.rect, filename=str(image_path))
 
-        page.insert_font(fontname=LATIN_FONT_ALIAS, fontfile=str(LATIN_FONT_PATH))
         page.insert_font(fontname=CJK_FONT_ALIAS, fontfile=str(CJK_FONT_PATH))
 
         font_objects = {
-            LATIN_FONT_ALIAS: fitz.Font(fontfile=str(LATIN_FONT_PATH)),
+            LATIN_FONT_ALIAS: fitz.Font(LATIN_FONT_ALIAS),
             CJK_FONT_ALIAS: fitz.Font(fontfile=str(CJK_FONT_PATH)),
         }
 

@@ -15,13 +15,13 @@ from services.auto_ocr import run_auto_job
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_OLLAMA_OPENAI_API_URL,
+    DEFAULT_OLLAMA_OPENAI_MODEL,
     DEFAULT_PERO_CONFIG_PATH,
     DEFAULT_PERO_DEVICE,
     DEFAULT_PERO_GPU_ID,
     DEFAULT_PERO_MIN_LINE_CONFIDENCE,
     DEFAULT_PERO_SOURCE_PATH,
-    DEFAULT_OLMOCR_API_URL,
-    DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
@@ -250,6 +250,7 @@ def update_options(method, tile_strategy):
     Update visible UI options based on the selected OCR method.
     """
     supports_tiling = method in LOCAL_OCR_METHODS
+    show_tiling_options = method in ["PP-OCRv5", "PERO-OCR", "Auto Routing"]
     supports_preprocessing = method in [
         "PP-OCRv5",
         "PP-StructureV3",
@@ -262,6 +263,8 @@ def update_options(method, tile_strategy):
         if supports_tiling
         else gr.update(interactive=False, value=False)
     )
+    if not show_tiling_options:
+        tile_checkbox_update = gr.update(interactive=False, value=False)
     tile_strategy_update = gr.update(
         choices=tile_strategy_choices_for_method(method),
         value=effective_tile_strategy,
@@ -286,9 +289,9 @@ def update_options(method, tile_strategy):
         gr.update(visible=(method == "PP-OCRv5")),
         preprocessing_update,
         black_border_update,
-        tile_checkbox_update,
-        tile_strategy_update,
-        *tile_control_updates,
+        gr.update(**(tile_checkbox_update | {"visible": show_tiling_options})),
+        gr.update(**(tile_strategy_update | {"visible": show_tiling_options})),
+        *(gr.update(**(update | {"visible": show_tiling_options and update.get("visible", False)})) for update in tile_control_updates),
         gr.update(visible=(method == "PP-OCRv5")),
     )
 
@@ -381,8 +384,8 @@ def build_post_ocr_vl_options(
     post_ocr_vl_save_tiles,
     post_ocr_vl_group_lines,
     post_ocr_vl_paddlevl_url,
-    post_ocr_vl_olmocr_url,
-    post_ocr_vl_olmocr_model,
+    post_ocr_vl_ollama_openai_url,
+    post_ocr_vl_ollama_openai_model,
 ):
     return {
         "post_ocr_vl_enabled": bool(post_ocr_vl_enabled),
@@ -416,9 +419,11 @@ def build_post_ocr_vl_options(
         "post_ocr_vl_paddlevl_url": (
             post_ocr_vl_paddlevl_url or DEFAULT_PADDLE_VL_API_URL
         ),
-        "post_ocr_vl_olmocr_url": post_ocr_vl_olmocr_url or DEFAULT_OLMOCR_API_URL,
-        "post_ocr_vl_olmocr_model": (
-            post_ocr_vl_olmocr_model or DEFAULT_OLMOCR_MODEL
+        "post_ocr_vl_ollama_openai_url": (
+            post_ocr_vl_ollama_openai_url or DEFAULT_OLLAMA_OPENAI_API_URL
+        ),
+        "post_ocr_vl_ollama_openai_model": (
+            post_ocr_vl_ollama_openai_model or DEFAULT_OLLAMA_OPENAI_MODEL
         ),
     }
 
@@ -460,8 +465,8 @@ def submit_config(
     post_ocr_vl_save_tiles,
     post_ocr_vl_group_lines,
     post_ocr_vl_paddlevl_url,
-    post_ocr_vl_olmocr_url,
-    post_ocr_vl_olmocr_model,
+    post_ocr_vl_ollama_openai_url,
+    post_ocr_vl_ollama_openai_model,
     pero_source_path,
     pero_config_path,
     pero_device,
@@ -484,6 +489,7 @@ def submit_config(
     output_root = Path(output_folder)
     tile_strategy = coerce_tile_strategy_for_method(method, tile_strategy)
     tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy)
+    tile_source_images = bool(tile_source_images) and method != "PP-StructureV3"
     
     opt = {
         "method": method,
@@ -541,23 +547,26 @@ def submit_config(
     # Start to run the OCR job based on the selected method and options
     if method in ["PP-StructureV3","PP-OCRv5"]:
         opt.update(paddle_options)
-        opt.update(
-            build_post_ocr_vl_options(
-                post_ocr_vl_enabled,
-                post_ocr_vl_backend,
-                post_ocr_vl_candidate_mode,
-                post_ocr_vl_max_words_enabled,
-                post_ocr_vl_max_words,
-                post_ocr_vl_padding_px,
-                post_ocr_vl_low_confidence_threshold,
-                post_ocr_vl_apply_corrections,
-                post_ocr_vl_save_tiles,
-                post_ocr_vl_group_lines,
-                post_ocr_vl_paddlevl_url,
-                post_ocr_vl_olmocr_url,
-                post_ocr_vl_olmocr_model,
+        if method == "PP-OCRv5":
+            opt.update(
+                build_post_ocr_vl_options(
+                    post_ocr_vl_enabled,
+                    post_ocr_vl_backend,
+                    post_ocr_vl_candidate_mode,
+                    post_ocr_vl_max_words_enabled,
+                    post_ocr_vl_max_words,
+                    post_ocr_vl_padding_px,
+                    post_ocr_vl_low_confidence_threshold,
+                    post_ocr_vl_apply_corrections,
+                    post_ocr_vl_save_tiles,
+                    post_ocr_vl_group_lines,
+                    post_ocr_vl_paddlevl_url,
+                    post_ocr_vl_ollama_openai_url,
+                    post_ocr_vl_ollama_openai_model,
+                )
             )
-        )
+        else:
+            opt["post_ocr_vl_enabled"] = False
       
         for message in run_ocr_job(input_path, output_root, opt):
             yield message
@@ -713,7 +722,7 @@ with gr.Blocks(css=APP_CSS) as demo:
 
         post_ocr_vl_backend = gr.Dropdown(
             choices=[
-                ("olmOCR", "olmocr"),
+                ("Ollama OpenAI", "olmocr"),
                 ("PaddleVL", "paddlevl"),
                 ("Both", "both"),
             ],
@@ -770,7 +779,7 @@ with gr.Blocks(css=APP_CSS) as demo:
 
         post_ocr_vl_group_lines = gr.Checkbox(
             value=DEFAULT_POST_OCR_VL_GROUP_LINES,
-            label="Group same-line suspicious words for olmOCR.",
+            label="Group same-line suspicious words for Ollama OpenAI.",
         )
 
         post_ocr_vl_paddlevl_url = gr.Textbox(
@@ -779,16 +788,22 @@ with gr.Blocks(css=APP_CSS) as demo:
             info="Used when backend is PaddleVL.",
         )
 
-        post_ocr_vl_olmocr_url = gr.Textbox(
-            label="olmOCR OpenAI-Compatible API URL",
-            value=DEFAULT_OLMOCR_API_URL,
-            info="Used when backend is olmOCR; requests go to /chat/completions.",
+        post_ocr_vl_ollama_openai_url = gr.Textbox(
+            label="Ollama OpenAI API URL",
+            value=DEFAULT_OLLAMA_OPENAI_API_URL,
+            info="Used when backend is Ollama OpenAI; requests go to /chat/completions.",
         )
 
-        post_ocr_vl_olmocr_model = gr.Textbox(
-            label="olmOCR Model",
-            value=DEFAULT_OLMOCR_MODEL,
-            info="Model name served by the OpenAI-compatible endpoint.",
+        post_ocr_vl_ollama_openai_model = gr.Dropdown(
+            label="Ollama OpenAI Model",
+            choices=[
+                ("Chandra OCR 2", "fredrezones55/chandra-ocr-2"),
+                ("olmOCR 2", "richardyoung/olmocr2"),
+                ("DeepSeek OCR 3B", "deepseek-ocr:3b"),
+            ],
+            value=DEFAULT_OLLAMA_OPENAI_MODEL,
+            allow_custom_value=True,
+            info="Any model name served by the OpenAI-compatible endpoint, for example fredrezones55/chandra-ocr-2, richardyoung/olmocr2, or deepseek-ocr:3b.",
         )
 
     # PaddleVL-specific OCR options.
@@ -979,8 +994,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_save_tiles,
         post_ocr_vl_group_lines,
         post_ocr_vl_paddlevl_url,
-        post_ocr_vl_olmocr_url,
-        post_ocr_vl_olmocr_model,
+        post_ocr_vl_ollama_openai_url,
+        post_ocr_vl_ollama_openai_model,
         pero_source_path,
         pero_config_path,
         pero_device,
@@ -1126,8 +1141,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_save_tiles,
         post_ocr_vl_group_lines,
         post_ocr_vl_paddlevl_url,
-        post_ocr_vl_olmocr_url,
-        post_ocr_vl_olmocr_model,
+        post_ocr_vl_ollama_openai_url,
+        post_ocr_vl_ollama_openai_model,
         pero_source_path,
         pero_config_path,
         pero_device,

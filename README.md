@@ -332,7 +332,7 @@ normal PDF and ALTO outputs from the normalized JSON.
 
 This optional PP-OCRv5 post-processing step uses PP-OCR word boxes
 (`text_word` / `text_word_boxes`) to crop small word tiles from the source page.
-Each tile can be sent to either PaddleOCR-VL or an OpenAI-compatible olmOCR
+Each tile can be sent to either PaddleOCR-VL or an OpenAI-compatible Ollama
 server. The checker records all backend responses in the JSON under
 `post_ocr_vl_check`, saves the word crops under `_post_ocr_vl_tiles`, and can
 rewrite accepted one-word corrections into `text_word` and `rec_texts` before
@@ -341,8 +341,9 @@ TXT, PDF, and ALTO are generated.
 **Post-OCR VL Backend**
 
 Choose `PaddleVL` to reuse the existing local `/layout-parsing` service, or
-`olmOCR` to call an OpenAI-compatible `/chat/completions` server running an
-olmOCR model.
+`Ollama OpenAI` to call an OpenAI-compatible `/chat/completions` server running
+models such as `fredrezones55/chandra-ocr-2`, `richardyoung/olmocr2`, or
+`deepseek-ocr:3b`.
 
 **Words to Check**
 
@@ -539,8 +540,9 @@ python smoke_test.py \
 - PERO-OCR is optional. Install `pero-ocr` and its runtime dependencies into
   the active environment or point the app at a local checkout with
   `PERO_OCR_SOURCE_PATH` / the UI field, and provide a PERO engine `config.ini`.
-- Post-OCR olmOCR checks use `OLMOCR_API_URL`, `OLMOCR_MODEL`, and optional
-  `OLMOCR_API_KEY` when calling external providers.
+- Post-OCR Ollama OpenAI checks use `OLLAMA_OPENAI_API_URL`,
+  `OLLAMA_OPENAI_MODEL`, and optional `OLLAMA_OPENAI_API_KEY` when calling
+  external providers. The legacy `OLMOCR_*` env vars still work too.
   
 ## Project Structure
 
