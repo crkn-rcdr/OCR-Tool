@@ -1826,7 +1826,8 @@ def build_olmocr_line_prompt(
         "Target words to verify:\n"
         f"{targets}\n\n"
         "Return strict JSON only, with this schema:\n"
-        '{"corrections":[{"target":1,"word_index":0,"corrected_text":"word"}]}\n'
+        '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}'\n'
+        "Do not return the literal string 'word' or other placeholders as a correction. "
         "For each target, repeat the original text if it is already correct. "
         "Do not include non-target words or any explanation."
     )
@@ -2204,6 +2205,12 @@ def clean_vl_text(text: Any) -> str:
 
     value = value.strip().strip('"').strip("'").strip()
     value = re.sub(r"^(word|text|answer)\s*:\s*", "", value, flags=re.IGNORECASE)
+
+    # Reject common placeholder responses that are not real corrections
+    norm = value.strip().lower()
+    if norm in {"word", "text", "answer", "corrected_text", "selected_text"}:
+        return ""
+
     return value.strip()
 
 
