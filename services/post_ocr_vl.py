@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -31,6 +32,8 @@ from services.ocr_defaults import (
     DEFAULT_POST_OCR_VL_PADDING_PX,
     DEFAULT_POST_OCR_VL_SAVE_TILES,
 )
+
+logger = logging.getLogger(__name__)
 
 
 POST_OCR_VL_METHODS = {"PP-OCRv5"}
@@ -1678,6 +1681,33 @@ def request_paddlevl_word(tile: Image.Image, opt: dict) -> str:
     return clean_vl_text(extract_paddlevl_text(response.json()))
 
 
+def _build_word_correction_prompt(original_text: str, model_name: str = None) -> str:
+    """
+    Build a prompt for word correction that's optimized for the specific model.
+    
+    Args:
+        original_text: The OCR text that may need correction
+        model_name: Name of the VLM being used (optional, for model-specific prompting)
+    
+    Returns:
+        A prompt string optimized for the model
+    """
+    # For Chandra and other OCR-specialized models, use direct prompts
+    if model_name and _is_chandra_model(model_name):
+        return (
+            "What is the correct spelling of the target word in this newspaper image? "
+            "Return only the corrected word text, nothing else. "
+            f"Previous OCR reading: {original_text!r}"
+        )
+    
+    # Default prompt for general vision models
+    return (
+        "Read the single target word in this newspaper crop. "
+        "Return only the corrected word, with visible punctuation only if it "
+        f"is part of the word. The previous OCR guess was: {original_text!r}."
+    )
+
+
 def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str:
     server_url = str(
         opt.get("post_ocr_vl_olmocr_url") or DEFAULT_OLMOCR_API_URL
@@ -1688,11 +1718,7 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         else f"{server_url}/chat/completions"
     )
     model = str(opt.get("post_ocr_vl_olmocr_model") or DEFAULT_OLMOCR_MODEL)
-    prompt = (
-        "Read the single target word in this newspaper crop. "
-        "Return only the corrected word, with visible punctuation only if it "
-        f"is part of the word. The previous OCR guess was: {original_text!r}."
-    )
+    prompt = _build_word_correction_prompt(original_text, model_name=model)
     payload = {
         "model": model,
         "messages": [
@@ -1732,7 +1758,7 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         .get("message", {})
         .get("content", "")
     )
-    return clean_vl_text(content)
+    return clean_vl_text(content, model_name=model)
 
 
 def request_olmocr_line(
@@ -1751,7 +1777,7 @@ def request_olmocr_line(
     )
     model = str(opt.get("post_ocr_vl_olmocr_model") or DEFAULT_OLMOCR_MODEL)
     line_index = candidates[0].line_index
-    prompt = build_olmocr_line_prompt(ocr_payload, line_index, candidates)
+    prompt = build_olmocr_line_prompt(ocr_payload, line_index, candidates, model_name=model)
     payload = {
         "model": model,
         "messages": [
@@ -1792,13 +1818,14 @@ def request_olmocr_line(
         .get("content", "")
     )
     text = str(content or "").strip()
-    return text, parse_olmocr_line_corrections(text, candidates)
+    return text, parse_olmocr_line_corrections(text, candidates, model_name=model)
 
 
 def build_olmocr_line_prompt(
     ocr_payload: dict[str, Any],
     line_index: int,
     candidates: list[WordCandidate],
+    model_name: str = None,
 ) -> str:
     use_line_text_tokens = any(candidate.source == "line_text" for candidate in candidates)
     line_words = line_words_for_prompt(
@@ -1818,6 +1845,26 @@ def build_olmocr_line_prompt(
         f"original_text={candidate.text!r}"
         for target_index, candidate in enumerate(candidates, start=1)
     )
+    
+    # For Chandra and other OCR-specialized models, use simpler prompt
+    if model_name and _is_chandra_model(model_name):
+        return (
+            "You are an OCR correction specialist. Read the newspaper line in the image.\n\n"
+            "Word positions (OCR text):\n"
+            f"{indexed_line}\n\n"
+            "Target words to correct:\n"
+            f"{targets}\n\n"
+            "Return ONLY valid JSON with this exact format (no other text):\n"
+            '{"corrections":[{"target":1,"word_index":0,"corrected_text":"word"}]}\n'
+            "Rules:\n"
+            "- Use 'target' to reference the target number (1-indexed)\n"
+            "- Include all target words, even if unchanged\n"
+            "- Repeat original text if correct\n"
+            "- Never use placeholder strings like 'word' or 'text'\n"
+            "- If you cannot read a word, repeat the original"
+        )
+    
+    # Default prompt for general vision models
     return (
         "Read the newspaper line crop. Use the image as the source of truth; "
         "the OCR text below is only to identify word positions.\n\n"
@@ -1826,7 +1873,7 @@ def build_olmocr_line_prompt(
         "Target words to verify:\n"
         f"{targets}\n\n"
         "Return strict JSON only, with this schema:\n"
-        '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}'\n'
+        '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}\n'
         "Do not return the literal string 'word' or other placeholders as a correction. "
         "For each target, repeat the original text if it is already correct. "
         "Do not include non-target words or any explanation."
@@ -1855,6 +1902,7 @@ def line_words_for_prompt(
 def parse_olmocr_line_corrections(
     text: str,
     candidates: list[WordCandidate],
+    model_name: str = None,
 ) -> dict[tuple[int, int], str]:
     data = parse_json_response(text)
     if data is None:
@@ -1901,7 +1949,7 @@ def parse_olmocr_line_corrections(
         )
         if corrected is None:
             continue
-        corrections[candidate_key(candidate)] = clean_vl_text(corrected)
+        corrections[candidate_key(candidate)] = clean_vl_text(corrected, model_name=model_name)
 
     return corrections
 
@@ -2183,10 +2231,52 @@ def write_post_ocr_vl_progress(
         pass
 
 
-def clean_vl_text(text: Any) -> str:
+def _is_chandra_model(model_name: str) -> bool:
+    """Check if the model name indicates it's a Chandra model."""
+    if not model_name:
+        return False
+    model_lower = model_name.lower()
+    return "chandra" in model_lower or "chandra-ocr" in model_lower
+
+
+def _parse_chandra_response(text: str) -> str:
+    """
+    Parse Chandra OCR model responses, which may return JSON or formatted text.
+    
+    Chandra often returns responses in formats like:
+    - {"word": "corrected_text", "confidence": 0.95}
+    - {"corrected_text": "word"}
+    - Plain text with metadata
+    """
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    
+    # Try to parse as JSON first
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            # Try common field names
+            for key in ("word", "corrected_text", "correction", "text", "result"):
+                if key in data and isinstance(data[key], str):
+                    return str(data[key]).strip()
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # If not JSON or JSON parsing failed, return text as-is for clean_vl_text to handle
+    return text
+
+
+def clean_vl_text(text: Any, model_name: str = None) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
+
+    # Handle model-specific response formats
+    if model_name and _is_chandra_model(model_name):
+        value = _parse_chandra_response(value)
+        if not value:
+            return ""
 
     value = re.sub(r"```(?:text|markdown|yaml)?", "", value, flags=re.IGNORECASE)
     value = value.replace("```", "").strip()
