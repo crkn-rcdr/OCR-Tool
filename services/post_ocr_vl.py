@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import csv
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -541,6 +542,32 @@ def apply_post_ocr_vl_check(
         applied_count=applied_count,
         saved_tile_count=saved_tile_count,
     )
+    # Save a CSV summarizing original text, VL output and whether it was applied.
+    try:
+        csv_path = Path(out_dir) / f"{json_path.stem}.post_ocr_vl.csv"
+        with open(csv_path, "w", encoding="utf-8", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([
+                "line_index",
+                "word_index",
+                "original_text",
+                "vl_text",
+                "applied",
+                "reason",
+            ])
+            for rec in metadata.get("corrections", []):
+                writer.writerow([
+                    rec.get("line_index"),
+                    rec.get("word_index"),
+                    rec.get("original_text") or "",
+                    rec.get("selected_text") or "",
+                    bool(rec.get("applied")),
+                    rec.get("reason") or "",
+                ])
+        metadata["replacements_csv"] = str(csv_path)
+    except Exception:
+        # Don't let CSV errors break the main processing
+        pass
     payload["post_ocr_vl_check"] = metadata
     write_json(json_path, payload)
     return metadata
