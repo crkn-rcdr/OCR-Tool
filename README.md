@@ -1,494 +1,447 @@
 # OCR Pipeline
-This project is an OCR tool for internal CRKN staff. It provides PP-OCRv5,
-PP-StructureV3, PaddleOCR-VL, and an optional PERO-OCR backend as internal OCR
-solutions.
 
-## PaddleOCR Product Suite Installation
+This repository is an internal OCR application for CRKN staff. It combines:
 
-1. PP-OCRv5 was installed on the PaddleOCR server using pip. For installation details, please refer to:
-https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL-MetaX-GPU.html#12-method-2-manually-install-paddlepaddle-and-paddleocr
-  After installation, both PP-OCRv5 and PP-StructureV3 are available for use.
-  PaddleOCR-VL was deployed using the official Docker Compose setup. For deployment details, please refer to:
-  https://www.paddleocr.ai/latest/version3.x/pipeline_usage/PaddleOCR-VL.html#4
+- `PP-OCRv5` for the main local OCR workflow
+- `PP-StructureV3` for Paddle's structure-oriented OCR workflow
+- `PaddleVL` for the PaddleOCR-VL Docker service
+- `PERO-OCR` as an optional external OCR backend
+- optional post-OCR visual language checks for `PP-OCRv5`
 
-2. Dependency Installation
-  ```
-    pip install -r requirements.txt
+The app can run as:
 
-  ```
-  The repo is currently pinned to `paddleocr==3.5.0` and `paddlex==3.5.2`.
+- a Gradio desktop/web app from `app.py`
+- a simple launcher from `launcher.py`
+- a CLI smoke-test runner from `smoke_test.py`
 
-## Quick Start
-1. Create and activate a virtual environment.
-WSL:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+## What The App Does
+
+At a high level, the app:
+
+1. loads one image or a folder of images
+2. optionally preprocesses the page image
+3. runs OCR with one of the supported backends
+4. optionally runs a post-OCR word check on suspicious `PP-OCRv5` words
+5. writes normalized JSON output
+6. writes either:
+   - TXT files, or
+   - searchable PDF plus ALTO XML
+
+The app is designed for historical newspaper pages, large scans, black borders,
+uneven background, and visually noisy OCR cases.
+
+## Current Backend Behavior
+
+### `PP-OCRv5`
+
+This is the main local OCR path and the best default for most runs.
+
+Available with:
+
+- preprocessing
+- black-border cropping
+- fixed-grid tiling
+- PP-DocLayoutV3 tiling
+- post-OCR VL word checking
+- TXT output
+- searchable PDF
+- ALTO XML
+
+### `PP-StructureV3`
+
+This is available as a direct Paddle structure pipeline, but in the current app
+it is intentionally simpler than `PP-OCRv5`.
+
+Current behavior:
+
+- preprocessing is available
+- tiling is disabled
+- post-OCR VL is disabled
+- TXT output or PDF/ALTO output still works
+
+The UI now hides tiling and post-OCR VL controls for `PP-StructureV3`, and the
+submit path also forces those options off even if they were previously enabled.
+
+### `PaddleVL`
+
+This uses the PaddleOCR-VL service from Docker Compose.
+
+Use it when you want the service-based VLM OCR path rather than the local
+Paddle OCR pipelines.
+
+### `PERO-OCR`
+
+This is optional and requires a working `pero-ocr` install or local checkout
+plus a PERO `config.ini`.
+
+### `Auto Routing`
+
+This route analyzes image quality and chooses between:
+
+- `PP-StructureV3` for cleaner pages
+- `PaddleVL` for pages with skew, warping, or illumination problems
+
+Use it mainly for mixed folders. It is less useful for controlled benchmarking.
+
+Current limitation:
+
+- source-image tiling is not currently allowed at run time for `Auto Routing`
+
+## Supported Outputs
+
+For each processed image, the app can write:
+
+- normalized OCR JSON
+- TXT
+- searchable PDF
+- ALTO XML
+
+Depending on options, it may also write:
+
+- `_preprocessed/` images
+- `_post_ocr_vl_tiles/` cropped post-OCR audit tiles
+- post-OCR CSV summaries
+- progress JSON files
+- log files in `logs/`
+
+## Repository Layout
+
+```text
+app.py                     Gradio application
+launcher.py                Lightweight launcher for app.py
+smoke_test.py              CLI smoke test and scripted runs
+compose.yaml               PaddleOCR-VL Docker services
+setup_wsl.sh               WSL setup helper
+requirements.txt           Main Windows / full environment dependencies
+requirements-wsl.txt       WSL-friendly dependency set
+testdata/source/           Bundled smoke-test corpus
+engine/                    Paddle engine setup and compatibility code
+services/
+  auto_ocr.py              Auto Routing logic
+  ocr_pp.py                PP-OCRv5 and PP-StructureV3 execution
+  ocr_vl.py                PaddleVL execution
+  post_ocr_vl.py           Post-OCR VL checks for PP-OCRv5
+  pero_ocr.py              PERO integration
+  image_preprocessing.py   Preprocessing steps
+  tile_ocr.py              Tiling logic
+  pdf_generation.py        Searchable PDF generation
+  alto_generation.py       ALTO XML generation
+  txt_generation.py        TXT generation
+  ocr_defaults.py          Shared defaults
+  ocr_logger.py            Logging and run summaries
+  fonts/                   Fonts used for PDF generation
+utils/                     Shared utilities
+logs/                      Run logs
+output/                    Typical output folder
 ```
-Windows:
+
+## Requirements
+
+### Common Requirements
+
+- Python 3
+- a virtual environment
+- enough disk space for Paddle models and OCR output
+
+Optional components:
+
+- Docker Desktop or Docker Engine for `PaddleVL`
+- NVIDIA GPU support for the PaddleOCR-VL stack if you want GPU containers
+- Ollama or another OpenAI-compatible vision endpoint for post-OCR VL checks
+- PERO-OCR plus a PERO config if you want the PERO backend
+
+The repo is currently pinned around:
+
+- `paddleocr==3.5.0`
+- `paddlex[ocr]==3.5.2`
+- `PyMuPDF==1.27.2`
+
+## Windows Setup
+
+These steps are for running the app directly on Windows.
+
+### 1. Create a virtual environment
+
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
-2. Install dependencies.
-```bash
-pip install -r requirements.txt
+
+You can also use `venv` instead of `.venv` if that is already your local
+convention.
+
+### 2. Install Python dependencies
+
+```powershell
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
 ```
-WSL:
-Install PaddlePaddle first, then install the WSL-friendly app requirements.
-```bash
-bash setup_wsl.sh cpu
-# or
-bash setup_wsl.sh gpu
-```
-The WSL setup script intentionally uses a Python 3.10-friendly Gradio pin and replaces the GUI OpenCV wheel with the headless build.
-The repo now installs `paddlex[ocr]==3.5.2`, because the plain `paddlex` package is not enough for the OCR pipelines used by this app.
-3. Start the PaddleOCR-VL service for `PaddleVL` and `Auto Routing`.
-```bash
-# Optional: copy .env.example to .env if you want to override the defaults.
+
+Notes:
+
+- `requirements.txt` is the full Windows-oriented dependency list
+- it includes Paddle OCR dependencies, Gradio, PDF generation, and optional
+  libraries used by the app
+
+### 3. Optional: start PaddleVL
+
+If you want `PaddleVL` or `Auto Routing`, start the Docker services:
+
+```powershell
 docker compose up -d
 ```
-4. Start the Gradio app from the repo root.
-WSL:
+
+This uses [compose.yaml](compose.yaml).
+
+The default exposed service URL is:
+
+```text
+http://127.0.0.1:8080
+```
+
+### 4. Optional: install and run Ollama for post-OCR VL
+
+If you want `PP-OCRv5` post-OCR VL checks through Ollama:
+
+1. install Ollama for Windows
+2. start Ollama
+3. pull one or more supported models
+
+Examples:
+
+```powershell
+ollama pull fredrezones55/chandra-ocr-2
+ollama pull richardyoung/olmocr2:7b-q8
+ollama pull deepseek-ocr:3b
+```
+
+The current app defaults expect an OpenAI-compatible endpoint at:
+
+```text
+http://localhost:11434/v1
+```
+
+### 5. Run the app
+
+From the repo root:
+
+```powershell
+python app.py
+```
+
+Or:
+
+```powershell
+python launcher.py
+```
+
+The launcher tries these interpreters in order:
+
+- `venv\Scripts\python.exe`
+- `.venv\Scripts\python.exe`
+- the current interpreter
+- `py -3`
+- `python3` / `python`
+
+### 6. Open the UI
+
+Once Gradio starts, open:
+
+```text
+http://127.0.0.1:7860
+```
+
+### 7. Stop services
+
+- stop the Gradio app with `Ctrl+C`
+- stop PaddleVL with:
+
+```powershell
+docker compose down
+```
+
+## WSL Setup
+
+These steps are for running under WSL. This is often the cleaner path for
+headless or scripted OCR work.
+
+### 1. Create or use a WSL distro
+
+Ubuntu is the easiest target.
+
+Make sure basic Python tooling exists:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+```
+
+### 2. Run the WSL setup helper
+
+CPU:
+
+```bash
+bash setup_wsl.sh cpu
+```
+
+GPU:
+
+```bash
+bash setup_wsl.sh gpu
+```
+
+What [setup_wsl.sh](setup_wsl.sh) does:
+
+- creates `.venv` if missing
+- installs or upgrades `pip`, `setuptools`, and `wheel`
+- installs `paddlepaddle==3.2.1` for CPU, or `paddlepaddle-gpu==3.2.1` for GPU
+- installs `requirements-wsl.txt`
+- forces `opencv-contrib-python-headless` so WSL does not depend on GUI OpenCV
+- prints versions for `cv2`, `fitz`, `gradio`, and `paddleocr`
+
+### 3. Activate the environment
+
+```bash
+source .venv/bin/activate
+```
+
+### 4. Optional: start PaddleVL
+
+If Docker is available inside WSL:
+
+```bash
+docker compose up -d
+```
+
+This is usually easiest when Docker Desktop is installed on Windows with WSL
+integration enabled.
+
+### 5. Optional: connect to Ollama
+
+You can run Ollama either:
+
+- on Windows and call it from WSL using `http://localhost:11434/v1`, or
+- directly inside WSL if you prefer
+
+### 6. Run the app
+
 ```bash
 python3 app.py
 ```
-Windows:
-```powershell
-py app.py
+
+Or use the launcher:
+
+```bash
+python3 launcher.py
 ```
-You can also use `python launcher.py` or a PyInstaller build of `launcher.py` from the repo root.
-5. Stop the application with `Ctrl+C`. Stop the VL service with `docker compose down`.
 
-## Smoke Test
-The repo now includes the `source` corpus under `testdata/source`, so the smoke test works without any machine-specific path.
+### 7. WSL path notes
 
-To test the OCR pipeline in WSL without the Gradio UI, run:
+- if `tkinter` is unavailable in WSL, the browse buttons will not work
+- paste paths manually instead
+- Windows paths are typically:
+
+```text
+/mnt/c/CRKN Projects/paddle_pipeline/...
+```
+
+The app already handles this better than older versions, but manual path entry
+is still the safest WSL workflow.
+
+## Environment Variables
+
+The repo ships with [.env.example](.env.example):
+
+```text
+API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-offline
+VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-offline
+VLM_BACKEND=vllm
+```
+
+Useful runtime environment variables include:
+
+### PaddleVL
+
+- `PADDLE_VL_API_URL`
+  - default: `http://127.0.0.1:8080`
+
+### Ollama OpenAI / post-OCR VL
+
+- `OLLAMA_OPENAI_API_URL`
+  - default: `http://localhost:11434/v1`
+- `OLLAMA_OPENAI_MODEL`
+  - default: `richardyoung/olmocr2:7b-q8`
+- `OLLAMA_OPENAI_API_KEY`
+  - optional
+
+Legacy compatibility is still accepted:
+
+- `OLMOCR_API_URL`
+- `OLMOCR_MODEL`
+- `OLMOCR_API_KEY`
+
+### Post-OCR VL behavior
+
+- `POST_OCR_VL_BACKEND`
+  - default: `olmocr`
+
+### PERO
+
+- `PERO_OCR_SOURCE_PATH`
+- `PERO_OCR_CONFIG_PATH`
+- `PERO_OCR_DEVICE`
+- `PERO_OCR_GPU_ID`
+
+## Running The App
+
+### Gradio UI
+
+Start:
+
+```bash
+python app.py
+```
+
+or:
+
+```bash
+python launcher.py
+```
+
+The main method choices are:
+
+- `PP-OCRv5`
+- `PP-StructureV3`
+- `PERO-OCR`
+- `PaddleVL`
+- `Auto Routing`
+
+## Smoke Test CLI
+
+The repo includes a bundled test corpus under `testdata/source`.
+
+Default smoke test:
+
 ```bash
 python smoke_test.py
 ```
-That defaults to `testdata/source/small/image.jpg`.
 
-To target a different bundled folder or image, use a repo-relative path:
+Target a specific image:
+
 ```bash
 python smoke_test.py \
   --method PP-OCRv5 \
   --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
   --output output-smoke
 ```
-Use `PaddleVL` or `Auto Routing` only after `docker compose up -d` is healthy.
 
-## Plain-Language Option Guide
-
-This app has a lot of knobs because newspaper OCR is not one problem. A small,
-clean page needs different settings than a giant scan with black borders,
-faint text, many columns, and warped paper. Start simple, then add options only
-when the output tells you why they are needed.
-
-### Processing Method
-
-**PP-OCRv5**
-
-Use this for most OCR runs. It is the main text-recognition path and usually
-the best choice when you care about raw word count, TXT output, ALTO, and
-searchable PDF text.
-
-**PP-StructureV3**
-
-Use this when layout structure matters more than plain OCR text, or when you
-want to compare Paddle's structure pipeline against PP-OCRv5. It can work with
-fixed-grid tiling, but its own layout parser makes PP-DocLayout-inclusive
-tiling redundant. It is usually not the first choice for dense historical
-newspaper text.
-
-**PERO-OCR**
-
-Use this when you want to compare against PERO-OCR's historical-document OCR
-pipeline. PERO runs through its Python `PageParser` module using a PERO
-`config.ini`; the app then converts the result into the same JSON, TXT, PDF,
-and ALTO flow used by the Paddle backends. Preprocessing, black-border
-cropping, fixed-grid tiling, and PP-DocLayoutV3 tiling are still available
-before PERO receives each image or tile.
-
-**PaddleVL**
-
-Use this when you specifically want the PaddleOCR-VL service. It requires the
-Docker service to be running. It is slower and service-based, but can help with
-some layout-heavy or visually difficult documents.
-
-**Auto Routing**
-
-Use this only for mixed batches where you want the app to choose between local
-Paddle OCR and PaddleVL based on image quality checks. For controlled testing,
-pick the engine directly so results are easier to compare.
-
-### Input And Output
-
-**Image Input Folder**
-
-Choose either one image or a folder. Folder runs preserve the folder structure
-under the output directory.
-
-**Output Folder**
-
-Choose where JSON, TXT, PDF, ALTO, logs, and any preprocessed images should be
-written.
-
-### Common OCR Options
-
-**Generate a text file with OCR results for each image**
-
-Turn this on when you only want TXT output and want to skip searchable PDF and
-ALTO generation. Leave it off when you want PDF and ALTO.
-
-**Use document orientation classification**
-
-Use this if pages may be rotated 90, 180, or 270 degrees. Leave it off for
-known upright scans. It adds another model step.
-
-**Use document image unwarping**
-
-Use this for camera photos, book curvature, or visibly warped pages. Leave it
-off for flat newspaper scans unless you are testing it directly. It can change
-geometry and may not help clean scans.
-
-**Use textline orientation classification**
-
-Use this if individual text lines may be rotated or vertical. Leave it off for
-normal horizontal English newspaper pages.
-
-### Image Preprocessing
-
-Preprocessing runs before local OCR and before tiling. If any
-preprocessing step is selected, the app saves a PNG under `_preprocessed/` next
-to the OCR output so you can inspect what Paddle saw.
-
-**Crop black border before OCR**
-
-Use this for scans with a dark scanner bed or black frame around the page. The
-app crops to the detected page area for OCR, then offsets OCR boxes back into
-the original image coordinates for PDF and ALTO. This is safer than painting
-the border white because it keeps final coordinates aligned to the original
-image.
-
-**Light clean**
-
-Use this for mild speckle or scanner noise. It applies a conservative denoise.
-It is safe to combine with `Background flatten` and `Contrast / CLAHE`.
-
-**Background flatten**
-
-Use this for uneven page background, shadows, yellowing, or gray paper. This is
-often the best first preprocessing step for historical newspapers.
-
-**Contrast / CLAHE**
-
-Use this when text is faint or low contrast. It boosts local contrast. It is a
-good partner for `Background flatten`.
-
-**Deskew**
-
-Use this only when the page is visibly tilted. If the page is already straight,
-leave it off. The deskew step is conservative, but any rotation can still make
-box alignment more delicate.
-
-**Sauvola binary**
-
-Use this as an experiment when faint text is still missed after background
-flattening and contrast. It can improve separation between text and background,
-but it can also damage punctuation, thin letters, and textured newspaper
-print. Do not make this your first default for dense newspaper pages.
-
-Recommended preprocessing starting points:
-
-```text
-Clean scans:
-  No preprocessing
-
-Historical newspaper with black scanner border:
-  Crop black border before OCR
-
-Uneven newspaper background:
-  Crop black border before OCR
-  Light clean
-  Background flatten
-  Contrast / CLAHE
-
-Very faint text experiment:
-  Crop black border before OCR
-  Light clean
-  Background flatten
-  Sauvola binary
-```
-
-### Tiling Options
-
-Tiling splits a large page into smaller OCR jobs, then merges the results back
-into one page. Use tiling for large scans, dense newspapers, and any image
-where Paddle logs messages like:
-
-```text
-Resized image size (...) exceeds max_side_limit of 4000. Resizing to fit within limit.
-```
-
-**Tile source images before OCR**
-
-Turn this on for large newspaper scans. Leave it off for small images or quick
-sanity checks.
-
-**Tile Strategy**
-
-`Fixed 3x1 grid`
-
-Splits the page into three horizontal bands. Useful for tall pages, but it can
-still leave very wide tiles on large broadsheet scans.
-
-`Fixed 3x2 grid`
-
-Splits the page into three rows and two columns. This is a good default for
-large newspaper pages because it reduces both tile height and tile width.
-
-`PP-DocLayoutV3 Layout`
-
-Uses Paddle's layout detector to find layout regions and OCR those regions.
-This can improve layout targeting, but pure layout-only tiling may miss content
-if layout detection misses a region. This option is shown for PP-OCRv5 and
-PERO-OCR, not PP-StructureV3.
-
-`3x1 + PP-DocLayoutV3`
-
-First splits into three horizontal bands, then runs DocLayout inside each band.
-This was a strong earlier default for tall pages. This option is shown for
-PP-OCRv5 and PERO-OCR, not PP-StructureV3.
-
-`3x2 + PP-DocLayoutV3`
-
-First splits into a 3 by 2 grid, then runs DocLayout inside each tile. This is
-the best starting point for very large, dense newspaper scans because it keeps
-tiles smaller and still uses layout detection inside each tile. This option is
-shown for PP-OCRv5 and PERO-OCR, not PP-StructureV3.
-
-**Tile Overlap**
-
-Overlap gives OCR a little repeated context at tile boundaries. Use `96` px as
-a good default. If you see duplicated short fragments near tile edges, try
-lowering it. If you see missing words at tile boundaries, try raising it.
-
-**DocLayout Padding**
-
-Padding expands each detected layout region before OCR. Use `32` px as a good
-default. Raise it if text is clipped at region edges. Lower it if neighboring
-columns bleed into each other.
-
-**DocLayout Threshold**
-
-Lower values detect more layout regions. Use `0.20` as a recall-friendly
-default. Raise it if DocLayout produces too many noisy regions. Lower it if
-content is being missed.
-
-**Use DocLayout recovery tile**
-
-Leave this on for important OCR runs. It adds a fallback OCR pass to recover
-areas DocLayout may have missed.
-
-### PERO-OCR Options
-
-These controls map to PERO's Python/module and `parse_folder.py`/`PageParser`
-surface rather than invented OCR thresholds.
-
-**PERO Python Module Path**
-
-Path to a local `pero-ocr` checkout when `pero_ocr` is not installed into the
-active Python environment. Windows `C:\...` paths are accepted when running
-under WSL.
-
-**PERO config.ini Path**
-
-Required. This is the PERO engine configuration passed to
-`PageParser(config, config_path=...)`. Relative paths inside the config are
-resolved against the config file's folder.
-
-**PERO Device**
-
-Matches PERO's `parse_folder.py --device` choices: `gpu` or `cpu`.
-
-**PERO GPU ID**
-
-Optional. Matches PERO's `parse_folder.py --gpu-id`; leave blank to use
-PERO/PyTorch's default CUDA device.
-
-**PERO Min Line Confidence**
-
-Overrides PERO `PAGE_PARSER` option
-`FILTER_CONFIDENT_LINES_THRESHOLD`. Use `-1` to leave PERO confidence filtering
-disabled.
-
-**Save native PERO PAGE XML**
-
-Writes PERO's own PAGE XML beside the app JSON. The app still generates its
-normal PDF and ALTO outputs from the normalized JSON.
-
-### Post-OCR VL Word Check
-
-This optional PP-OCRv5 post-processing step uses PP-OCR word boxes
-(`text_word` / `text_word_boxes`) to crop small word tiles from the source page.
-Each tile can be sent to either PaddleOCR-VL or an OpenAI-compatible Ollama
-server. The checker records all backend responses in the JSON under
-`post_ocr_vl_check`, saves the word crops under `_post_ocr_vl_tiles`, and can
-rewrite accepted one-word corrections into `text_word` and `rec_texts` before
-TXT, PDF, and ALTO are generated.
-
-**Post-OCR VL Backend**
-
-Choose `PaddleVL` to reuse the existing local `/layout-parsing` service, or
-`Ollama OpenAI` to call an OpenAI-compatible `/chat/completions` server running
-models such as `fredrezones55/chandra-ocr-2`, `richardyoung/olmocr2`, or
-`deepseek-ocr:3b`.
-
-**Words to Check**
-
-`Suspicious words` ranks odd-looking or low-confidence word boxes first.
-`Low-confidence lines` checks words whose PP-OCR line score is below the
-threshold. `All words in reading order` is exhaustive and can be slow.
-
-**Apply accepted VL corrections**
-
-Leave this on to update the normalized OCR JSON when the VL response is a clean
-single-word correction. Turn it off to save audit metadata and tiles only.
-
-### Paddle OCR Detection Options
-
-These options affect Paddle's text detector and recognizer. For most newspaper
-testing, start with the current defaults and change one thing at a time.
-
-**Language**
-
-Choose the expected OCR language. Use English for English newspaper pages. If
-left blank, Paddle's default behavior is used.
-
-**Text Detection Threshold**
-
-Lower means more text candidates are kept. Higher means fewer, cleaner
-candidates. Use `0.20` for difficult newspaper scans where recall matters.
-
-**Text Detection Limit Type**
-
-Use `max` for large scans. It limits based on the long side of the image or
-tile.
-
-**Text Detection Limit Side Length**
-
-This is Paddle's target side length before detection. Use `9984` when tiling is
-on and you want to preserve detail.
-
-**Text Detection Max Side Limit**
-
-This is the hard maximum side limit used to avoid PaddleX resizing warnings and
-memory blowups. Use `4000` as the safe default. If you see max-side warnings,
-prefer smaller tiles rather than raising this first. This control is shown for
-PP-OCRv5 only.
-
-**Text Detection Box Threshold**
-
-Controls which detected text boxes survive post-processing. Use `0.30` as a
-stable default. Lower it only if faint words are being missed and noise is
-acceptable.
-
-**Text Detection Unclip Ratio**
-
-Expands detected text boxes. Use `2.0` as a default. Raise it if boxes are too
-tight and characters are clipped. Lower it if adjacent lines or columns merge.
-
-**Text Recognition Score Threshold**
-
-Controls filtering by recognition confidence. Use `0.0` when word count and
-recall are the priority. Raise it only when you want to suppress low-confidence
-text and are willing to lose words.
-
-**Text Recognition Batch Size**
-
-Use `32` on CPU or memory-limited machines. On a GPU workstation, try `64` if
-memory is comfortable. Batch size mostly affects speed, not OCR quality.
-
-### Recommended Recipes
-
-For `testdata/source/large/oocihm.N_00155_18750610.4.jpg`, start here:
-
-```text
-Method: PP-OCRv5
-Language: English
-Crop black border before OCR: on
-Image preprocessing steps: Light clean, Background flatten, Contrast / CLAHE
-Tile source images: on
-Tile strategy: 3x2 + PP-DocLayoutV3
-Tile overlap: 96
-DocLayout padding: 32
-DocLayout threshold: 0.20
-DocLayout recovery tile: on
-Text detection threshold: 0.20
-Text detection limit type: max
-Text detection limit side length: 9984
-Text detection max side limit: 4000
-Text detection box threshold: 0.30
-Text detection unclip ratio: 2.0
-Text recognition score threshold: 0.0
-Text recognition batch size: 32 on CPU, 64 on GPU
-```
-
-For fast debugging:
-
-```text
-Method: PP-OCRv5
-Generate TXT: on
-Tile source images: on
-Tile strategy: Fixed 3x2 grid
-Image preprocessing: off
-```
-
-For comparing against ABBYY:
-
-```text
-Generate PDF/ALTO: on
-Generate TXT: off
-Keep Text recognition score threshold at 0.0
-Compare word count first, then reading order and box placement
-Change only one option between runs
-```
-
-### CLI Examples
-
-Run the large newspaper page with the recommended local OCR settings:
-
-```bash
-python smoke_test.py \
-  --method PP-OCRv5 \
-  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke-large \
-  --language en \
-  --crop-black-border \
-  --preprocessing-step light_clean \
-  --preprocessing-step background_flatten \
-  --preprocessing-step contrast \
-  --tile-source-images \
-  --tile-strategy grid_3x2_doclayout_v3 \
-  --tile-overlap-px 96 \
-  --tile-doclayout-padding-px 32 \
-  --tile-doclayout-threshold 0.20 \
-  --text-det-thresh 0.20 \
-  --text-det-limit-type max \
-  --text-det-limit-side-len 9984 \
-  --text-det-max-side-limit 4000
-```
-
-Run PP-OCRv5 with the post-OCR VL word checker in audit mode:
+Run PP-OCRv5 with PaddleVL post-OCR auditing:
 
 ```bash
 python smoke_test.py \
   --method PP-OCRv5 \
   --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
   --output output-smoke-post-vl \
-  --tile-source-images \
-  --tile-strategy grid_3x2_doclayout_v3 \
   --post-ocr-vl-check \
   --post-ocr-vl-backend paddlevl \
   --post-ocr-vl-candidate-mode suspicious \
@@ -496,91 +449,198 @@ python smoke_test.py \
   --post-ocr-vl-no-apply
 ```
 
-Run the same page through PERO-OCR with the shared preprocessing/tiling layer:
+Run PP-OCRv5 with the Ollama/OpenAI-compatible post-OCR backend:
 
 ```bash
 python smoke_test.py \
-  --method PERO-OCR \
+  --method PP-OCRv5 \
   --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke-pero \
-  --pero-source-path /mnt/c/Users/BrittnyLapierre/Documents/pero-ocr \
-  --pero-config-path /path/to/pero-engine/config.ini \
-  --pero-device gpu \
-  --tile-source-images \
-  --tile-strategy grid_3x2_doclayout_v3 \
-  --tile-overlap-px 96 \
-  --tile-doclayout-padding-px 32 \
-  --tile-doclayout-threshold 0.20
+  --output output-smoke-ollama \
+  --post-ocr-vl-check \
+  --post-ocr-vl-backend olmocr \
+  --post-ocr-vl-ollama-openai-url http://localhost:11434/v1 \
+  --post-ocr-vl-ollama-openai-model fredrezones55/chandra-ocr-2
 ```
 
-## Client Usage
-1. Click the Windows Start icon.
-2. In the pop-up window, select Launcher.
-3. In the launched window, if you see the following message:
-```
-  Running on local URL:  http://0.0.0.0:7860
-  * To create a public link, set `share=True` in `launch()`.
-```
-4. Open any web browser and enter:
-```
-  http://127.0.0.1:7860
+The CLI still accepts the older aliases:
 
-```
-5. Stop the Application
- Close the launcher window opened in Step 3.
+- `--post-ocr-vl-olmocr-url`
+- `--post-ocr-vl-olmocr-model`
 
-## Environment Notes
-- The launcher now resolves the repo directory dynamically, so it no longer depends on `C:\CRKN Projects\paddle_pipeline`.
-- `compose.yaml` now has default image tags and mounts the repo-local `pipeline_config_vllm.yaml` and `pipeline_config_fastdeploy.yaml`.
-- If the VL API is not local, set `PADDLE_VL_API_URL`, for example `http://127.0.0.1:8080`.
-- `requirements-wsl.txt` avoids the Windows-only `safetensors` wheel and uses a headless OpenCV build that is friendlier in WSL.
-- The engine includes a small PaddleX compatibility patch so `opencv-contrib-python-headless` is accepted in WSL.
-- The Gradio app now starts even if `tkinter` is unavailable; in that case, paste `/mnt/c/...` paths manually instead of using the browse buttons.
-- The bundled test corpus lives under `testdata/source`, so smoke tests are portable across machines.
-- PERO-OCR is optional. Install `pero-ocr` and its runtime dependencies into
-  the active environment or point the app at a local checkout with
-  `PERO_OCR_SOURCE_PATH` / the UI field, and provide a PERO engine `config.ini`.
-- Post-OCR Ollama OpenAI checks use `OLLAMA_OPENAI_API_URL`,
-  `OLLAMA_OPENAI_MODEL`, and optional `OLLAMA_OPENAI_API_KEY` when calling
-  external providers. The legacy `OLMOCR_*` env vars still work too.
-  
-## Project Structure
+## How The Main Options Work
+
+### Generate TXT
+
+`Generate a text file with OCR results for each image` means:
+
+- generate TXT
+- skip searchable PDF and ALTO generation
+
+If this is off, the app generates searchable PDF and ALTO instead.
+
+### Preprocessing
+
+Available preprocessing steps:
+
+- `light_clean`
+- `background_flatten`
+- `contrast`
+- `deskew`
+- `sauvola_binary`
+
+Useful starting presets:
+
+- clean scans: no preprocessing
+- newspaper with dark scanner border:
+  - black-border cropping
+- uneven background:
+  - light clean
+  - background flatten
+  - contrast
+
+If preprocessing is enabled, the OCR-facing image is written under
+`_preprocessed/`.
+
+### Tiling
+
+Tiling is for large pages and dense historical newspapers.
+
+Available strategies in the codebase:
+
+- `grid`
+- `grid_3x2`
+- `doclayout_v3`
+- `grid_doclayout_v3`
+- `grid_3x2_doclayout_v3`
+
+Current app behavior:
+
+- `PP-OCRv5`: tiling available
+- `PERO-OCR`: tiling available
+- `PP-StructureV3`: tiling disabled
+- `Auto Routing`: source-image tiling currently not allowed at run time
+
+### Post-OCR VL Word Check
+
+This feature is currently only active for `PP-OCRv5`.
+
+It uses `text_word` and `text_word_boxes` from the PP-OCR result to crop
+suspicious words and send them to either:
+
+- `PaddleVL`
+- an OpenAI-compatible vision endpoint, labeled in the UI as `Ollama OpenAI`
+
+The post-OCR step records metadata under `post_ocr_vl_check` in the JSON and
+can optionally:
+
+- save the cropped tiles
+- write a `.post_ocr_vl.csv` audit file
+- apply accepted corrections back into `text_word` and `rec_texts`
+
+Current model notes:
+
+- `richardyoung/olmocr2:7b-q8` is the strongest current Ollama option in this app
+- `fredrezones55/chandra-ocr-2` now uses a Chandra-specific Ollama fallback path
+- `deepseek-ocr:3b` has a model-aware cleanup path, but is still weaker for
+  this word-correction use case
+
+### PDF Generation
+
+Searchable PDFs are created with PyMuPDF.
+
+Current behavior:
+
+- the source page image is inserted as the visible page
+- invisible OCR text is written on top as the searchable layer
+- Latin OCR text now uses built-in `Helvetica`
+- CJK text still uses the embedded Noto CJK font
+
+This change was made to improve copy/select behavior in PDF viewers.
+
+## Output Files
+
+For a typical image run, expect files like:
 
 ```text
-OCR-Tool/
-├── app.py                               # Main application entry point
-├── testdata/
-│   └── source/                          # Bundled OCR smoke-test corpus
-├── .env                                 # Environment variables
-├── .gitignore                           # Git ignore configuration
-│
-├── engine/
-│   ├── __init__.py
-│   └── paddle_engine.py                 # PaddleOCR engine initialization and wrapper
-│
-├── services/
-│   ├── __init__.py
-│   ├── auto_ocr.py                      # Automatically routes images to PP-StructureV3 or PaddleOCR-VL based on image quality
-│   ├── ocr_pp.py                        # PP-OCRv5 and PP-StructureV3 OCR processing
-│   ├── pero_ocr.py                      # Optional PERO-OCR PageParser integration
-│   ├── ocr_vl.py                        # PaddleOCR-VL OCR processing
-│   ├── post_ocr_vl.py                   # Optional PP-OCR word-crop VL correction
-│   ├── image_preprocessing.py           # Optional crop, cleanup, contrast, binarization, and deskew steps before OCR
-│   ├── tile_ocr.py                      # Fixed-grid and PP-DocLayoutV3 tiled OCR logic
-│   ├── alto_generation.py               # Generates ALTO XML files from OCR results
-│   ├── pdf_generation.py                # Generates searchable PDF files from OCR results
-│   ├── txt_generation.py                # Generates TXT output files from OCR results
-│   ├── email_notify.py                  # Sends summary and error notification emails
-│   ├── ocr_logger.py                    # Logging configuration and OCR log management
-│   ├── ocr_defaults.py                  # Shared default values for UI, CLI, logs, and Paddle setup
-│   ├── constants.py                     # Shared constants and configuration values
-│   │
-│   └── fonts/                           # Font files used for PDF generation
-│
-├── utils/                               # Shared utility functions
-│
-└── venv/                                # Python virtual environment
+output/
+  large/
+    oocihm.N_00155_18750610.4.json
+    oocihm.N_00155_18750610.4.txt
+    oocihm.N_00155_18750610.4.pdf
+    oocihm.N_00155_18750610.4.xml
+    oocihm.N_00155_18750610.4.post_ocr_vl.csv
+    oocihm.N_00155_18750610.4.post_ocr_vl_progress.json
+    _preprocessed/
+    _post_ocr_vl_tiles/
 ```
 
-# Troubleshooting
-- When switching between PP-OCRv5 and PP-StructureV3, parameter loading errors may occasionally occur. Restarting the application will usually resolve the issue.
+Meaning:
+
+- `.json`: normalized OCR payload
+- `.txt`: plain text, if TXT generation was selected
+- `.pdf`: searchable PDF, if TXT mode was not selected
+- `.xml`: ALTO XML, if TXT mode was not selected
+- `.post_ocr_vl.csv`: applied and rejected post-OCR VL records
+- `.post_ocr_vl_progress.json`: summary/progress metadata for the post-OCR run
+
+## Troubleshooting
+
+### The app starts but folder browse does not work
+
+In WSL or headless environments, `tkinter` may be unavailable. Paste the input
+and output paths manually.
+
+### `PP-StructureV3` shows fewer advanced options
+
+This is expected. The current app intentionally disables source-image tiling and
+post-OCR VL for `PP-StructureV3`.
+
+### PaddleVL methods fail immediately
+
+Make sure:
+
+- Docker is running
+- `docker compose up -d` is healthy
+- `http://127.0.0.1:8080/health` responds
+
+### Ollama post-OCR checks return empty or weak results
+
+Check:
+
+- the Ollama server is running
+- the model name exists exactly as installed
+- the endpoint is `http://localhost:11434/v1`
+
+Useful test:
+
+```powershell
+ollama list
+```
+
+### A PDF opens in VS Code with a binary / encoding warning
+
+That is normal. A PDF is a binary file. Open it in a PDF viewer rather than the
+text editor.
+
+### The selected PDF text shows replacement characters
+
+Recent versions of this repo changed the Latin OCR text layer to use built-in
+`Helvetica` instead of an embedded custom Latin font. Regenerate the PDF if you
+created it before that change.
+
+## Logs
+
+Run logs are written under `logs/`.
+
+You will typically see:
+
+- summary logs
+- error logs
+- per-run PDF or OCR errors
+
+If something behaves differently than the README says, prefer the code path in:
+
+- [app.py](app.py)
+- [services/ocr_pp.py](services/ocr_pp.py)
+- [services/post_ocr_vl.py](services/post_ocr_vl.py)
+- [services/pdf_generation.py](services/pdf_generation.py)
