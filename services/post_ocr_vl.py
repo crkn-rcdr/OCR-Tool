@@ -341,6 +341,10 @@ def apply_post_ocr_vl_check(
     metadata["word_profile_training_tokens"] = word_profile.training_token_count
     backend_order = backends_for_request(metadata["backend"])
 
+    include_line_text_fallback = any(
+        backend in {"olmocr", "paddlevl"} for backend in backend_order
+    )
+
     suspicious_word_count = len(
         collect_word_candidates(
             ocr_payload,
@@ -348,7 +352,7 @@ def apply_post_ocr_vl_check(
             max_words=0,
             low_confidence_threshold=metadata["low_confidence_threshold"],
             word_profile=word_profile,
-            include_line_text_fallback="olmocr" in backend_order,
+            include_line_text_fallback=include_line_text_fallback,
         )
     )
     candidates = collect_word_candidates(
@@ -357,7 +361,7 @@ def apply_post_ocr_vl_check(
         max_words=0,
         low_confidence_threshold=metadata["low_confidence_threshold"],
         word_profile=word_profile,
-        include_line_text_fallback="olmocr" in backend_order,
+        include_line_text_fallback=include_line_text_fallback,
     )
     metadata["qualified_count"] = len(candidates)
     if max_words > 0:
@@ -959,6 +963,25 @@ def process_line_batch(
         tile.save(tile_path)
         saved_tile_count += 1
 
+    if len(batch) == 1 and batch[0].source == "line_text":
+        return process_single_line_text_batch(
+            tile,
+            crop_box,
+            batch[0],
+            opt,
+            metadata,
+            progress_path,
+            source_json,
+            image_path,
+            tile_path,
+            suspicious_word_count,
+            request_index,
+            processed_count,
+            applied_count,
+            saved_tile_count,
+            ocr_payload,
+        )
+
     backend_result: dict[str, Any]
     line_corrections: dict[tuple[int, int], str] = {}
     try:
@@ -1036,6 +1059,97 @@ def process_line_batch(
             for record in records
             if record.get("reason")
         ],
+        last_completed_position=processed_count,
+        applied_count=applied_count,
+        saved_tile_count=saved_tile_count,
+    )
+    return processed_count, applied_count, saved_tile_count
+
+
+def process_single_line_text_batch(
+    tile: Image.Image,
+    crop_box: list[int],
+    candidate: WordCandidate,
+    opt: dict,
+    metadata: dict[str, Any],
+    progress_path: Path,
+    source_json: str,
+    image_path: str,
+    tile_path: Path | None,
+    suspicious_word_count: int,
+    request_index: int,
+    processed_count: int,
+    applied_count: int,
+    saved_tile_count: int,
+    ocr_payload: dict[str, Any],
+) -> tuple[int, int, int]:
+    record = candidate_record(candidate)
+    record["crop_type"] = "line"
+    record["line_group_size"] = 1
+    record["crop_box"] = crop_box
+    if tile_path is not None:
+        record["tile_path"] = str(tile_path)
+
+    results = []
+    for backend in backends_for_request(metadata["backend"]):
+        try:
+            raw_text = run_backend_check(
+                backend,
+                tile,
+                candidate.text,
+                opt,
+            )
+            selected_from_line = extract_line_fallback_candidate_text(
+                raw_text,
+                candidate.text,
+                backend,
+                opt,
+            )
+            results.append(
+                {
+                    "backend": backend,
+                    "text": selected_from_line or raw_text,
+                    "raw_text": raw_text,
+                    "extracted_from_line_text": bool(
+                        selected_from_line and selected_from_line != raw_text
+                    ),
+                }
+            )
+        except Exception as exc:
+            results.append({"backend": backend, "error": str(exc)})
+
+    record["backend_results"] = results
+    selected_text, reason = choose_correction(candidate.text, results)
+    record["selected_text"] = selected_text
+    record["reason"] = reason
+
+    if metadata["apply_corrections"] and selected_text and reason == "accepted":
+        apply_candidate_correction(ocr_payload, candidate, selected_text)
+        record["applied"] = True
+        applied_count += 1
+    else:
+        record["applied"] = False
+
+    metadata["corrections"].append(record)
+    processed_count += 1
+    write_post_ocr_vl_progress(
+        progress_path,
+        metadata,
+        status="running",
+        source_json=source_json,
+        image_path=image_path,
+        suspicious_word_count=suspicious_word_count,
+        qualified_word_count=metadata["qualified_count"],
+        total_words_to_check=metadata["candidate_count"],
+        current_position=processed_count,
+        current_word=candidate.text,
+        current_line_index=candidate.line_index,
+        current_word_index=[candidate.word_index],
+        current_vl_request=request_index,
+        total_vl_requests=metadata["vl_request_count"],
+        current_crop_type="line",
+        selected_text=record["selected_text"],
+        correction_reason=record["reason"],
         last_completed_position=processed_count,
         applied_count=applied_count,
         saved_tile_count=saved_tile_count,
@@ -2471,6 +2585,37 @@ def _extract_chandra_word_candidate(text: str, original_text: str) -> str:
     value = HTML_TAG_RE.sub(" ", value)
     value = re.sub(r"\s+", " ", value).strip()
     return _extract_best_word_candidate(value, original_text, minimum_score=0.5)
+
+
+def extract_line_fallback_candidate_text(
+    text: str,
+    original_text: str,
+    backend: str,
+    opt: dict[str, Any],
+) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+
+    if backend == "olmocr":
+        model = _get_openai_compat_model(opt)
+        if _is_chandra_model(model):
+            return clean_vl_text(
+                _extract_chandra_word_candidate(value, original_text),
+                model_name=model,
+            )
+        if _is_deepseek_ocr_model(model):
+            return clean_vl_text(
+                _extract_deepseek_word_candidate(value, original_text),
+                model_name=model,
+            )
+        return clean_vl_text(
+            _extract_best_word_candidate(value, original_text, minimum_score=0.45)
+        )
+
+    return clean_vl_text(
+        _extract_best_word_candidate(value, original_text, minimum_score=0.45)
+    )
 
 
 def clean_vl_text(text: Any, model_name: str = None) -> str:
