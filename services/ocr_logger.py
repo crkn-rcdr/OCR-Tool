@@ -7,6 +7,7 @@ from services.ocr_defaults import (
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_PREPROCESSING_PRESET,
     DEFAULT_PREPROCESSING_STEPS,
+    DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_THRESHOLD,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
@@ -29,6 +30,7 @@ OPTION_LABELS = {
     "use_textline_orientation": "Textline orientation",
     "use_layout_detection": "PaddleVL layout detection",
     "generate_text_file": "Generate TXT instead of PDF/ALTO",
+    "clean_punctuation_issues": "Clean punctuation artifacts in output text",
     "preprocessing_steps": "Image preprocessing steps",
     "preprocessing_preset": "Image preprocessing preset",
     "ignore_black_border": "Crop black border before OCR",
@@ -77,6 +79,7 @@ OPTION_ORDER = [
     "use_textline_orientation",
     "use_layout_detection",
     "generate_text_file",
+    "clean_punctuation_issues",
     "preprocessing_steps",
     "ignore_black_border",
     "tile_source_images",
@@ -171,6 +174,9 @@ PREPROCESSING_DEFAULT_OPTIONS = {
     "preprocessing_steps": "None (default)",
     "ignore_black_border": (
         "on (default)" if DEFAULT_IGNORE_BLACK_BORDER else "off (default)"
+    ),
+    "clean_punctuation_issues": (
+        "on (default)" if DEFAULT_CLEAN_PUNCTUATION_ISSUES else "off (default)"
     ),
 }
 

@@ -36,7 +36,8 @@ import unicodedata
 from collections import Counter, OrderedDict
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -573,34 +574,86 @@ def write_csv(
 
 
 def write_excel_workbook(
-    sheets: list[tuple[str, list[list[str]]]],
+    sheets: list[dict[str, object]],
     output_path: Path,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    template_map = load_excel_template(output_path)
     workbook = Workbook()
     default_sheet = workbook.active
     workbook.remove(default_sheet)
 
     used_names: set[str] = set()
-    for proposed_name, rows in sheets:
-        title = unique_sheet_name(proposed_name, used_names)
+    for sheet in sheets:
+        proposed_name = str(sheet["title"])
+        rows = list(sheet["rows"])
+        source_key = str(sheet["source_key"])
+        template = template_map.get(source_key)
+        title = unique_sheet_name(
+            str(template.get("title")) if template else proposed_name,
+            used_names,
+        )
         worksheet = workbook.create_sheet(title=title)
         for row in rows:
             worksheet.append(row)
 
-        worksheet.freeze_panes = "A2"
-        for column_cells in worksheet.columns:
-            values = [
-                len(str(cell.value or ""))
-                for cell in column_cells
-            ]
-            column_letter = column_cells[0].column_letter
-            worksheet.column_dimensions[column_letter].width = min(
-                max(values, default=0) + 2,
-                60,
-            )
+        apply_excel_formatting(worksheet, template=template)
 
     workbook.save(output_path)
+
+
+def apply_excel_formatting(
+    worksheet,
+    template: dict[str, object] | None = None,
+) -> None:
+    wrapped_top = Alignment(vertical="top", wrap_text=True)
+    for row in worksheet.iter_rows():
+        for cell in row:
+            cell.alignment = wrapped_top
+
+    if template:
+        worksheet.freeze_panes = template.get("freeze_panes") or "A2"
+        for column_letter, width in dict(template.get("column_widths") or {}).items():
+            worksheet.column_dimensions[str(column_letter)].width = float(width)
+        for row_index, height in dict(template.get("row_heights") or {}).items():
+            worksheet.row_dimensions[int(row_index)].height = float(height)
+        return
+
+    worksheet.freeze_panes = "A2"
+    for column_cells in worksheet.columns:
+        values = [len(str(cell.value or "")) for cell in column_cells]
+        column_letter = column_cells[0].column_letter
+        worksheet.column_dimensions[column_letter].width = min(
+            max(values, default=0) + 2,
+            60,
+        )
+
+
+def load_excel_template(output_path: Path) -> dict[str, dict[str, object]]:
+    if not output_path.exists():
+        return {}
+
+    workbook = load_workbook(output_path)
+    template_map: dict[str, dict[str, object]] = {}
+    for worksheet in workbook.worksheets:
+        source_key = normalize_source_key(worksheet["B2"].value)
+        if not source_key:
+            continue
+        template_map[source_key] = {
+            "title": worksheet.title,
+            "freeze_panes": worksheet.freeze_panes,
+            "column_widths": {
+                key: dimension.width
+                for key, dimension in worksheet.column_dimensions.items()
+                if dimension.width is not None
+            },
+            "row_heights": {
+                key: dimension.height
+                for key, dimension in worksheet.row_dimensions.items()
+                if dimension.height is not None
+            },
+        }
+    return template_map
 
 
 def unique_sheet_name(proposed_name: str, used_names: set[str]) -> str:
@@ -846,8 +899,37 @@ def primary_ocr_txt_files(base_dir: Path) -> list[Path]:
         name = path.name.lower()
         if name.endswith(".post_ocr_vl_progress.txt"):
             continue
+        if "b4-cleaned" in name:
+            continue
         files.append(path)
     return files
+
+
+def normalize_source_key(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.replace("/", "\\").casefold()
+
+
+def source_key_for_path(path: Path) -> str:
+    try:
+        value = str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        value = str(path)
+    return normalize_source_key(value)
+
+
+def default_sheet_title_for_path(paddle_path: Path) -> str:
+    folder = paddle_path.parent.name
+    alias_map = {
+        "large-ppocr-preproccess3x2-docparse-chandra": "Chandra",
+        "large-ppocr-preproccess3x2-docparse-deepseek": "Deepseek",
+        "large-ppocr-preproccess3x2-docparse-olmocr": "olmOCR",
+        "large-ppocr-preproccess3x2-docparse-paddlevl": "PaddleVL",
+        "large-ppocr-preprocess": "PaddleOCR only",
+    }
+    return alias_map.get(folder.casefold(), folder)
 
 
 def compare_directory_to_abbyy(
@@ -861,7 +943,7 @@ def compare_directory_to_abbyy(
     for path in primary_ocr_txt_files(abbyy_dir):
         abbyy_by_name.setdefault(path.name.lower(), []).append(path)
 
-    sheets: list[tuple[str, list[list[str]]]] = []
+    sheets: list[dict[str, object]] = []
     summaries: list[tuple[Path, Path, int, int]] = []
     for paddle_path in primary_ocr_txt_files(paddle_dir):
         matches = abbyy_by_name.get(paddle_path.name.lower(), [])
@@ -874,8 +956,13 @@ def compare_directory_to_abbyy(
             abbyy_path,
             known_notes=known_notes,
         )
-        sheet_name = paddle_path.parent.name or paddle_path.stem
-        sheets.append((sheet_name, rows))
+        sheets.append(
+            {
+                "title": default_sheet_title_for_path(paddle_path),
+                "rows": rows,
+                "source_key": source_key_for_path(paddle_path),
+            }
+        )
         summaries.append((paddle_path, abbyy_path, paddle_count, abbyy_count))
 
     if not sheets:

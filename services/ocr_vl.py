@@ -11,6 +11,7 @@ from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
+from services.punctuation_cleanup import clean_ocr_json_text_in_place
 
 import services.ocr_pp as ocr_pp
 
@@ -209,6 +210,8 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                     with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
 
+                    maybe_apply_output_text_cleanup(json_path, opt)
+
                     success_count += 1
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
                     yield "\n".join(messages)
@@ -268,6 +271,8 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         with open(json_path, "w", encoding="utf-8") as f:
                             json.dump(data, f, ensure_ascii=False, indent=2)
 
+                        maybe_apply_output_text_cleanup(json_path, opt)
+
                         success_count += 1
                         messages.append(f"{img.name} created and saved in {out_dir}")
                         yield "\n".join(messages)
@@ -325,3 +330,9 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
     finally:
         RUN_LOCK.release()
+
+
+def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    if not opt.get("clean_punctuation_issues", False):
+        return
+    clean_ocr_json_text_in_place(json_path)

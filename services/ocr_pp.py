@@ -22,6 +22,7 @@ from services.tile_ocr import (
 )
 from services.pero_ocr import PERO_METHOD, run_pero_ocr_for_image
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
+from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 
 # Thread synchronization lock used to ensure that
@@ -356,6 +357,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
             encoding="utf-8",
         )
         maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
+        maybe_apply_output_text_cleanup(final_json, opt)
         return final_json
 
     if opt.get("method") == PERO_METHOD or select == PERO_METHOD:
@@ -366,6 +368,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
         )
         normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
         maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
+        maybe_apply_output_text_cleanup(final_json, opt)
         return final_json
 
     output = engine.infer(str(ocr_image_path), opt)
@@ -385,6 +388,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
     json_file.rename(final_json)
     normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
     maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
+    maybe_apply_output_text_cleanup(final_json, opt)
 
     return final_json
 
@@ -400,6 +404,12 @@ def maybe_apply_post_ocr_vl_check(
     if not supports_post_ocr_vl(opt.get("method"), select):
         return
     apply_post_ocr_vl_check(json_path, out_dir, opt)
+
+
+def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    if not opt.get("clean_punctuation_issues", False):
+        return
+    clean_ocr_json_text_in_place(json_path)
 
 
 def normalize_saved_ocr_json(

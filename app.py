@@ -13,6 +13,7 @@ from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
 from services.ocr_defaults import (
+    DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OLLAMA_OPENAI_API_URL,
@@ -438,6 +439,7 @@ def submit_config(
     use_textline_orientation,
     use_layout_detection,
     generate_text_file,
+    clean_punctuation_issues,
     preprocessing_steps,
     ignore_black_border,
     tile_source_images,
@@ -496,6 +498,7 @@ def submit_config(
         "use_doc_orientation_classify": use_doc_orientation_classify,
         "use_doc_unwarping": use_doc_unwarping,
         "generate_text_file": generate_text_file,
+        "clean_punctuation_issues": bool(clean_punctuation_issues),
         "preprocessing_steps": list(preprocessing_steps or []),
         "ignore_black_border": bool(ignore_black_border),
         "tile_source_images": tile_source_images,
@@ -647,6 +650,15 @@ with gr.Blocks(css=APP_CSS) as demo:
         generate_text_file = gr.Checkbox(
             label='Generate a text file with OCR results for each image.',
             value=False
+        )
+
+        clean_punctuation_issues = gr.Checkbox(
+            label="Clean punctuation artifacts in TXT, PDF, and ALTO output.",
+            value=DEFAULT_CLEAN_PUNCTUATION_ISSUES,
+            info=(
+                "Applies a conservative punctuation cleanup based on the OCR "
+                "comparison script before output files are generated."
+            ),
         )
 
         preprocessing_steps = gr.CheckboxGroup(
@@ -967,6 +979,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_textline_orientation,
         use_layout_detection,
         generate_text_file,
+        clean_punctuation_issues,
         preprocessing_steps,
         ignore_black_border,
         tile_source_images,
@@ -1114,6 +1127,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         use_textline_orientation,
         use_layout_detection,
         generate_text_file,
+        clean_punctuation_issues,
         preprocessing_steps,
         ignore_black_border,
         tile_source_images,
