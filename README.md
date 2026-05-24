@@ -467,6 +467,37 @@ The CLI still accepts the older aliases:
 - `--post-ocr-vl-olmocr-url`
 - `--post-ocr-vl-olmocr-model`
 
+## Comparison Tool
+
+The repo includes [tools/compare_ocr_errors.py](tools/compare_ocr_errors.py) for
+Paddle-vs-ABBYY review.
+
+Single-file CSV mode:
+
+```bash
+python tools/compare_ocr_errors.py \
+  --paddle path/to/paddle.txt \
+  --abbyy path/to/abbyy.txt \
+  --output path/to/errors.csv
+```
+
+Folder-to-folder Excel mode:
+
+```bash
+python tools/compare_ocr_errors.py \
+  --paddle-dir test-results/paddlecomp \
+  --abbyy-dir "test-results/large - abby" \
+  --excel-output test-results/paddle_vs_abbyy_errors_artifacts.xlsx
+```
+
+Current Excel behavior:
+
+- one worksheet per matching Paddle TXT file
+- if the target workbook already exists, the script reuses the existing sheet
+  names, freeze panes, column widths, and row heights
+- backup TXT files that include `b4-cleaned` in the name are ignored during
+  directory comparisons
+
 ## How The Main Options Work
 
 ### Generate TXT
@@ -477,6 +508,33 @@ The CLI still accepts the older aliases:
 - skip searchable PDF and ALTO generation
 
 If this is off, the app generates searchable PDF and ALTO instead.
+
+### Clean Punctuation Artifacts
+
+This option is available in the UI as:
+
+- `Clean punctuation artifacts in TXT, PDF, and ALTO output`
+
+Current behavior:
+
+- it applies a conservative text cleanup based on the punctuation issue logic in
+  [tools/compare_ocr_errors.py](tools/compare_ocr_errors.py)
+- it runs on the saved OCR JSON before output files are generated
+- it therefore affects:
+  - TXT
+  - searchable PDF text layer
+  - ALTO XML text
+- it does not change source images
+
+The cleanup is intentionally narrow. It mainly targets:
+
+- repeated punctuation like `..`, `,,`, `;;`
+- line-start punctuation debris
+- quote/punctuation tangles such as `.).)`
+- obvious missing spaces after punctuation in OCR text
+
+It is meant to reduce OCR punctuation artifacts without aggressively rewriting
+word content.
 
 ### Preprocessing
 
@@ -552,6 +610,8 @@ Current behavior:
 
 - the source page image is inserted as the visible page
 - invisible OCR text is written on top as the searchable layer
+- if punctuation cleanup is enabled, the cleaned OCR text is what gets written
+  into the searchable layer
 - Latin OCR text now uses built-in `Helvetica`
 - CJK text still uses the embedded Noto CJK font
 
@@ -582,6 +642,9 @@ Meaning:
 - `.xml`: ALTO XML, if TXT mode was not selected
 - `.post_ocr_vl.csv`: applied and rejected post-OCR VL records
 - `.post_ocr_vl_progress.json`: summary/progress metadata for the post-OCR run
+
+If punctuation cleanup is enabled, the `.json` text fields are cleaned before
+TXT/PDF/ALTO generation so the output formats stay in sync.
 
 ## Troubleshooting
 
@@ -627,6 +690,13 @@ text editor.
 Recent versions of this repo changed the Latin OCR text layer to use built-in
 `Helvetica` instead of an embedded custom Latin font. Regenerate the PDF if you
 created it before that change.
+
+### My comparison workbook formatting keeps changing
+
+The comparison tool now preserves formatting from an existing workbook when you
+overwrite the same `.xlsx` file. If you want to keep your manual sheet names,
+freeze panes, widths, and row heights, rerun the tool against the same workbook
+path.
 
 ## Logs
 
