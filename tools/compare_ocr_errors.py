@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a side-by-side CSV of OCR errors and artifacts.
+"""Generate side-by-side OCR error reports as CSV or Excel.
 
 Default usage, using the current Paddle/ABBYY comparison files:
 
@@ -12,6 +12,13 @@ Custom usage:
     --abbyy path/to/abbyy.txt \
     --output path/to/errors.csv
 
+Directory-to-directory Excel usage:
+
+  python tools/compare_ocr_errors.py \
+    --paddle-dir test-results/paddlecomp \
+    --abbyy-dir "test-results/large - abby" \
+    --excel-output test-results/paddle_vs_abbyy_errors_artifacts.xlsx
+
 The output CSV is wide: summary columns are on the left, then each error type
 gets a Paddle column and an ABBYY column with line-numbered snippets listed
 downward.
@@ -22,13 +29,14 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
-import itertools
 import math
 import re
 import sys
 import unicodedata
 from collections import Counter, OrderedDict
 from pathlib import Path
+
+from openpyxl import Workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +48,9 @@ DEFAULT_PADDLE = (
 )
 DEFAULT_ABBYY = REPO_ROOT / "test-results/large - abby/oocihm.N_00155_18750610.4.txt"
 DEFAULT_OUTPUT = REPO_ROOT / "test-results/paddle_vs_abbyy_errors_artifacts.csv"
+DEFAULT_PADDLE_DIR = REPO_ROOT / "test-results/paddlecomp"
+DEFAULT_ABBYY_DIR = REPO_ROOT / "test-results/large - abby"
+DEFAULT_EXCEL_OUTPUT = REPO_ROOT / "test-results/paddle_vs_abbyy_errors_artifacts.xlsx"
 
 WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[’'][A-Za-z0-9]+)?")
 
@@ -561,6 +572,54 @@ def write_csv(
         )
 
 
+def write_excel_workbook(
+    sheets: list[tuple[str, list[list[str]]]],
+    output_path: Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    default_sheet = workbook.active
+    workbook.remove(default_sheet)
+
+    used_names: set[str] = set()
+    for proposed_name, rows in sheets:
+        title = unique_sheet_name(proposed_name, used_names)
+        worksheet = workbook.create_sheet(title=title)
+        for row in rows:
+            worksheet.append(row)
+
+        worksheet.freeze_panes = "A2"
+        for column_cells in worksheet.columns:
+            values = [
+                len(str(cell.value or ""))
+                for cell in column_cells
+            ]
+            column_letter = column_cells[0].column_letter
+            worksheet.column_dimensions[column_letter].width = min(
+                max(values, default=0) + 2,
+                60,
+            )
+
+    workbook.save(output_path)
+
+
+def unique_sheet_name(proposed_name: str, used_names: set[str]) -> str:
+    cleaned = re.sub(r"[:\\/?*\[\]]+", "_", proposed_name).strip() or "Sheet"
+    cleaned = cleaned[:31]
+    if cleaned not in used_names:
+        used_names.add(cleaned)
+        return cleaned
+
+    base = cleaned[:28].rstrip() or "Sheet"
+    counter = 2
+    while True:
+        candidate = f"{base}_{counter}"[:31]
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        counter += 1
+
+
 def build_issue_records(issue_map: OrderedDict[tuple[int, str], list[str]]) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for (line_no, snippet), reasons in issue_map.items():
@@ -746,11 +805,111 @@ def generate_report(
     return len(paddle_records), len(abbyy_records)
 
 
+def generate_report_rows(
+    paddle_path: Path,
+    abbyy_path: Path,
+    *,
+    known_notes: bool = True,
+) -> tuple[list[list[str]], int, int]:
+    paddle_text = paddle_path.read_text(errors="replace")
+    abbyy_text = abbyy_path.read_text(errors="replace")
+    paddle_lines = paddle_text.splitlines()
+    abbyy_lines = abbyy_text.splitlines()
+
+    paddle_issues = line_level_issues(paddle_lines, detect_overlap=True)
+    abbyy_issues = line_level_issues(abbyy_lines, detect_overlap=False)
+
+    if known_notes:
+        add_known_structural_notes(paddle_lines, abbyy_lines, paddle_issues, abbyy_issues)
+
+    add_token_comparison_issues(
+        token_stream(paddle_text),
+        token_stream(abbyy_text),
+        paddle_issues,
+        abbyy_issues,
+    )
+
+    paddle_records = build_issue_records(paddle_issues)
+    abbyy_records = build_issue_records(abbyy_issues)
+    rows = build_wide_rows(
+        paddle_records,
+        abbyy_records,
+        document_stats(paddle_path, paddle_text, paddle_lines),
+        document_stats(abbyy_path, abbyy_text, abbyy_lines),
+    )
+    return rows, len(paddle_records), len(abbyy_records)
+
+
+def primary_ocr_txt_files(base_dir: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in sorted(base_dir.rglob("*.txt")):
+        name = path.name.lower()
+        if name.endswith(".post_ocr_vl_progress.txt"):
+            continue
+        files.append(path)
+    return files
+
+
+def compare_directory_to_abbyy(
+    paddle_dir: Path,
+    abbyy_dir: Path,
+    output_path: Path,
+    *,
+    known_notes: bool = True,
+) -> list[tuple[Path, Path, int, int]]:
+    abbyy_by_name: dict[str, list[Path]] = {}
+    for path in primary_ocr_txt_files(abbyy_dir):
+        abbyy_by_name.setdefault(path.name.lower(), []).append(path)
+
+    sheets: list[tuple[str, list[list[str]]]] = []
+    summaries: list[tuple[Path, Path, int, int]] = []
+    for paddle_path in primary_ocr_txt_files(paddle_dir):
+        matches = abbyy_by_name.get(paddle_path.name.lower(), [])
+        if not matches:
+            continue
+
+        abbyy_path = matches[0]
+        rows, paddle_count, abbyy_count = generate_report_rows(
+            paddle_path,
+            abbyy_path,
+            known_notes=known_notes,
+        )
+        sheet_name = paddle_path.parent.name or paddle_path.stem
+        sheets.append((sheet_name, rows))
+        summaries.append((paddle_path, abbyy_path, paddle_count, abbyy_count))
+
+    if not sheets:
+        raise FileNotFoundError(
+            f"No matching OCR TXT files found between {paddle_dir} and {abbyy_dir}"
+        )
+
+    write_excel_workbook(sheets, output_path)
+    return summaries
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--paddle", type=Path, default=DEFAULT_PADDLE, help="Paddle TXT file")
     parser.add_argument("--abbyy", type=Path, default=DEFAULT_ABBYY, help="ABBYY TXT file")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output CSV file")
+    parser.add_argument(
+        "--paddle-dir",
+        type=Path,
+        default=None,
+        help="Folder of Paddle result subfolders to compare against ABBYY TXT files",
+    )
+    parser.add_argument(
+        "--abbyy-dir",
+        type=Path,
+        default=None,
+        help="Folder containing ABBYY TXT files for directory comparisons",
+    )
+    parser.add_argument(
+        "--excel-output",
+        type=Path,
+        default=DEFAULT_EXCEL_OUTPUT,
+        help="Output XLSX workbook for directory comparisons",
+    )
     parser.add_argument(
         "--no-known-notes",
         action="store_true",
@@ -761,6 +920,30 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if args.paddle_dir or args.abbyy_dir:
+        paddle_dir = args.paddle_dir or DEFAULT_PADDLE_DIR
+        abbyy_dir = args.abbyy_dir or DEFAULT_ABBYY_DIR
+        for label, path in (("Paddle directory", paddle_dir), ("ABBYY directory", abbyy_dir)):
+            if not path.exists():
+                print(f"{label} does not exist: {path}", file=sys.stderr)
+                return 2
+
+        summaries = compare_directory_to_abbyy(
+            paddle_dir,
+            abbyy_dir,
+            args.excel_output,
+            known_notes=not args.no_known_notes,
+        )
+        print(f"Excel workbook written to: {args.excel_output}")
+        print(f"Compared files: {len(summaries)}")
+        for paddle_path, abbyy_path, paddle_count, abbyy_count in summaries:
+            print(
+                f"- {paddle_path.parent.name}/{paddle_path.name} vs {abbyy_path.name}: "
+                f"Paddle entries={paddle_count}, ABBYY entries={abbyy_count}"
+            )
+        return 0
+
     for label, path in (("Paddle", args.paddle), ("ABBYY", args.abbyy)):
         if not path.exists():
             print(f"{label} file does not exist: {path}", file=sys.stderr)
