@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 
 from services.alto_generation import ordered_text_lines_from_data
+from services.punctuation_cleanup import clean_ocr_line_list
 
 
 def extract_fallback_texts(data):
@@ -46,6 +47,8 @@ def generate_txt_file(json_path:Path):
             texts = extract_fallback_texts(data)
     else:
         texts = extract_fallback_texts(data)
+
+    texts = clean_ocr_line_list(texts)
 
     txt_path = json_path.with_suffix(".txt")
 

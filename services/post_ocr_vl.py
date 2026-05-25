@@ -1811,13 +1811,13 @@ def run_backend_check(
     opt: dict,
 ) -> str:
     if backend == "paddlevl":
-        return request_paddlevl_word(tile, opt)
+        return request_paddlevl_word(tile, original_text, opt)
     if backend == "olmocr":
         return request_olmocr_word(tile, original_text, opt)
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
-def request_paddlevl_word(tile: Image.Image, opt: dict) -> str:
+def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> str:
     base_url = str(
         opt.get("post_ocr_vl_paddlevl_url") or DEFAULT_PADDLE_VL_API_URL
     ).rstrip("/")
@@ -1837,7 +1837,12 @@ def request_paddlevl_word(tile: Image.Image, opt: dict) -> str:
     if response.status_code != 200:
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
 
-    return clean_vl_text(extract_paddlevl_text(response.json()))
+    raw_text = extract_paddlevl_text(response.json())
+    # Match the OpenAI/Ollama replacement flow by extracting the best candidate
+    # for the original OCR token instead of accepting raw nearby context.
+    return clean_vl_text(
+        _extract_best_word_candidate(raw_text, original_text, minimum_score=0.45)
+    )
 
 
 def _build_word_correction_prompt(original_text: str, model_name: str = None) -> str:
