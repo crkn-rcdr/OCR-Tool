@@ -183,6 +183,10 @@ def _clean_repeated_punctuation(value: str) -> str:
     if not DOT_LEADER_RE.search(updated):
         updated = re.sub(r"\.{4,}", "...", updated)
         updated = re.sub(r"(?<!\.)\.\.(?!\.)", ".", updated)
+    # Newspaper OCR often emits double hyphens at line ends for broken words.
+    updated = re.sub(r"\b([A-Za-z]{2,})--$", r"\1-", updated)
+    # A smaller set of cases are punctuation separators like "Co.-- Captain".
+    updated = re.sub(r"(?<=\.)--(?=\s+[A-Z])", "", updated)
     updated = re.sub(r"-{3,}", "--", updated)
     for pattern, replacement in REPEATED_PUNCTUATION_PATTERNS:
         updated = pattern.sub(replacement, updated)
