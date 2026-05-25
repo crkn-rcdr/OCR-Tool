@@ -84,6 +84,48 @@ CONTROL_TAG_RE = re.compile(r"<\|[^>]*\|>")
 HTML_BREAK_TAG_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
 HTML_TAG_RE = re.compile(r"</?[^>]+>")
 OCR_WORDISH_RE = re.compile(r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*")
+JOINER_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "his",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "to",
+    "was",
+    "we",
+    "which",
+    "with",
+    "would",
+    "you",
+    "your",
+}
 LANGUAGE_KEYS = ("language", "lang", "ocr_language", "document_language")
 LANGUAGE_CONTAINERS = (
     "model_settings",
@@ -2228,7 +2270,7 @@ def choose_line_correction(
     if corrected_text is None:
         return None, "line_no_target_result"
 
-    corrected = clean_vl_text(corrected_text)
+    corrected = restore_missing_spacing(original_text, clean_vl_text(corrected_text))
     if not is_clean_correction(original_text, corrected):
         return None, "line_unclean_vl_text"
     if corrections_equivalent(corrected, original_text):
@@ -2276,7 +2318,7 @@ def choose_correction(
     results: list[dict[str, Any]],
 ) -> tuple[str | None, str]:
     usable = [
-        clean_vl_text(result.get("text", ""))
+        restore_missing_spacing(original_text, clean_vl_text(result.get("text", "")))
         for result in results
         if result.get("text")
     ]
@@ -2738,6 +2780,92 @@ def normalize_for_acceptance(value: str) -> str:
         match.group(0).casefold()
         for match in OCR_WORDISH_RE.finditer(str(value or ""))
     )
+
+
+def restore_missing_spacing(original_text: str, corrected_text: str) -> str:
+    original = str(original_text or "").strip()
+    corrected = str(corrected_text or "").strip()
+    if not original or not corrected:
+        return corrected
+    if " " in original or " " in corrected:
+        return corrected
+
+    original_fold = original.casefold()
+    corrected_fold = corrected.casefold()
+    if original_fold == corrected_fold or len(corrected_fold) < 2:
+        return corrected
+
+    match_index = original_fold.find(corrected_fold)
+    if match_index == -1:
+        return corrected
+    if original_fold.find(corrected_fold, match_index + 1) != -1:
+        return corrected
+
+    prefix = original[:match_index]
+    suffix = original[match_index + len(corrected) :]
+    if not prefix and not suffix:
+        return corrected
+
+    def _attached_word(part: str) -> str:
+        candidate = part.strip()
+        if not candidate:
+            return ""
+        if not re.fullmatch(r"[A-Za-z]+(?:['\u2019-][A-Za-z]+)*", candidate):
+            return ""
+        return candidate
+
+    prefix_word = _attached_word(prefix)
+    suffix_word = _attached_word(suffix)
+    if prefix and not prefix_word:
+        return corrected
+    if suffix and not suffix_word:
+        return corrected
+
+    opposite_word = prefix_word or suffix_word
+    corrected_key = corrected.casefold()
+    opposite_key = opposite_word.casefold() if opposite_word else ""
+    split_start = match_index
+    split_end = match_index + len(corrected)
+
+    has_case_boundary = False
+    if 0 < split_start < len(original):
+        left = original[split_start - 1]
+        right = original[split_start]
+        has_case_boundary = left.isalpha() and right.isupper()
+    if not has_case_boundary and 0 < split_end < len(original):
+        left = original[split_end - 1]
+        right = original[split_end]
+        has_case_boundary = left.isalpha() and right.isupper()
+
+    sentence_lead_split = (
+        bool(prefix_word)
+        and not suffix_word
+        and len(prefix_word) >= 4
+        and len(corrected) >= 4
+        and prefix_word[:1].isupper()
+        and prefix_word[1:].islower()
+        and corrected.islower()
+    )
+
+    should_restore = (
+        has_case_boundary
+        or (
+            opposite_key in JOINER_WORDS
+            and (len(corrected_key) >= 4 or (opposite_key == "a" and len(corrected_key) >= 3))
+        )
+        or (
+            corrected_key in JOINER_WORDS
+            and len(opposite_key) >= 4
+        )
+        or sentence_lead_split
+    )
+    if not should_restore:
+        return corrected
+
+    parts = [part for part in (prefix_word, corrected, suffix_word) if part]
+    if len(parts) <= 1:
+        return corrected
+    return " ".join(parts)
 
 
 def corrections_equivalent(left: str, right: str) -> bool:
