@@ -20,7 +20,6 @@ from services.tile_ocr import (
     run_tiled_local_ocr,
     supports_tiled_ocr,
 )
-from services.pero_ocr import PERO_METHOD, run_pero_ocr_for_image
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
@@ -356,17 +355,6 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
             json.dumps(merged_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
-        maybe_apply_output_text_cleanup(final_json, opt)
-        return final_json
-
-    if opt.get("method") == PERO_METHOD or select == PERO_METHOD:
-        payload = run_pero_ocr_for_image(ocr_image_path, opt, out_dir=out_dir)
-        final_json.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
         maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
         maybe_apply_output_text_cleanup(final_json, opt)
         return final_json

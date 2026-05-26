@@ -22,7 +22,7 @@ from services.ocr_defaults import (
 )
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 
-SUPPORTED_TILING_METHODS = {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"}
+SUPPORTED_TILING_METHODS = {"PP-OCRv5", "PP-StructureV3"}
 TILE_GRID_SIZE = 3
 DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
@@ -155,7 +155,7 @@ def run_tiled_local_ocr(
     if effective_method is None:
         raise ValueError(
             "Source-image tiling is only supported for PP-OCRv5, "
-            "PP-StructureV3, and PERO-OCR."
+            "PP-StructureV3."
         )
 
     tile_opt = dict(opt)
@@ -258,18 +258,6 @@ def run_tiled_local_ocr(
 
     if effective_method == "PP-OCRv5":
         merged = merge_ppocr_tile_results(
-            tile_results,
-            image_path,
-            grid_rows,
-            grid_cols,
-            overlap_px,
-            tile_strategy,
-        )
-        add_tile_errors_to_metadata(merged, tile_errors)
-        return merged
-
-    if effective_method == "PERO-OCR":
-        merged = merge_pero_tile_results(
             tile_results,
             image_path,
             grid_rows,
@@ -1482,11 +1470,6 @@ def clamp_float(
 
 
 def infer_tile_json(tile_path: Path, opt: dict) -> dict[str, Any]:
-    if opt.get("method") == "PERO-OCR":
-        from services.pero_ocr import run_pero_ocr_for_image
-
-        return run_pero_ocr_for_image(tile_path, opt)
-
     with tempfile.TemporaryDirectory(prefix="ocr_tile_json_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
 
@@ -1556,93 +1539,6 @@ def merge_ppocr_tile_results(
 
     normalize_ocr_word_boxes_in_payload(merged)
     return merged
-
-
-def merge_pero_tile_results(
-    tile_results: list[dict[str, Any]],
-    image_path: Path,
-    grid_rows: int,
-    grid_cols: int,
-    overlap_px: int,
-    tile_strategy: str,
-) -> dict[str, Any]:
-    first = tile_results[0]["json"] if tile_results else {}
-    entries = collect_ocr_entries(tile_results)
-    seam_positions = grid_vertical_seams(image_path, grid_cols)
-    entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
-    entries = dedupe_overlapping_entries(entries)
-
-    merged = {
-        "input_path": str(image_path),
-        "fileName": image_path.name,
-        "page_index": first.get("page_index", 0),
-        "model_settings": first.get("model_settings", {}),
-        "source_engine": "PERO-OCR",
-        "rec_texts": [entry["text"] for entry in entries],
-        "rec_scores": [entry["score"] for entry in entries],
-        "rec_polys": [entry["rec_poly"] for entry in entries],
-        "rec_boxes": [geometry_to_bbox(entry["rec_poly"]) for entry in entries],
-        "dt_polys": [entry["dt_poly"] for entry in entries],
-        "ocr_blocks": build_ocr_blocks_from_tile_entries(entries),
-        "tile_processing": build_tile_metadata(
-            tile_results,
-            image_path,
-            grid_rows,
-            grid_cols,
-            overlap_px,
-            tile_strategy,
-        ),
-    }
-
-    return merged
-
-
-def build_ocr_blocks_from_tile_entries(
-    entries: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    blocks_by_tile: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    tile_metadata: dict[tuple[Any, ...], dict[str, Any]] = {}
-
-    for line_index, entry in enumerate(entries):
-        tile_bbox = tuple(entry.get("_tile_bbox") or [])
-        tile_key = (
-            entry.get("_tile_order"),
-            entry.get("_tile_row"),
-            entry.get("_tile_col"),
-            tile_bbox,
-        )
-        blocks_by_tile.setdefault(tile_key, []).append(
-            ocr_line_from_entry(entry, line_index)
-        )
-        tile_metadata.setdefault(
-            tile_key,
-            {
-                "label": entry.get("_tile_label"),
-                "score": entry.get("_tile_score"),
-            },
-        )
-
-    blocks = []
-    for tile_key, lines in blocks_by_tile.items():
-        lines.sort(key=lambda line: geometry_sort_key(line["box"]))
-        box = union_line_boxes([line["box"] for line in lines])
-        order, row, col, _ = tile_key
-        metadata = tile_metadata.get(tile_key, {})
-
-        blocks.append(
-            {
-                "box": box,
-                "lines": lines,
-                "label": metadata.get("label") or "pero_tile",
-                "order": order,
-                "row": row,
-                "col": col,
-                "score": metadata.get("score"),
-            }
-        )
-
-    blocks.sort(key=ocr_block_sort_key)
-    return blocks
 
 
 def ocr_line_from_entry(entry: dict[str, Any], line_index: int) -> dict[str, Any]:

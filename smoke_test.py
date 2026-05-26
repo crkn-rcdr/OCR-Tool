@@ -6,11 +6,6 @@ from services.ocr_defaults import (
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OLLAMA_OPENAI_API_URL,
     DEFAULT_OLLAMA_OPENAI_MODEL,
-    DEFAULT_PERO_CONFIG_PATH,
-    DEFAULT_PERO_DEVICE,
-    DEFAULT_PERO_GPU_ID,
-    DEFAULT_PERO_MIN_LINE_CONFIDENCE,
-    DEFAULT_PERO_SOURCE_PATH,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
@@ -54,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--method",
-        choices=["PP-OCRv5", "PP-StructureV3", "PERO-OCR", "PaddleVL", "Auto Routing"],
+        choices=["PP-OCRv5", "PP-StructureV3", "PaddleVL", "Auto Routing"],
         default="PP-OCRv5",
         help="OCR method to test.",
     )
@@ -298,38 +293,6 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OLLAMA_OPENAI_MODEL,
         help="Model name served by the OpenAI-compatible endpoint, for example fredrezones55/chandra-ocr-2, richardyoung/olmocr2, or deepseek-ocr:3b.",
     )
-    parser.add_argument(
-        "--pero-source-path",
-        default=DEFAULT_PERO_SOURCE_PATH,
-        help="Path to the local pero-ocr checkout if pero_ocr is not installed.",
-    )
-    parser.add_argument(
-        "--pero-config-path",
-        default=DEFAULT_PERO_CONFIG_PATH,
-        help="Required for PERO-OCR: path to the PERO config.ini file.",
-    )
-    parser.add_argument(
-        "--pero-device",
-        choices=["gpu", "cpu"],
-        default=DEFAULT_PERO_DEVICE,
-        help="PERO device. Matches parse_folder.py --device.",
-    )
-    parser.add_argument(
-        "--pero-gpu-id",
-        default=DEFAULT_PERO_GPU_ID,
-        help="Optional PERO GPU id. Matches parse_folder.py --gpu-id.",
-    )
-    parser.add_argument(
-        "--pero-min-line-confidence",
-        type=float,
-        default=DEFAULT_PERO_MIN_LINE_CONFIDENCE,
-        help="Override PAGE_PARSER FILTER_CONFIDENT_LINES_THRESHOLD. -1 disables it.",
-    )
-    parser.add_argument(
-        "--pero-save-pagexml",
-        action="store_true",
-        help="Save native PERO PAGE XML beside the app JSON.",
-    )
     return parser.parse_args()
 
 
@@ -402,18 +365,6 @@ def build_options(args: argparse.Namespace) -> dict:
             }
         )
 
-    if args.method == "PERO-OCR":
-        opt.update(
-            {
-                "pero_source_path": args.pero_source_path,
-                "pero_config_path": args.pero_config_path,
-                "pero_device": args.pero_device,
-                "pero_gpu_id": args.pero_gpu_id,
-                "pero_min_line_confidence": args.pero_min_line_confidence,
-                "pero_save_pagexml": args.pero_save_pagexml,
-            }
-        )
-
     return opt
 
 
@@ -431,7 +382,7 @@ def main() -> int:
 
     opt = build_options(args)
 
-    if args.method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"}:
+    if args.method in {"PP-OCRv5", "PP-StructureV3"}:
         from services.ocr_pp import run_ocr_job
 
         iterator = run_ocr_job(input_path, output_path, opt)

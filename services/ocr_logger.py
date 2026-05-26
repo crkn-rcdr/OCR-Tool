@@ -50,12 +50,6 @@ OPTION_LABELS = {
     "text_det_unclip_ratio": "Text detection unclip ratio",
     "text_rec_score_thresh": "Text recognition score threshold",
     "text_recognition_batch_size": "Text recognition batch size",
-    "pero_source_path": "PERO Python module path",
-    "pero_config_path": "PERO config.ini path",
-    "pero_device": "PERO device",
-    "pero_gpu_id": "PERO GPU id",
-    "pero_min_line_confidence": "PERO min line confidence",
-    "pero_save_pagexml": "Save PERO PAGE XML",
     "post_ocr_vl_enabled": "Post-OCR VL word check",
     "post_ocr_vl_backend": "Post-OCR VL backend",
     "post_ocr_vl_candidate_mode": "Post-OCR VL candidate mode",
@@ -98,12 +92,6 @@ OPTION_ORDER = [
     "text_det_unclip_ratio",
     "text_rec_score_thresh",
     "text_recognition_batch_size",
-    "pero_source_path",
-    "pero_config_path",
-    "pero_device",
-    "pero_gpu_id",
-    "pero_min_line_confidence",
-    "pero_save_pagexml",
     "post_ocr_vl_enabled",
     "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
@@ -332,9 +320,6 @@ def models_for_run(opt, select=None):
         models.append("OCR/layout pipeline: PP-StructureV3")
     elif effective_method == "PaddleVL":
         models.append("Layout parsing pipeline: PaddleOCR-VL API service")
-    elif effective_method == "PERO-OCR":
-        models.append("OCR pipeline: PERO-OCR PageParser")
-        models.append("Text layout/recognition: PERO engine config")
     elif method:
         models.append(f"Primary pipeline: {method}")
 
@@ -349,12 +334,12 @@ def models_for_run(opt, select=None):
         backend = opt.get("post_ocr_vl_backend") or "paddlevl"
         models.append(f"Post-OCR word check: {backend}")
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"} and preprocessing_steps:
+    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and preprocessing_steps:
         models.append(
             f"Image preprocessing: {format_preprocessing_steps(preprocessing_steps)}"
         )
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"} and ignore_black_border:
+    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and ignore_black_border:
         models.append("Image preprocessing: crop black border and offset OCR geometry")
 
     models.append("PDF text layer: PyMuPDF")

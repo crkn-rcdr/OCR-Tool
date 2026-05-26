@@ -18,11 +18,6 @@ from services.ocr_defaults import (
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OLLAMA_OPENAI_API_URL,
     DEFAULT_OLLAMA_OPENAI_MODEL,
-    DEFAULT_PERO_CONFIG_PATH,
-    DEFAULT_PERO_DEVICE,
-    DEFAULT_PERO_GPU_ID,
-    DEFAULT_PERO_MIN_LINE_CONFIDENCE,
-    DEFAULT_PERO_SOURCE_PATH,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
@@ -48,7 +43,7 @@ from services.ocr_defaults import (
 )
 from services.tile_ocr import tile_grid_for_strategy
 
-LOCAL_OCR_METHODS = {"PP-OCRv5", "PP-StructureV3", "PERO-OCR"}
+LOCAL_OCR_METHODS = {"PP-OCRv5", "PP-StructureV3"}
 
 APP_CSS = """
 #fixed-header {
@@ -251,11 +246,10 @@ def update_options(method, tile_strategy):
     Update visible UI options based on the selected OCR method.
     """
     supports_tiling = method in LOCAL_OCR_METHODS
-    show_tiling_options = method in ["PP-OCRv5", "PERO-OCR", "Auto Routing"]
+    show_tiling_options = method in ["PP-OCRv5", "Auto Routing"]
     supports_preprocessing = method in [
         "PP-OCRv5",
         "PP-StructureV3",
-        "PERO-OCR",
         "Auto Routing",
     ]
     effective_tile_strategy = coerce_tile_strategy_for_method(method, tile_strategy)
@@ -286,7 +280,6 @@ def update_options(method, tile_strategy):
     return (
         gr.update(visible=(method in ["PP-OCRv5","PP-StructureV3","Auto Routing"])),
         gr.update(visible=(method in ["PaddleVL","Auto Routing"])),
-        gr.update(visible=(method == "PERO-OCR")),
         gr.update(visible=(method == "PP-OCRv5")),
         preprocessing_update,
         black_border_update,
@@ -346,30 +339,6 @@ def build_paddle_options(
             if text_recognition_batch_size is None
             else text_recognition_batch_size
         ),
-    }
-
-
-def build_pero_options(
-    pero_source_path,
-    pero_config_path,
-    pero_device,
-    pero_gpu_id,
-    pero_min_line_confidence,
-    pero_save_pagexml,
-):
-    return {
-        "pero_source_path": pero_source_path or DEFAULT_PERO_SOURCE_PATH,
-        "pero_config_path": pero_config_path or DEFAULT_PERO_CONFIG_PATH,
-        "pero_device": pero_device or DEFAULT_PERO_DEVICE,
-        "pero_gpu_id": (
-            pero_gpu_id if pero_gpu_id not in ("", None) else DEFAULT_PERO_GPU_ID
-        ),
-        "pero_min_line_confidence": (
-            float(pero_min_line_confidence)
-            if pero_min_line_confidence is not None
-            else DEFAULT_PERO_MIN_LINE_CONFIDENCE
-        ),
-        "pero_save_pagexml": bool(pero_save_pagexml),
     }
 
 
@@ -469,12 +438,6 @@ def submit_config(
     post_ocr_vl_paddlevl_url,
     post_ocr_vl_ollama_openai_url,
     post_ocr_vl_ollama_openai_model,
-    pero_source_path,
-    pero_config_path,
-    pero_device,
-    pero_gpu_id,
-    pero_min_line_confidence,
-    pero_save_pagexml,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -524,11 +487,7 @@ def submit_config(
     }
 
     if tile_source_images and method not in LOCAL_OCR_METHODS:
-        yield "Source-image tiling is currently available for PP-OCRv5, PP-StructureV3, and PERO-OCR only."
-        return
-
-    if method == "PERO-OCR" and not (pero_config_path or DEFAULT_PERO_CONFIG_PATH):
-        yield "Please provide a PERO config.ini path before running PERO-OCR."
+        yield "Source-image tiling is currently available for PP-OCRv5 and PP-StructureV3 only."
         return
 
     yield "Preparing OCR models... OCR will start after initialization is complete."
@@ -574,21 +533,6 @@ def submit_config(
         for message in run_ocr_job(input_path, output_root, opt):
             yield message
 
-    elif method == "PERO-OCR":
-        opt.update(
-            build_pero_options(
-                pero_source_path,
-                pero_config_path,
-                pero_device,
-                pero_gpu_id,
-                pero_min_line_confidence,
-                pero_save_pagexml,
-            )
-        )
-
-        for message in run_ocr_job(input_path, output_root, opt):
-            yield message
-
     elif method == "PaddleVL":
         opt.update({
              "use_layout_detection": use_layout_detection
@@ -617,7 +561,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         gr.Markdown("## CRKN OCR Engine")
 
         method_radio = gr.Radio(
-            choices=["PP-OCRv5","PP-StructureV3", "PERO-OCR", "PaddleVL", "Auto Routing"],
+            choices=["PP-OCRv5","PP-StructureV3", "PaddleVL", "Auto Routing"],
             label="Select Processing Method",
             value="PP-OCRv5"
         )
@@ -825,56 +769,6 @@ with gr.Blocks(css=APP_CSS) as demo:
             value=False
         )
 
-    # PERO-OCR-specific options.
-    with gr.Column(visible=False) as pero_options:
-        pero_source_path = gr.Textbox(
-            label="PERO Python Module Path",
-            value=DEFAULT_PERO_SOURCE_PATH,
-            info=(
-                "Path to the local pero-ocr checkout if pero_ocr is not installed. "
-                "Windows C:\\ paths are accepted under WSL."
-            ),
-        )
-
-        pero_config_path = gr.Textbox(
-            label="PERO config.ini Path",
-            value=DEFAULT_PERO_CONFIG_PATH,
-            info="Required. This is the PERO engine config used by PageParser.",
-        )
-
-        pero_device = gr.Dropdown(
-            choices=[
-                ("GPU", "gpu"),
-                ("CPU", "cpu"),
-            ],
-            value=DEFAULT_PERO_DEVICE,
-            label="PERO Device",
-            info="Matches PERO parse_folder.py --device choices.",
-        )
-
-        pero_gpu_id = gr.Textbox(
-            label="PERO GPU ID",
-            value=DEFAULT_PERO_GPU_ID,
-            info="Optional. Matches PERO parse_folder.py --gpu-id.",
-        )
-
-        pero_min_line_confidence = gr.Slider(
-            minimum=-1.0,
-            maximum=1.0,
-            value=DEFAULT_PERO_MIN_LINE_CONFIDENCE,
-            step=0.01,
-            label="PERO Min Line Confidence",
-            info=(
-                "Overrides PAGE_PARSER FILTER_CONFIDENT_LINES_THRESHOLD. "
-                "-1 leaves PERO confidence filtering disabled."
-            ),
-        )
-
-        pero_save_pagexml = gr.Checkbox(
-            label="Save native PERO PAGE XML beside JSON.",
-            value=False,
-        )
-
     # PaddleOCR-specific OCR options.
     with gr.Column(visible=True) as paddleocr_options:
 
@@ -1009,12 +903,6 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_ollama_openai_url,
         post_ocr_vl_ollama_openai_model,
-        pero_source_path,
-        pero_config_path,
-        pero_device,
-        pero_gpu_id,
-        pero_min_line_confidence,
-        pero_save_pagexml,
     ]
 
     # Update visible OCR option sections
@@ -1025,7 +913,6 @@ with gr.Blocks(css=APP_CSS) as demo:
         outputs=[
             paddleocr_options,
             paddlevl_options,
-            pero_options,
             post_ocr_vl_options,
             preprocessing_steps,
             ignore_black_border,
@@ -1157,12 +1044,6 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_ollama_openai_url,
         post_ocr_vl_ollama_openai_model,
-        pero_source_path,
-        pero_config_path,
-        pero_device,
-        pero_gpu_id,
-        pero_min_line_confidence,
-        pero_save_pagexml,
     ],
     outputs=output
     ).then(

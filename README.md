@@ -5,7 +5,6 @@ This repository is an internal OCR application for CRKN staff. It combines:
 - `PP-OCRv5` for the main local OCR workflow
 - `PP-StructureV3` for Paddle's structure-oriented OCR workflow
 - `PaddleVL` for the PaddleOCR-VL Docker service
-- `PERO-OCR` as an optional external OCR backend
 - optional post-OCR visual language checks for `PP-OCRv5`
 
 The app can run as:
@@ -44,7 +43,6 @@ Depending on options, it may also write:
 - `_post_ocr_vl_tiles/` cropped post-OCR audit tiles
 - post-OCR CSV summaries
 - progress JSON files
-- native PERO `.page.xml` files
 - log files in `logs/`
 
 ## Quick Start
@@ -69,7 +67,6 @@ The main method choices are:
 
 - `PP-OCRv5`
 - `PP-StructureV3`
-- `PERO-OCR`
 - `PaddleVL`
 - `Auto Routing`
 
@@ -80,8 +77,6 @@ Practical rationale:
 - `PP-StructureV3` is useful when the page is fairly clean and you want a
   simpler structure-oriented Paddle path without the extra post-correction
   layer.
-- `PERO-OCR` is worth trying when you already have a strong PERO setup or need
-  to compare against an external OCR engine with its own segmentation behavior.
 - `PaddleVL` is the better bet for visually difficult pages where a vision
   model may handle warped layout, uneven lighting, or awkward region structure
   better than the local OCR pipeline.
@@ -134,11 +129,6 @@ Current app behavior:
   are supplied programmatically, but those extra options are not currently
   surfaced in the Gradio UI
 
-### `PERO-OCR`
-
-This is optional and requires a working `pero-ocr` install or local checkout
-plus a PERO `config.ini`.
-
 ### `Auto Routing`
 
 This route analyzes image quality and chooses between:
@@ -168,7 +158,6 @@ Optional components:
 - Docker Desktop or Docker Engine for `PaddleVL`
 - NVIDIA GPU support for the PaddleOCR-VL stack if you want GPU containers
 - Ollama or another OpenAI-compatible vision endpoint for post-OCR VL checks
-- PERO-OCR plus a PERO config if you want the PERO backend
 
 The repo is currently pinned around:
 
@@ -424,13 +413,6 @@ Legacy compatibility is still accepted:
   - default: `abbyy_like`
   - accepted values: `abbyy_like`, `legacy`
 
-### PERO
-
-- `PERO_OCR_SOURCE_PATH`
-- `PERO_OCR_CONFIG_PATH`
-- `PERO_OCR_DEVICE`
-- `PERO_OCR_GPU_ID`
-
 ## Running The App
 
 ### Gradio UI
@@ -593,7 +575,6 @@ Current app behavior:
 - `PP-OCRv5`: full tiling UI is available
 - `PP-StructureV3`: the Gradio app hides tiling controls and forces tiling off,
   even though the shared tiling service still supports fixed-grid tiling
-- `PERO-OCR`: tiling UI is available
 - `PaddleVL`: preprocessing controls stay visible but disabled, while tiling
   controls are hidden because the service consumes the original image
 - `Auto Routing`: tiling controls are visible, but the submit path currently
@@ -757,29 +738,6 @@ Rationale:
   reading order, or non-body-text blocks
 - disabling it can be useful on simpler pages if you want a faster, less
   segmented run
-
-### PERO-only controls
-
-- `PERO Python Module Path`
-- `PERO config.ini Path`
-- `PERO Device`
-- `PERO GPU ID`
-- `PERO Min Line Confidence`
-- `Save native PERO PAGE XML beside JSON.`
-
-Rationale:
-
-- `PERO Python Module Path` exists because some environments use a local PERO
-  checkout instead of an installed package
-- `PERO config.ini Path` is required because PERO behavior is driven heavily by
-  its config
-- `PERO Device` and `PERO GPU ID` are there so you can match the runtime to the
-  machine you are using
-- `PERO Min Line Confidence` is a recall-vs-cleanliness control; raising it
-  drops weaker lines, lowering it preserves more questionable content
-- `Save native PERO PAGE XML beside JSON.` is mainly for debugging,
-  interoperability, or comparing native PERO output against the repo’s
-  normalized JSON
 
 ## Outputs
 
@@ -1012,7 +970,6 @@ services/
   ocr_pp.py                PP-OCRv5 and PP-StructureV3 execution
   ocr_vl.py                PaddleVL execution
   post_ocr_vl.py           Post-OCR VL checks for PP-OCRv5
-  pero_ocr.py              PERO integration
   image_preprocessing.py   Preprocessing steps
   tile_ocr.py              Tiling logic
   pdf_generation.py        Searchable PDF generation
