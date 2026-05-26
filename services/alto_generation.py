@@ -1,3 +1,5 @@
+"""Generate ALTO XML and reading-order-aware text structures from OCR JSON."""
+
 import json
 import os
 import xml.etree.ElementTree as ET
@@ -45,6 +47,7 @@ def get_image_dimensions(image_path: Path) -> Tuple[int, int]:
 
 
 def calculate_textblock(polys) -> Tuple[int, int, int, int]:
+    """Compute the bounding rectangle that contains a set of OCR polygons."""
     x_axis = []
     y_axis = []
 
@@ -76,12 +79,14 @@ def calculate_textblock(polys) -> Tuple[int, int, int, int]:
 
 
 def normalize_box(box):
+    """Convert numpy-backed boxes into plain Python lists when needed."""
     if hasattr(box, "tolist"):
         box = box.tolist()
     return box
 
 
 def box_to_rect(box) -> Tuple[float, float, float, float]:
+    """Normalize a box or polygon into a plain `(x1, y1, x2, y2)` tuple."""
     box = normalize_box(box)
 
     if (
@@ -97,6 +102,7 @@ def box_to_rect(box) -> Tuple[float, float, float, float]:
 
 
 def make_ocr_item(text, box, score=None, line_index=None):
+    """Build a normalized OCR token record for downstream ALTO assembly."""
     return {
         "text": clean_alto_text(text),
         "box": normalize_box(box),
@@ -106,10 +112,12 @@ def make_ocr_item(text, box, score=None, line_index=None):
 
 
 def clean_alto_text(text) -> str:
+    """Normalize OCR text values before emitting them into ALTO."""
     return str(text).replace("\n", " ").strip()
 
 
 def extract_source_ocr_payload(data):
+    """Return the OCR payload object that ALTO generation should read from."""
     if "overall_ocr_res" in data:
         return data["overall_ocr_res"], False
 
@@ -123,6 +131,7 @@ def extract_source_ocr_payload(data):
 
 
 def extract_word_level_lines(ocr_payload):
+    """Build line structures directly from word-level OCR arrays when available."""
     rec_texts = ocr_payload.get("rec_texts", [])
     rec_scores = ocr_payload.get("rec_scores", [])
     text_word_lines = ocr_payload.get("text_word") or []
@@ -206,6 +215,7 @@ def extract_word_level_lines(ocr_payload):
 
 
 def extract_line_level_items(source_payload, select_paddlevl):
+    """Extract OCR items from line-level structures when word arrays are unavailable."""
     items = []
 
     if select_paddlevl:
@@ -234,6 +244,7 @@ def extract_line_level_items(source_payload, select_paddlevl):
 
 
 def build_alto_lines(data):
+    """Build normalized ALTO-style lines from the available OCR structures."""
     ocr_blocks = data.get("ocr_blocks")
     if isinstance(ocr_blocks, list) and ocr_blocks:
         lines = [
@@ -338,11 +349,13 @@ def build_alto_lines(data):
 
 
 def calculate_line_box(boxes):
+    """Return a bounding box that encloses a set of OCR line or word boxes."""
     hpos, vpos, width, height = calculate_textblock(boxes)
     return [hpos, vpos, hpos + width, vpos + height]
 
 
 def average_scores(scores) -> float | None:
+    """Average numeric OCR confidence scores while ignoring missing values."""
     values = [float(score) for score in scores if isinstance(score, Number)]
     if not values:
         return None
@@ -350,11 +363,13 @@ def average_scores(scores) -> float | None:
 
 
 def box_sort_key(box):
+    """Return a stable top-to-bottom, left-to-right sort key for a box."""
     x1, y1, x2, y2 = box_to_rect(box)
     return (y1, x1, y2, x2)
 
 
 def sort_lines_reading_order(lines):
+    """Sort normalized OCR lines into a consistent reading order."""
     if len(lines) < 2:
         return list(lines)
 
@@ -400,6 +415,7 @@ def sort_lines_reading_order(lines):
 
 
 def box_to_alto_attrs(box, scale):
+    """Convert a bounding box into ALTO position and size attributes."""
     x1, y1, x2, y2 = box_to_rect(box)
     return {
         "HPOS": format_alto_number(x1 * scale),
@@ -410,6 +426,7 @@ def box_to_alto_attrs(box, scale):
 
 
 def format_alto_number(value) -> str:
+    """Format an ALTO geometry number without noisy trailing zeros."""
     value = float(value)
     if value.is_integer():
         return str(int(value))
@@ -417,6 +434,7 @@ def format_alto_number(value) -> str:
 
 
 def format_alto_confidence(value) -> str:
+    """Format an OCR confidence value for ALTO output."""
     return f"{float(value):.6f}".rstrip("0").rstrip(".")
 
 
@@ -567,6 +585,7 @@ def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
 
 
 def build_alto_blocks(data, lines, select_paddlevl, page_width):
+    """Choose the best available block structure for ALTO generation."""
     ocr_blocks = data.get("ocr_blocks")
     if isinstance(ocr_blocks, list) and ocr_blocks:
         return [
@@ -587,6 +606,7 @@ def build_alto_blocks(data, lines, select_paddlevl, page_width):
 
 
 def infer_page_width_from_lines(lines):
+    """Estimate page width from the rightmost line geometry in the payload."""
     right_edges = []
 
     for line in lines or []:
@@ -664,6 +684,7 @@ def ordered_text_lines_from_data(data, page_width=None):
 
 
 def build_blocks_from_doclayout_tiles(data, lines):
+    """Group lines by DocLayout tile metadata when tiled layout info exists."""
     tile_processing = data.get("tile_processing") or {}
     strategy = tile_processing.get("strategy")
     if strategy not in DOCLAYOUT_TILE_STRATEGIES:
@@ -712,6 +733,7 @@ def build_blocks_from_doclayout_tiles(data, lines):
 
 
 def normalize_doclayout_tiles(raw_tiles):
+    """Normalize stored DocLayout tile metadata into sortable tile records."""
     tiles = []
 
     for index, tile in enumerate(raw_tiles):
@@ -737,6 +759,7 @@ def normalize_doclayout_tiles(raw_tiles):
 
 
 def normalize_rect(value):
+    """Validate and normalize a rectangle-like value into four floats."""
     if not isinstance(value, (list, tuple)) or len(value) != 4:
         return None
 
@@ -752,6 +775,7 @@ def normalize_rect(value):
 
 
 def tile_sort_key(tile):
+    """Return a stable reading-order sort key for normalized tile metadata."""
     order = tile.get("order")
     row = tile.get("row")
     col = tile.get("col")
@@ -767,10 +791,12 @@ def tile_sort_key(tile):
 
 
 def numeric_or_default(value, default):
+    """Return a numeric value when available, otherwise use the fallback."""
     return value if isinstance(value, Number) else default
 
 
 def find_best_tile_for_line(line, tiles):
+    """Assign a line to the DocLayout tile that best contains it."""
     line_rect = list(box_to_rect(line["box"]))
     center_x = (line_rect[0] + line_rect[2]) / 2.0
     center_y = (line_rect[1] + line_rect[3]) / 2.0
@@ -805,14 +831,17 @@ def find_best_tile_for_line(line, tiles):
 
 
 def rect_contains_point(rect, x, y):
+    """Return whether a point falls inside a rectangle."""
     return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
 
 
 def rect_area(rect):
+    """Return the area of a rectangle."""
     return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
 
 
 def rect_overlap_area(left, right):
+    """Return the overlap area between two rectangles."""
     x1 = max(left[0], right[0])
     y1 = max(left[1], right[1])
     x2 = min(left[2], right[2])
@@ -821,6 +850,7 @@ def rect_overlap_area(left, right):
 
 
 def annotate_block_hyphenation(blocks):
+    """Mark ALTO line endings that should emit a trailing hyphen."""
     for block in blocks:
         lines = block.get("lines") or []
         for index, line in enumerate(lines[:-1]):
@@ -845,6 +875,7 @@ def annotate_block_hyphenation(blocks):
 
 
 def first_string_item(line):
+    """Return the first ALTO string item in a line, if any."""
     for item in line.get("strings") or []:
         if clean_alto_text(item.get("text", "")):
             return item
@@ -852,6 +883,7 @@ def first_string_item(line):
 
 
 def last_string_item(line):
+    """Return the last ALTO string item in a line, if any."""
     for item in reversed(line.get("strings") or []):
         if clean_alto_text(item.get("text", "")):
             return item
@@ -859,6 +891,7 @@ def last_string_item(line):
 
 
 def is_hyphenated_line_break(last_text, next_text):
+    """Return whether consecutive line texts appear to form a hyphenated break."""
     if not last_text.endswith(("-", "\u00ad")):
         return False
 
@@ -872,6 +905,7 @@ def is_hyphenated_line_break(last_text, next_text):
 
 
 def should_insert_sp(left_item, right_item):
+    """Return whether ALTO should insert an `SP` element between two strings."""
     left = clean_alto_text(left_item.get("text", ""))
     right = clean_alto_text(right_item.get("text", ""))
     if not left or not right or left_item.get("add_hyp"):
@@ -888,6 +922,7 @@ def should_insert_sp(left_item, right_item):
 
 
 def sp_attrs_between(left_item, right_item, line, scale):
+    """Compute ALTO spacing attributes for the gap between two string items."""
     left = list(box_to_rect(left_item["box"]))
     right = list(box_to_rect(right_item["box"]))
     line_rect = list(box_to_rect(line["box"]))
@@ -903,6 +938,7 @@ def sp_attrs_between(left_item, right_item, line, scale):
 
 
 def resolve_alto_profile():
+    """Resolve the configured ALTO profile name and metadata."""
     profile = os.environ.get("OCR_ALTO_PROFILE", ALTO_PROFILE_ABBYY_LIKE)
     profile = profile.strip().lower().replace("-", "_").replace(" ", "_")
     if profile in {"legacy", "v3", "inch1200"}:
@@ -911,12 +947,14 @@ def resolve_alto_profile():
 
 
 def alto_scale_and_unit(profile, dpi):
+    """Return ALTO coordinate scaling and measurement unit for the selected profile."""
     if profile == ALTO_PROFILE_LEGACY:
         return 1200.0 / dpi, "inch1200"
     return 1.0, "pixel"
 
 
 def create_alto_root(profile):
+    """Create the root ALTO XML element for the selected profile."""
     if profile == ALTO_PROFILE_LEGACY:
         return ET.Element("alto", xmlns=ALTO_NS_V3)
 
@@ -934,6 +972,7 @@ def create_alto_root(profile):
 
 
 def add_processing_description(alto, profile, file_name, measurement_unit):
+    """Attach OCR processing metadata to the ALTO description section."""
     desc = ET.SubElement(alto, "Description")
     ET.SubElement(desc, "MeasurementUnit").text = measurement_unit
 
@@ -954,6 +993,7 @@ def add_processing_description(alto, profile, file_name, measurement_unit):
 
 
 def add_alto_styles(alto):
+    """Register the default paragraph and text styles used in ALTO output."""
     styles = ET.SubElement(alto, "Styles")
     ET.SubElement(styles, "TextStyle", ID="font_regular", FONTFAMILY="Unknown")
     ET.SubElement(
@@ -966,6 +1006,7 @@ def add_alto_styles(alto):
 
 
 def block_style_id(block):
+    """Choose the ALTO style identifier for a rendered text block."""
     return "font_title" if block.get("label") in TITLE_LABELS else "font_regular"
 
 

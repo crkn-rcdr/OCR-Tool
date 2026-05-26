@@ -1,3 +1,5 @@
+"""Normalize OCR word-box metadata so downstream text consumers stay aligned."""
+
 from __future__ import annotations
 
 import re
@@ -50,6 +52,7 @@ def merge_apostrophe_word_boxes(
     boxes: Any,
     line_text: Any = None,
 ) -> tuple[Any, Any]:
+    """Merge apostrophe-split OCR tokens back into single word-box entries."""
     if not isinstance(words, list) or not isinstance(boxes, list):
         return words, boxes
 
@@ -117,6 +120,7 @@ def merge_apostrophe_word_boxes(
 
 
 def should_join_apostrophe_parts(parts: list[dict[str, Any]], line_text: Any = None) -> bool:
+    """Decide whether adjacent OCR tokens should be merged around apostrophes."""
     if phrase_appears_in_line(parts, line_text):
         return True
 
@@ -124,6 +128,7 @@ def should_join_apostrophe_parts(parts: list[dict[str, Any]], line_text: Any = N
 
 
 def phrase_appears_in_line(parts: list[dict[str, Any]], line_text: Any = None) -> bool:
+    """Check whether the merged token text already appears in the line string."""
     if not line_text:
         return False
 
@@ -133,6 +138,7 @@ def phrase_appears_in_line(parts: list[dict[str, Any]], line_text: Any = None) -
 
 
 def boxes_are_close(parts: list[dict[str, Any]]) -> bool:
+    """Return whether neighboring token boxes are close enough to merge."""
     for left, right in zip(parts, parts[1:]):
         try:
             left_rect = box_to_rect(left["box"])
@@ -155,6 +161,7 @@ def boxes_are_close(parts: list[dict[str, Any]]) -> bool:
 
 
 def combine_word_items(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge several token records into a single text-and-box item."""
     return {
         "text": "".join(part["text"] for part in parts),
         "box": union_boxes([part["box"] for part in parts]),
@@ -162,6 +169,7 @@ def combine_word_items(parts: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def union_boxes(boxes: list[Any]) -> list[float]:
+    """Return the bounding rectangle that covers all supplied boxes."""
     rects = [box_to_rect(box) for box in boxes]
     return [
         min(rect[0] for rect in rects),
@@ -172,6 +180,7 @@ def union_boxes(boxes: list[Any]) -> list[float]:
 
 
 def box_to_rect(box: Any) -> tuple[float, float, float, float]:
+    """Normalize a box or polygon into a plain `(x1, y1, x2, y2)` tuple."""
     if hasattr(box, "tolist"):
         box = box.tolist()
 
@@ -190,13 +199,16 @@ def box_to_rect(box: Any) -> tuple[float, float, float, float]:
 
 
 def normalize_apostrophes(text: str) -> str:
+    """Map several apostrophe-like glyphs onto a plain ASCII apostrophe."""
     return "".join("'" if char in APOSTROPHE_CHARS else char for char in text)
 
 
 def is_apostrophe_token(text: str) -> bool:
+    """Return whether a token consists only of apostrophe characters."""
     stripped = text.strip()
     return bool(stripped) and all(char in APOSTROPHE_CHARS for char in stripped)
 
 
 def is_wordish(text: str) -> bool:
+    """Return whether a token contains at least one letter or digit."""
     return bool(re.search(r"[A-Za-z0-9]", text or ""))

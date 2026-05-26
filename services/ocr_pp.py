@@ -1,3 +1,5 @@
+"""Run local Paddle OCR jobs, including tiling, normalization, and outputs."""
+
 import json
 import threading
 from pathlib import Path
@@ -43,6 +45,7 @@ STOP_FLAG = False
 
 
 def describe_tiling(opt):
+    """Return a readable description of the active tiling strategy."""
     strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
     rows, cols = tile_grid_for_strategy(strategy)
     grid_label = f"{rows}x{cols}"
@@ -387,6 +390,7 @@ def maybe_apply_post_ocr_vl_check(
     opt: dict,
     select: str | None = None,
 ) -> None:
+    """Run the optional post-OCR VL audit when the current method supports it."""
     if not opt.get("post_ocr_vl_enabled", False):
         return
     if not supports_post_ocr_vl(opt.get("method"), select):
@@ -395,6 +399,7 @@ def maybe_apply_post_ocr_vl_check(
 
 
 def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    """Apply conservative punctuation cleanup to a saved OCR JSON payload."""
     if not opt.get("clean_punctuation_issues", False):
         return
     clean_ocr_json_text_in_place(json_path)
@@ -404,6 +409,7 @@ def normalize_saved_ocr_json(
     json_path: Path,
     preprocess_metadata: dict | None = None,
 ) -> None:
+    """Normalize a saved OCR JSON file in place after local inference."""
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception:
@@ -423,6 +429,7 @@ def annotate_preprocessing_payload(
     payload: dict,
     preprocess_metadata: dict | None,
 ) -> bool:
+    """Attach preprocessing metadata to an OCR payload when available."""
     if not preprocess_metadata:
         return False
 

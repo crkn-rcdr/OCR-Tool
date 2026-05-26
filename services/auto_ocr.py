@@ -1,3 +1,5 @@
+"""Route mixed-quality image folders to the most suitable OCR backend."""
+
 import cv2
 from utils.image_checks import analyze_quality
 from services.ocr_vl import run_paddlevl_job

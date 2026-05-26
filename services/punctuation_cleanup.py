@@ -45,14 +45,17 @@ SPACING_PATTERNS = (
 
 
 def clean_ocr_line_text(text: Any) -> str:
+    """Clean punctuation artifacts in a full OCR line of text."""
     return _clean_text_value(text, allow_space_insertion=True)
 
 
 def clean_ocr_token_text(text: Any) -> str:
+    """Clean punctuation artifacts in a single OCR token."""
     return _clean_text_value(text, allow_space_insertion=False)
 
 
 def clean_ocr_text_content(text: str) -> str:
+    """Clean a multi-line OCR text blob and preserve line breaks."""
     value = str(text or "")
     if not value:
         return value
@@ -60,11 +63,13 @@ def clean_ocr_text_content(text: str) -> str:
 
 
 def clean_ocr_line_list(lines: list[Any]) -> list[str]:
+    """Clean OCR lines and then fix cross-line carryover artifacts."""
     cleaned_lines = [clean_ocr_line_text(line) for line in lines]
     return _clean_line_sequence(cleaned_lines)
 
 
 def clean_ocr_json_text_in_place(json_path: Path) -> bool:
+    """Load an OCR JSON file, clean its text fields, and save if changed."""
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception:
@@ -80,6 +85,7 @@ def clean_ocr_json_text_in_place(json_path: Path) -> bool:
 
 
 def clean_ocr_payload_text_in_place(payload: dict[str, Any]) -> bool:
+    """Clean supported text fields inside an OCR payload in place."""
     changed = False
 
     overall = payload.get("overall_ocr_res")
@@ -164,6 +170,7 @@ def clean_ocr_payload_text_in_place(payload: dict[str, Any]) -> bool:
 
 
 def _extract_parsing_res_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the nested PaddleVL parsing result list when present."""
     try:
         return payload["result"]["layoutParsingResults"][0]["prunedResult"][
             "parsing_res_list"
@@ -173,6 +180,7 @@ def _extract_parsing_res_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _clean_line_sequence(lines: list[str]) -> list[str]:
+    """Apply cleanup rules that need neighboring line context."""
     cleaned = list(lines)
     for index in range(len(cleaned) - 1):
         current = str(cleaned[index] or "")
@@ -188,6 +196,7 @@ def _clean_line_sequence(lines: list[str]) -> list[str]:
 
 
 def _remove_duplicate_hyphen_carryover(current: str, following: str) -> str:
+    """Drop a repeated carryover word when a hyphenated line wraps badly."""
     current_match = re.search(r"([A-Za-z]{2,})-$", current)
     next_match = re.match(r"\s*([A-Za-z]{2,})([.,;:!?-]?\s*)(.*)$", following)
     if not current_match or not next_match:
@@ -205,6 +214,7 @@ def _remove_duplicate_hyphen_carryover(current: str, following: str) -> str:
 
 
 def _remove_fragment_hyphen_carryover(current: str, following: str) -> str:
+    """Trim fragment duplication caused by broken hyphenated line joins."""
     fragment_match = re.search(r"([A-Za-z]{1,4})-$", current)
     next_match = re.match(r"\s*([A-Za-z]{3,})(.*)$", following)
     if not fragment_match or not next_match:
@@ -224,6 +234,7 @@ def _remove_fragment_hyphen_carryover(current: str, following: str) -> str:
 
 
 def _clean_text_value(text: Any, *, allow_space_insertion: bool) -> str:
+    """Apply the conservative punctuation cleanup pipeline to one text value."""
     value = str(text or "")
     if not value:
         return ""
@@ -243,6 +254,7 @@ def _clean_text_value(text: Any, *, allow_space_insertion: bool) -> str:
 
 
 def _clean_line_start_artifacts(value: str) -> str:
+    """Remove recurring junk punctuation found at the start of OCR lines."""
     updated = value
     for pattern, replacement in LINE_START_PATTERNS:
         updated = pattern.sub(replacement, updated, count=1)
@@ -250,6 +262,7 @@ def _clean_line_start_artifacts(value: str) -> str:
 
 
 def _clean_quote_debris(value: str) -> str:
+    """Collapse punctuation debris that accumulates around quotes or brackets."""
     updated = value
     for pattern, replacement in QUOTE_DEBRIS_PATTERNS:
         updated = pattern.sub(replacement, updated)
@@ -257,6 +270,7 @@ def _clean_quote_debris(value: str) -> str:
 
 
 def _clean_repeated_punctuation(value: str) -> str:
+    """Normalize repeated punctuation runs to a single intended mark."""
     updated = value
     if not DOT_LEADER_RE.search(updated):
         updated = re.sub(r"\.{4,}", "...", updated)
@@ -272,6 +286,7 @@ def _clean_repeated_punctuation(value: str) -> str:
 
 
 def _clean_spacing_artifacts(value: str) -> str:
+    """Restore obvious missing spaces introduced by OCR punctuation joins."""
     updated = value
     previous = None
     while updated != previous:

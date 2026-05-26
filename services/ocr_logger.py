@@ -1,3 +1,5 @@
+"""Format and persist OCR run configuration, summaries, and error logs."""
+
 import logging 
 from datetime import datetime
 from pathlib import Path
@@ -172,10 +174,12 @@ PREPROCESSING_STEP_ORDER = tuple(PREPROCESSING_STEP_LABELS)
 
 
 def tile_strategy_from_options(opt):
+    """Return the configured tile strategy string from a run options dict."""
     return str(opt.get("tile_strategy") or "").strip()
 
 
 def option_applies_to_strategy(key, opt):
+    """Return whether an option is relevant for the current method and tiling mode."""
     method = opt.get("method")
     tile_enabled = bool(opt.get("tile_source_images", False))
     strategy = tile_strategy_from_options(opt)
@@ -212,6 +216,7 @@ def option_applies_to_strategy(key, opt):
 
 
 def default_strategy_options(opt):
+    """Yield documented default values for the active tiling strategy."""
     strategy = tile_strategy_from_options(opt)
 
     if strategy in {"doclayout_v3", "grid_doclayout_v3", "grid_3x2_doclayout_v3"}:
@@ -221,6 +226,7 @@ def default_strategy_options(opt):
 
 
 def default_paddle_options(opt):
+    """Yield documented default OCR thresholds for Paddle-based runs."""
     method = opt.get("method")
     if method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
         for key, value in PADDLE_DEFAULT_OPTIONS.items():
@@ -231,6 +237,7 @@ def default_paddle_options(opt):
 
 
 def default_preprocessing_options(opt):
+    """Yield documented default preprocessing-related options."""
     for key, value in PREPROCESSING_DEFAULT_OPTIONS.items():
         if key == "preprocessing_steps" and "preprocessing_preset" in opt:
             continue
@@ -239,6 +246,7 @@ def default_preprocessing_options(opt):
 
 
 def preprocessing_steps_from_options(opt):
+    """Resolve the ordered preprocessing steps implied by the option set."""
     if "preprocessing_steps" in opt:
         selected = opt.get("preprocessing_steps") or []
         if isinstance(selected, str):
@@ -256,6 +264,7 @@ def preprocessing_steps_from_options(opt):
 
 
 def format_preprocessing_steps(value):
+    """Format preprocessing steps for human-readable logs."""
     selected = preprocessing_steps_from_options({"preprocessing_steps": value})
     if not selected:
         return "None"
@@ -263,6 +272,7 @@ def format_preprocessing_steps(value):
 
 
 def format_option_value(key, value):
+    """Format one option value using the same labels shown in logs and UI."""
     if key == "preprocessing_steps":
         return format_preprocessing_steps(value)
 
@@ -279,6 +289,7 @@ def format_option_value(key, value):
 
 
 def iter_selected_options(opt):
+    """Yield the run options that should be written into the OCR log."""
     seen = set()
     defaults = {
         **dict(default_preprocessing_options(opt)),
@@ -300,6 +311,7 @@ def iter_selected_options(opt):
 
 
 def models_for_run(opt, select=None):
+    """Summarize the models and major processing stages active for a run."""
     method = opt.get("method")
     effective_method = select or method
     tile_enabled = bool(opt.get("tile_source_images", False))
@@ -356,6 +368,7 @@ def log_run_configuration(
     output_root=None,
     stage="OCR",
 ):
+    """Write selected run options and model choices into the active logger."""
     logger.info(f"========== {stage} RUN CONFIGURATION ==========")
 
     if input_path is not None:

@@ -59,6 +59,7 @@ DEFAULT_PAGE_PROJECTION_COVERAGE = 0.20
 
 
 def normalize_preprocessing_preset(value: Any) -> str:
+    """Normalize user input into a supported preprocessing preset key."""
     key = str(value or DEFAULT_PREPROCESSING_PRESET).strip().lower()
     key = PREPROCESSING_ALIASES.get(key, key.replace(" ", "_").replace("-", "_"))
 
@@ -69,11 +70,13 @@ def normalize_preprocessing_preset(value: Any) -> str:
 
 
 def preprocessing_label(preset: Any) -> str:
+    """Return the human-readable label for a preprocessing preset."""
     normalized = normalize_preprocessing_preset(preset)
     return PREPROCESSING_PRESET_LABELS.get(normalized, str(preset))
 
 
 def normalize_preprocessing_step(value: Any) -> list[str]:
+    """Normalize one user-supplied step or preset alias into step keys."""
     key = str(value or "").strip().lower()
     key = PREPROCESSING_ALIASES.get(key, key.replace(" ", "_").replace("-", "_"))
 
@@ -87,6 +90,7 @@ def normalize_preprocessing_step(value: Any) -> list[str]:
 
 
 def normalize_preprocessing_steps(opt: dict | None) -> list[str]:
+    """Resolve the effective ordered preprocessing step list from options."""
     opt = opt or {}
 
     if "preprocessing_steps" in opt:
@@ -120,12 +124,14 @@ def normalize_preprocessing_steps(opt: dict | None) -> list[str]:
 
 
 def preprocessing_steps_label(steps: list[str]) -> str:
+    """Format preprocessing steps for logs and UI summaries."""
     if not steps:
         return "None"
     return ", ".join(PREPROCESSING_STEP_LABELS.get(step, step) for step in steps)
 
 
 def preprocessing_enabled(opt: dict | None) -> bool:
+    """Return whether preprocessing or border cropping is enabled."""
     opt = opt or {}
     return (
         bool(normalize_preprocessing_steps(opt))
@@ -209,6 +215,7 @@ def preprocess_image_for_ocr(
 
 
 def apply_preprocessing_preset(gray: np.ndarray, preset: str) -> tuple[np.ndarray, dict[str, Any]]:
+    """Apply the named preprocessing preset by expanding it into steps."""
     steps = PREPROCESSING_PRESET_TO_STEPS.get(
         normalize_preprocessing_preset(preset),
         [],
@@ -217,6 +224,7 @@ def apply_preprocessing_preset(gray: np.ndarray, preset: str) -> tuple[np.ndarra
 
 
 def apply_preprocessing_steps(gray: np.ndarray, steps: list[str]) -> tuple[np.ndarray, dict[str, Any]]:
+    """Apply the selected preprocessing steps in the configured order."""
     processed = gray.copy()
     applied_steps = []
     details = {}
@@ -246,6 +254,7 @@ def apply_preprocessing_steps(gray: np.ndarray, steps: list[str]) -> tuple[np.nd
 
 
 def crop_black_border_area(gray: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """Crop a detected black scan border and return geometry offset metadata."""
     bbox = detect_page_bbox_from_black_border(gray)
 
     if bbox is None:
@@ -275,6 +284,7 @@ def crop_black_border_area(gray: np.ndarray) -> tuple[np.ndarray, dict[str, Any]
 
 
 def detect_page_bbox_from_black_border(gray: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Estimate the page bounds inside a dark scanner border."""
     height, width = gray.shape[:2]
     bright = gray > DEFAULT_BLACK_BORDER_THRESHOLD
     col_fraction = bright.mean(axis=0)
@@ -309,6 +319,7 @@ def detect_page_bbox_from_black_border(gray: np.ndarray) -> tuple[int, int, int,
 
 
 def smooth_projection(values: np.ndarray, window_size: int) -> np.ndarray:
+    """Smooth a 1D projection profile with a moving-average window."""
     if window_size <= 1:
         return values
     kernel = np.ones(window_size, dtype=np.float32) / float(window_size)
@@ -316,6 +327,7 @@ def smooth_projection(values: np.ndarray, window_size: int) -> np.ndarray:
 
 
 def largest_true_run(mask: np.ndarray, min_length: int) -> tuple[int, int] | None:
+    """Return the longest contiguous true run that meets a minimum length."""
     best = None
     best_length = 0
     start = None
@@ -339,15 +351,18 @@ def largest_true_run(mask: np.ndarray, min_length: int) -> tuple[int, int] | Non
 
 
 def light_clean(gray: np.ndarray) -> np.ndarray:
+    """Apply a light median denoise pass suited to readable scans."""
     return cv2.medianBlur(gray, 3)
 
 
 def apply_clahe(gray: np.ndarray) -> np.ndarray:
+    """Boost local contrast with CLAHE while preserving grayscale output."""
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     return clahe.apply(gray)
 
 
 def background_flatten(gray: np.ndarray) -> np.ndarray:
+    """Reduce uneven illumination by dividing out a blurred background map."""
     height, width = gray.shape[:2]
     sigma = max(15.0, min(height, width) / 80.0)
     background = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
@@ -356,6 +371,7 @@ def background_flatten(gray: np.ndarray) -> np.ndarray:
 
 
 def sauvola_threshold(gray: np.ndarray) -> np.ndarray:
+    """Convert grayscale text to a binary image using Sauvola-style thresholding."""
     height, width = gray.shape[:2]
     window = odd_between(int(min(height, width) / 80), minimum=35, maximum=101)
 
@@ -391,6 +407,7 @@ def sauvola_threshold(gray: np.ndarray) -> np.ndarray:
 
 
 def estimate_skew_angle(gray: np.ndarray) -> float:
+    """Estimate page skew from dominant near-horizontal text strokes."""
     inverted = cv2.bitwise_not(gray)
     _, threshold = cv2.threshold(
         inverted,
@@ -416,6 +433,7 @@ def estimate_skew_angle(gray: np.ndarray) -> float:
 
 
 def rotate_keep_size(gray: np.ndarray, angle: float) -> np.ndarray:
+    """Rotate an image around center while keeping the original canvas size."""
     height, width = gray.shape[:2]
     center = (width / 2.0, height / 2.0)
     matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -430,6 +448,7 @@ def rotate_keep_size(gray: np.ndarray, angle: float) -> np.ndarray:
 
 
 def odd_between(value: int, minimum: int, maximum: int) -> int:
+    """Clamp an integer into range and force it to an odd value."""
     value = max(minimum, min(maximum, int(value)))
     if value % 2 == 0:
         value += 1

@@ -1,3 +1,5 @@
+"""Run PaddleOCR-VL API jobs and convert responses into repo output formats."""
+
 import json
 import base64
 import os
@@ -99,6 +101,7 @@ ALLOWED_PADDLEX_KEYS = {
 
 
 def _build_paddlevl_payload(opt: dict) -> dict:
+    """Map repo option names into the PaddleX request payload format."""
     payload = {}
 
     for key, value in opt.items():
@@ -118,6 +121,7 @@ def _build_paddlevl_payload(opt: dict) -> dict:
 
 
 def _request_layout_parsing(payload: dict) -> dict:
+    """Call the PaddleOCR-VL layout API and return the parsed JSON response."""
     try:
         response = requests.post(
             BASE_URL + "/layout-parsing",
@@ -333,6 +337,7 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
 
 def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    """Apply optional punctuation cleanup to a saved PaddleVL JSON payload."""
     if not opt.get("clean_punctuation_issues", False):
         return
     clean_ocr_json_text_in_place(json_path)

@@ -1,3 +1,5 @@
+"""Split large images into OCR tiles and merge tile-level OCR results back together."""
+
 from __future__ import annotations
 
 import json
@@ -133,6 +135,7 @@ _doclayout_model_lock = threading.Lock()
 
 
 def get_effective_method(method: str | None, select: str | None = None) -> str | None:
+    """Resolve the actual local OCR method that tiled OCR should use."""
     if select in SUPPORTED_TILING_METHODS:
         return select
     if method in SUPPORTED_TILING_METHODS:
@@ -141,6 +144,7 @@ def get_effective_method(method: str | None, select: str | None = None) -> str |
 
 
 def supports_tiled_ocr(method: str | None, select: str | None = None) -> bool:
+    """Return whether the selected OCR method can run through the tiling pipeline."""
     return get_effective_method(method, select) is not None
 
 
@@ -151,6 +155,7 @@ def run_tiled_local_ocr(
     grid_rows: int | None = None,
     grid_cols: int | None = None,
 ) -> dict[str, Any]:
+    """Run OCR on a tiled workflow and merge the tile-level results."""
     effective_method = get_effective_method(opt.get("method"), select)
     if effective_method is None:
         raise ValueError(
@@ -284,6 +289,7 @@ def add_tile_errors_to_metadata(
     merged: dict[str, Any],
     tile_errors: list[dict[str, Any]],
 ) -> None:
+    """Attach per-tile OCR errors to the merged tile metadata block."""
     if not tile_errors:
         return
 
@@ -319,6 +325,7 @@ def resolve_tile_grid(
     grid_rows: int | None = None,
     grid_cols: int | None = None,
 ) -> tuple[int, int]:
+    """Resolve the effective tile grid dimensions from OCR options."""
     strategy = resolve_tile_strategy(opt)
     strategy_rows, strategy_cols = tile_grid_for_strategy(strategy)
 
@@ -342,6 +349,7 @@ def resolve_tile_grid(
 
 
 def tile_grid_for_strategy(strategy: str | None) -> tuple[int, int]:
+    """Return the default grid dimensions for a named tile strategy."""
     strategy = normalize_tile_strategy(strategy)
     if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3}:
         return 3, 2
@@ -349,15 +357,18 @@ def tile_grid_for_strategy(strategy: str | None) -> tuple[int, int]:
 
 
 def grid_strategy_for_shape(rows: int, cols: int) -> str:
+    """Return the tile strategy label that matches a grid shape."""
     return TILE_STRATEGY_GRID_3X2 if (int(rows), int(cols)) == (3, 2) else TILE_STRATEGY_GRID
 
 
 def resolve_tile_strategy(opt: dict) -> str:
+    """Resolve the effective tile strategy from an OCR options dict."""
     strategy = normalize_tile_strategy(opt.get("tile_strategy"))
     return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
 
 
 def normalize_tile_strategy(value: Any) -> str:
+    """Normalize a tile strategy name into a supported key."""
     strategy = str(value or DEFAULT_TILE_STRATEGY)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
     strategy_aliases = {
@@ -397,6 +408,7 @@ def build_image_tiles(
     grid_cols: int = TILE_GRID_SIZE,
     overlap_px: int = 0,
 ) -> list[TileSpec]:
+    """Build fixed-grid image tiles and save each cropped tile to disk."""
     tiles = []
 
     with Image.open(image_path) as image:
@@ -447,6 +459,7 @@ def build_content_box_tiles(
     temp_dir: Path,
     padding_px: int = 8,
 ) -> list[TileSpec]:
+    """Build tiles from detected content boxes on a page image."""
     boxes = detect_content_boxes(image_path)
     tiles = []
 
@@ -492,6 +505,7 @@ def build_doclayout_tiles(
     threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
     include_recovery_tile: bool = True,
 ) -> list[TileSpec]:
+    """Build tiles from PP-DocLayoutV3 detections on the full source image."""
     boxes = detect_doclayout_boxes(image_path, threshold=threshold)
     tiles = []
 
@@ -563,6 +577,7 @@ def build_grid_doclayout_tiles(
     threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
     include_grid_recovery: bool = True,
 ) -> list[TileSpec]:
+    """Build fixed grid tiles, then run DocLayout inside each grid tile."""
     grid_source_dir = temp_dir / "grid_doclayout_sources"
     grid_source_dir.mkdir(exist_ok=True)
     source_tiles = build_image_tiles(
@@ -614,6 +629,7 @@ def build_doclayout_tiles_from_source_tile(
     start_index: int,
     padding_px: int,
 ) -> list[TileSpec]:
+    """Build DocLayout child tiles inside one previously generated source tile."""
     tiles: list[TileSpec] = []
 
     with Image.open(source_tile.path) as image:
@@ -679,6 +695,7 @@ def local_box_center_is_in_source_nominal(
     source_tile: TileSpec,
     local_box: tuple[int, int, int, int],
 ) -> bool:
+    """Return whether a local box center falls inside the source tile nominal area."""
     center_x = source_tile.left + ((local_box[0] + local_box[2]) / 2.0)
     center_y = source_tile.top + ((local_box[1] + local_box[3]) / 2.0)
 
@@ -693,6 +710,7 @@ def copy_tile_with_sequence(
     sequence_index: int,
     label: str | None = None,
 ) -> TileSpec:
+    """Copy a generated tile image while assigning a stable output sequence."""
     return TileSpec(
         row=tile.row,
         col=tile.col,
@@ -715,6 +733,7 @@ def detect_doclayout_boxes(
     image_path: Path,
     threshold: float = DEFAULT_DOCLAYOUT_THRESHOLD,
 ) -> list[dict[str, Any]]:
+    """Detect document layout boxes for tile generation."""
     try:
         model = get_doclayout_model()
         output = model.predict(
@@ -748,6 +767,7 @@ def detect_doclayout_boxes(
 
 
 def get_doclayout_model() -> Any:
+    """Return the cached PP-DocLayoutV3 model instance."""
     global _doclayout_model
 
     with _doclayout_model_lock:
@@ -764,6 +784,7 @@ def extract_doclayout_boxes(
     image_width: int,
     image_height: int,
 ) -> list[dict[str, Any]]:
+    """Extract normalized DocLayout boxes from a model prediction payload."""
     payload = getattr(result, "json", result)
     if callable(payload):
         payload = payload()
@@ -783,6 +804,7 @@ def extract_doclayout_boxes(
 
 
 def find_doclayout_box_lists(value: Any) -> list[dict[str, Any]]:
+    """Find list-shaped DocLayout box collections inside a nested payload."""
     if isinstance(value, dict):
         boxes = value.get("boxes") or value.get("layout_boxes")
         if isinstance(boxes, list) and all(isinstance(item, dict) for item in boxes):
@@ -807,6 +829,7 @@ def parse_doclayout_box(
     image_width: int,
     image_height: int,
 ) -> dict[str, Any] | None:
+    """Parse one raw DocLayout detection into normalized metadata."""
     label = str(
         item.get("label")
         or item.get("category_name")
@@ -854,6 +877,7 @@ def normalize_doclayout_bbox(
     image_width: int,
     image_height: int,
 ) -> tuple[int, int, int, int] | None:
+    """Normalize a DocLayout bounding box into integer image coordinates."""
     if not isinstance(coordinate, (list, tuple)) or len(coordinate) < 4:
         return None
 
@@ -886,6 +910,7 @@ def normalize_doclayout_bbox(
 
 
 def dedupe_doclayout_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate highly overlapping DocLayout boxes."""
     kept: list[dict[str, Any]] = []
 
     for box in sorted(
@@ -910,6 +935,7 @@ def content_bbox_intersection(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
 ) -> int:
+    """Return the intersection area between two content boxes."""
     return content_box_horizontal_overlap(left, right) * content_box_vertical_overlap(
         left,
         right,
@@ -920,6 +946,7 @@ def content_bbox_overlap_ratio(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
 ) -> float:
+    """Return the overlap ratio between two content boxes."""
     intersection = content_bbox_intersection(left, right)
     smaller_area = min(
         content_box_width(left) * content_box_height(left),
@@ -929,6 +956,7 @@ def content_bbox_overlap_ratio(
 
 
 def parse_optional_int(value: Any) -> int | None:
+    """Parse an optional integer value and return `None` when unset."""
     try:
         if value is None:
             return None
@@ -938,6 +966,7 @@ def parse_optional_int(value: Any) -> int | None:
 
 
 def parse_optional_float(value: Any) -> float | None:
+    """Parse an optional float value and return `None` when unset."""
     try:
         if value is None:
             return None
@@ -947,6 +976,7 @@ def parse_optional_float(value: Any) -> float | None:
 
 
 def first_present(item: dict[str, Any], *keys: str) -> Any:
+    """Return the first present value from a dict across several keys."""
     for key in keys:
         if key in item and item[key] is not None:
             return item[key]
@@ -954,6 +984,7 @@ def first_present(item: dict[str, Any], *keys: str) -> Any:
 
 
 def detect_content_boxes(image_path: Path, max_boxes: int = 96) -> list[tuple[int, int, int, int]]:
+    """Detect foreground content boxes directly from the source image."""
     gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return []
@@ -1002,6 +1033,7 @@ def detect_content_boxes(image_path: Path, max_boxes: int = 96) -> list[tuple[in
 
 
 def remove_rule_lines(foreground: Any, image_width: int, image_height: int) -> Any:
+    """Remove large horizontal or vertical rule lines from a foreground mask."""
     horizontal_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (max(40, image_width // 8), 1),
@@ -1032,6 +1064,7 @@ def find_content_boxes_for_strength(
     image_height: int,
     strength: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Find connected content boxes using one mask-strength setting."""
     close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (
@@ -1072,6 +1105,7 @@ def split_content_boxes_on_vertical_whitespace(
     foreground: Any,
     image_width: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Split content boxes on strong internal vertical whitespace runs."""
     split_boxes: list[tuple[int, int, int, int]] = []
 
     for box in boxes:
@@ -1087,6 +1121,7 @@ def split_content_box_on_vertical_whitespace(
     foreground: Any,
     image_width: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Split one content box around strong internal vertical whitespace."""
     x0, y0, x1, y1 = box
     width = content_box_width(box)
     height = content_box_height(box)
@@ -1146,6 +1181,7 @@ def find_vertical_whitespace_runs(
     min_width: int,
     width: int,
 ) -> list[tuple[int, int]]:
+    """Find long whitespace runs inside a content box projection."""
     runs: list[tuple[int, int]] = []
     start: int | None = None
 
@@ -1170,6 +1206,7 @@ def choose_vertical_gutters(
     gutters: list[tuple[int, int]],
     min_gutter_width: int,
 ) -> list[tuple[int, int]]:
+    """Choose the whitespace gutters that are strong enough to split on."""
     selected_gutters: list[tuple[int, int]] = []
 
     for start, end in sorted(gutters, key=lambda run: run[1] - run[0], reverse=True):
@@ -1187,6 +1224,7 @@ def trim_content_box_to_foreground(
     box: tuple[int, int, int, int],
     foreground: Any,
 ) -> tuple[int, int, int, int] | None:
+    """Trim a content box down to its tight foreground bounds."""
     x0, y0, x1, y1 = box
     crop = foreground[y0:y1, x0:x1]
     if crop.size == 0:
@@ -1205,6 +1243,7 @@ def group_content_boxes_into_blocks(
     image_width: int,
     image_height: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Group detected content boxes into larger reading-order blocks."""
     if not boxes:
         return []
 
@@ -1217,6 +1256,7 @@ def merge_same_line_content_boxes(
     boxes: list[tuple[int, int, int, int]],
     image_width: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Merge neighboring content boxes that belong to the same text line."""
     if not boxes:
         return []
 
@@ -1262,6 +1302,7 @@ def merge_stacked_content_lines(
     image_width: int,
     image_height: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Merge vertically stacked content lines that belong to one block."""
     blocks: list[tuple[int, int, int, int]] = []
 
     for line in sorted(lines, key=lambda box: (box[1], box[0])):
@@ -1298,6 +1339,7 @@ def content_boxes_are_on_same_line(
     right: tuple[int, int, int, int],
     median_height: int,
 ) -> bool:
+    """Return whether two content boxes belong to the same line."""
     left_height = content_box_height(left)
     right_height = content_box_height(right)
     height_ratio = max(left_height, right_height) / max(1, min(left_height, right_height))
@@ -1324,6 +1366,7 @@ def stacked_content_lines_belong_together(
     image_width: int,
     image_height: int,
 ) -> bool:
+    """Return whether vertically stacked lines should be merged into one block."""
     if line[1] < block[1]:
         block, line = line, block
 
@@ -1362,23 +1405,28 @@ def stacked_content_lines_belong_together(
 
 
 def content_box_median_height(boxes: list[tuple[int, int, int, int]]) -> int:
+    """Return the median height across detected content boxes."""
     heights = sorted(content_box_height(box) for box in boxes)
     return max(1, heights[len(heights) // 2])
 
 
 def content_box_width(box: tuple[int, int, int, int]) -> int:
+    """Return the width of a content box."""
     return max(0, box[2] - box[0])
 
 
 def content_box_height(box: tuple[int, int, int, int]) -> int:
+    """Return the height of a content box."""
     return max(0, box[3] - box[1])
 
 
 def content_box_center_x(box: tuple[int, int, int, int]) -> float:
+    """Return the horizontal center of a content box."""
     return (box[0] + box[2]) / 2.0
 
 
 def content_box_center_y(box: tuple[int, int, int, int]) -> float:
+    """Return the vertical center of a content box."""
     return (box[1] + box[3]) / 2.0
 
 
@@ -1386,6 +1434,7 @@ def content_box_horizontal_overlap(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
 ) -> int:
+    """Return the horizontal overlap between content boxes."""
     return max(0, min(left[2], right[2]) - max(left[0], right[0]))
 
 
@@ -1393,12 +1442,14 @@ def content_box_vertical_overlap(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
 ) -> int:
+    """Return the vertical overlap between content boxes."""
     return max(0, min(left[3], right[3]) - max(left[1], right[1]))
 
 
 def merge_content_boxes(
     boxes: list[tuple[int, int, int, int]],
 ) -> tuple[int, int, int, int]:
+    """Merge a sequence of content boxes into one bounding box."""
     return (
         min(box[0] for box in boxes),
         min(box[1] for box in boxes),
@@ -1411,6 +1462,7 @@ def merge_two_content_boxes(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
 ) -> tuple[int, int, int, int]:
+    """Merge two content boxes into one bounding box."""
     return (
         min(left[0], right[0]),
         min(left[1], right[1]),
@@ -1424,6 +1476,7 @@ def merge_boxes_into_reading_rows(
     image_width: int,
     image_height: int,
 ) -> list[tuple[int, int, int, int]]:
+    """Merge boxes into top-to-bottom reading rows."""
     if not boxes:
         return []
 
@@ -1453,6 +1506,7 @@ def merge_boxes_into_reading_rows(
 
 
 def clamp_int(value: int, min_value: int, max_value: int) -> int:
+    """Clamp an integer into an inclusive range."""
     return max(min_value, min(int(value), max_value))
 
 
@@ -1462,6 +1516,7 @@ def clamp_float(
     min_value: float,
     max_value: float,
 ) -> float:
+    """Clamp a float into an inclusive range."""
     try:
         parsed = default if value is None else float(value)
     except (TypeError, ValueError):
@@ -1470,6 +1525,7 @@ def clamp_float(
 
 
 def infer_tile_json(tile_path: Path, opt: dict) -> dict[str, Any]:
+    """Infer the JSON payload path associated with a tile image."""
     with tempfile.TemporaryDirectory(prefix="ocr_tile_json_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
 
@@ -1494,6 +1550,7 @@ def merge_ppocr_tile_results(
     overlap_px: int,
     tile_strategy: str,
 ) -> dict[str, Any]:
+    """Merge PP-OCR tile outputs back into one page-level payload."""
     first = tile_results[0]["json"] if tile_results else {}
     entries = collect_ocr_entries(tile_results)
     # Attempt to rejoin tokens that were split at tile seams.
@@ -1542,6 +1599,7 @@ def merge_ppocr_tile_results(
 
 
 def ocr_line_from_entry(entry: dict[str, Any], line_index: int) -> dict[str, Any]:
+    """Build a normalized OCR line record from one merged OCR entry."""
     text = entry.get("text", "")
     score = entry.get("score")
     box = entry.get("rec_poly") or entry.get("dt_poly")
@@ -1561,6 +1619,7 @@ def ocr_line_from_entry(entry: dict[str, Any], line_index: int) -> dict[str, Any
 
 
 def union_line_boxes(boxes: list[Any]) -> list[float]:
+    """Return the bounding box that encloses several line boxes."""
     rects = [geometry_to_bbox(box) for box in boxes]
     return [
         min(rect[0] for rect in rects),
@@ -1571,6 +1630,7 @@ def union_line_boxes(boxes: list[Any]) -> list[float]:
 
 
 def ocr_block_sort_key(block: dict[str, Any]) -> tuple[Any, ...]:
+    """Return a reading-order sort key for OCR blocks."""
     order = block.get("order")
     row = block.get("row")
     col = block.get("col")
@@ -1594,6 +1654,7 @@ def merge_ppstructure_tile_results(
     overlap_px: int,
     tile_strategy: str,
 ) -> dict[str, Any]:
+    """Merge PP-Structure tile outputs back into one page-level payload."""
     first = tile_results[0]["json"] if tile_results else {}
 
     merged = {
@@ -1642,6 +1703,7 @@ def merge_nested_overall_ocr(
     image_path: Path,
     grid_cols: int,
 ) -> dict[str, Any]:
+    """Merge nested `overall_ocr_res` payloads after tiled OCR."""
     first = {}
     entries = []
     max_row, max_col = tile_grid_max_indices(tile_results)
@@ -1696,6 +1758,7 @@ def merge_nested_overall_ocr(
 
 
 def grid_vertical_seams(image_path: Path, grid_cols: int) -> list[int]:
+    """Return the x positions of vertical seams in a fixed grid tiling layout."""
     if grid_cols <= 1:
         return []
 
@@ -1709,6 +1772,7 @@ def grid_vertical_seams(image_path: Path, grid_cols: int) -> list[int]:
 
 
 def merge_parsing_results(tile_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge tile-level parsing results into one page-level list."""
     merged_blocks = []
 
     for tile_result in tile_results:
@@ -1735,6 +1799,7 @@ def merge_layout_detection_results(
     tile_results: list[dict[str, Any]],
     image_path: Path,
 ) -> dict[str, Any] | None:
+    """Merge tile-level layout detections into page-level coordinates."""
     layout_template = None
     merged_boxes = []
 
@@ -1767,6 +1832,7 @@ def merge_layout_detection_results(
 
 
 def collect_ocr_entries(tile_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collect normalized OCR entries from merged tile payloads."""
     entries = []
     max_row, max_col = tile_grid_max_indices(tile_results)
 
@@ -1786,6 +1852,7 @@ def collect_ocr_entries(tile_results: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def tile_grid_max_indices(tile_results: list[dict[str, Any]]) -> tuple[int, int]:
+    """Return the maximum row and column indices seen in tile results."""
     max_row = 0
     max_col = 0
 
@@ -1803,6 +1870,7 @@ def collect_owned_ocr_entries_for_tile(
     max_row: int,
     max_col: int,
 ) -> list[dict[str, Any]]:
+    """Collect OCR entries that belong to one tile nominal region."""
     entries = collect_ocr_entries_for_payload(payload, tile.left, tile.top)
     owned_entries = []
 
@@ -1815,6 +1883,7 @@ def collect_owned_ocr_entries_for_tile(
 
 
 def annotate_tile_ownership(entry: dict[str, Any], tile: TileSpec) -> None:
+    """Annotate an OCR entry with its owning tile metadata."""
     entry["_tile_row"] = tile.row
     entry["_tile_col"] = tile.col
     entry["_tile_label"] = tile.label
@@ -1835,6 +1904,7 @@ def entry_center_is_in_nominal_tile(
     max_row: int,
     max_col: int,
 ) -> bool:
+    """Return whether an OCR entry center lies inside a tile nominal region."""
     bbox = geometry_to_bbox(entry.get("rec_poly"))
     if bbox_area(bbox) <= 0:
         return False
@@ -1887,6 +1957,7 @@ def nearby_dedupe_candidates(
     entry: dict[str, Any],
     buckets: dict[int, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
+    """Collect nearby OCR entries that may be duplicate fragments."""
     bucket = vertical_dedupe_bucket(entry)
     candidates: list[dict[str, Any]] = []
 
@@ -1897,12 +1968,14 @@ def nearby_dedupe_candidates(
 
 
 def vertical_dedupe_bucket(entry: dict[str, Any]) -> int:
+    """Return a coarse vertical bucket used for OCR deduping."""
     bbox = geometry_to_bbox(entry.get("rec_poly"))
     center_y = (bbox[1] + bbox[3]) / 2.0
     return int(center_y // 96)
 
 
 def entry_dedupe_preference(entry: dict[str, Any]) -> tuple[int, float, float]:
+    """Return the sort preference used when keeping one duplicate OCR entry."""
     text_len = len(normalize_for_dedupe(entry.get("text", "")))
     area = bbox_area(geometry_to_bbox(entry.get("rec_poly")))
     score = float(entry.get("score") or 0.0)
@@ -1910,6 +1983,7 @@ def entry_dedupe_preference(entry: dict[str, Any]) -> tuple[int, float, float]:
 
 
 def entries_are_duplicate(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Return whether two OCR entries should be treated as duplicates."""
     left_bbox = geometry_to_bbox(left.get("rec_poly"))
     right_bbox = geometry_to_bbox(right.get("rec_poly"))
 
@@ -1954,6 +2028,7 @@ def text_has_contained_duplicate_shape(left: Any, right: Any) -> bool:
 
 
 def truncated_prefix_match(longer: str, shorter: str) -> bool:
+    """Return whether one normalized string is a truncated prefix match."""
     if longer.startswith(shorter):
         return True
 
@@ -1965,6 +2040,7 @@ def truncated_prefix_match(longer: str, shorter: str) -> bool:
 
 
 def truncated_suffix_match(longer: str, shorter: str) -> bool:
+    """Return whether one normalized string is a truncated suffix match."""
     if longer.endswith(shorter):
         return True
 
@@ -1976,6 +2052,7 @@ def truncated_suffix_match(longer: str, shorter: str) -> bool:
 
 
 def clipped_text_overlap_match(longer: str, shorter: str) -> bool:
+    """Return whether clipped OCR strings overlap strongly enough to merge."""
     match = SequenceMatcher(None, longer, shorter).find_longest_match(
         0,
         len(longer),
@@ -1991,6 +2068,7 @@ def clipped_text_overlap_match(longer: str, shorter: str) -> bool:
 
 
 def text_similarity(left: Any, right: Any) -> float:
+    """Return a fuzzy similarity score between two OCR text fragments."""
     left_norm = normalize_for_dedupe(left)
     right_norm = normalize_for_dedupe(right)
 
@@ -2004,26 +2082,31 @@ def text_similarity(left: Any, right: Any) -> float:
 
 
 def normalize_for_dedupe(value: Any) -> str:
+    """Normalize OCR text for dedupe and seam-merge comparisons."""
     return "".join(char.lower() for char in str(value) if char.isalnum())
 
 
 def bbox_area(bbox: list[float]) -> float:
+    """Return the area of a bounding box."""
     return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
 
 
 def bbox_intersection(left: list[float], right: list[float]) -> float:
+    """Return the intersection area of two bounding boxes."""
     width = max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
     height = max(0.0, min(left[3], right[3]) - max(left[1], right[1]))
     return width * height
 
 
 def bbox_iou(left: list[float], right: list[float]) -> float:
+    """Return the intersection-over-union score for two bounding boxes."""
     intersection = bbox_intersection(left, right)
     union = bbox_area(left) + bbox_area(right) - intersection
     return intersection / union if union > 0 else 0.0
 
 
 def bbox_overlap_ratio(left: list[float], right: list[float]) -> float:
+    """Return the directional overlap ratio between two bounding boxes."""
     intersection = bbox_intersection(left, right)
     smaller_area = min(bbox_area(left), bbox_area(right))
     return intersection / smaller_area if smaller_area > 0 else 0.0
@@ -2201,6 +2284,7 @@ def overlapping_fragment_text(
     left_bbox: list[float],
     right_bbox: list[float],
 ) -> str | None:
+    """Return the overlapping text fragment shared by adjacent OCR entries."""
     if not left_text or not right_text:
         return None
 
@@ -2231,6 +2315,7 @@ def overlapping_fragment_text(
 
 
 def suffix_prefix_overlap_length(left_norm: str, right_norm: str) -> int:
+    """Return the normalized suffix/prefix overlap length between two strings."""
     max_len = min(len(left_norm), len(right_norm))
 
     for size in range(max_len, 3, -1):
@@ -2241,6 +2326,7 @@ def suffix_prefix_overlap_length(left_norm: str, right_norm: str) -> int:
 
 
 def raw_index_after_normalized_chars(text: str, normalized_count: int) -> int:
+    """Map a normalized-character index back into the raw source string."""
     seen = 0
 
     for index, char in enumerate(text):
@@ -2258,6 +2344,7 @@ def touches_vertical_seam(
     seam_x: list[float] | None,
     char_w: float,
 ) -> bool:
+    """Return whether a bounding box touches a vertical tile seam."""
     if seam_x is None:
         return True
 
@@ -2280,6 +2367,7 @@ def should_merge_across_seam(
     touches_seam: bool,
     seam_x: list[float] | None,
 ) -> bool:
+    """Return whether adjacent OCR fragments should merge across a seam."""
     if not left_text or not right_text or left_text.endswith(" "):
         return False
 
@@ -2293,6 +2381,7 @@ def should_merge_across_seam(
 
 
 def seam_separator(left_text: str, right_text: str, gap: float, char_w: float) -> str:
+    """Choose the separator to use when merging text across a seam."""
     if left_text.endswith((" ", "-", "/", "(", "“", '"')) or right_text.startswith((" ", ".", ",", ":", ";", ")", "”", '"')):
         return ""
 
@@ -2309,6 +2398,7 @@ def finalize_merge_entry(
     text_word_boxes: Any,
     angle: Any,
 ) -> dict[str, Any]:
+    """Finalize one merged OCR entry after seam-aware text combination."""
     if not changed:
         return deepcopy(original_entry)
 
@@ -2335,6 +2425,7 @@ def collect_ocr_entries_for_payload(
     offset_x: int,
     offset_y: int,
 ) -> list[dict[str, Any]]:
+    """Collect normalized OCR entries from one payload for sorting or merging."""
     rec_texts = payload.get("rec_texts") or []
     rec_scores = payload.get("rec_scores") or []
     rec_polys = payload.get("rec_polys") or []
@@ -2392,6 +2483,7 @@ def build_tile_metadata(
     # positions. To remain compatible, callers should pass two ints after
     # image_path; however, we also support older single-int usage.
     # Determine rows/cols from the tiles list if possible.
+    """Build the tile-processing metadata block stored with merged OCR output."""
     rows = None
     cols = None
     for t in tile_results:
@@ -2446,6 +2538,7 @@ def build_tile_metadata(
 
 
 def offset_nested_geometry(value: Any, offset_x: int, offset_y: int, key: str | None = None) -> Any:
+    """Apply a coordinate offset to nested geometry values."""
     if isinstance(value, dict):
         updated = {}
 
@@ -2479,6 +2572,7 @@ def offset_nested_geometry(value: Any, offset_x: int, offset_y: int, key: str | 
 
 
 def should_offset_key(key: str | None) -> bool:
+    """Return whether a nested key should receive geometry offsets."""
     if not key:
         return False
     if key in GEOMETRY_KEYS:
@@ -2487,6 +2581,7 @@ def should_offset_key(key: str | None) -> bool:
 
 
 def offset_geometry_value(value: Any, offset_x: int, offset_y: int) -> Any:
+    """Offset one geometry-shaped value by the supplied x and y amounts."""
     if looks_like_bbox(value):
         return [
             value[0] + offset_x,
@@ -2508,6 +2603,7 @@ def offset_geometry_value(value: Any, offset_x: int, offset_y: int) -> Any:
 
 
 def looks_like_bbox(value: Any) -> bool:
+    """Return whether a value looks like a four-number bounding box."""
     return (
         isinstance(value, list)
         and len(value) == 4
@@ -2516,6 +2612,7 @@ def looks_like_bbox(value: Any) -> bool:
 
 
 def looks_like_point_sequence(value: Any) -> bool:
+    """Return whether a value looks like a polygon point sequence."""
     return (
         isinstance(value, list)
         and bool(value)
@@ -2529,6 +2626,7 @@ def looks_like_point_sequence(value: Any) -> bool:
 
 
 def geometry_to_bbox(geometry: Any) -> list[float]:
+    """Convert supported geometry shapes into a plain bounding box."""
     bounds = geometry_bounds(geometry)
     if bounds is None:
         return [0.0, 0.0, 0.0, 0.0]
@@ -2537,11 +2635,13 @@ def geometry_to_bbox(geometry: Any) -> list[float]:
 
 
 def bbox_to_polygon(bbox: list[float]) -> list[list[float]]:
+    """Convert a bounding box into a four-point polygon."""
     x0, y0, x1, y1 = bbox
     return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
 
 
 def geometry_bounds(geometry: Any) -> tuple[float, float, float, float] | None:
+    """Return the geometric bounds for a supported geometry value."""
     if looks_like_bbox(geometry):
         return float(geometry[0]), float(geometry[1]), float(geometry[2]), float(geometry[3])
 
@@ -2568,6 +2668,7 @@ def geometry_bounds(geometry: Any) -> tuple[float, float, float, float] | None:
 
 
 def geometry_sort_key(geometry: Any) -> tuple[float, float, float, float]:
+    """Return a stable reading-order sort key for geometry."""
     bounds = geometry_bounds(geometry)
     if bounds is None:
         return (float("inf"), float("inf"), float("inf"), float("inf"))
@@ -2576,6 +2677,7 @@ def geometry_sort_key(geometry: Any) -> tuple[float, float, float, float]:
 
 
 def find_sort_geometry(value: Any) -> Any:
+    """Find the most useful geometry field for sorting a payload item."""
     if isinstance(value, dict):
         for key in (
             "block_bbox",

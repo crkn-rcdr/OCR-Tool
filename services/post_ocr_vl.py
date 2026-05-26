@@ -1,3 +1,5 @@
+"""Post-process suspicious OCR words with vision-language model verification."""
+
 from __future__ import annotations
 
 import base64
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_openai_compat_url(opt: dict[str, Any]) -> str:
+    """Return the configured OpenAI-compatible base URL for post-OCR VL calls."""
     return str(
         opt.get("post_ocr_vl_ollama_openai_url")
         or opt.get("post_ocr_vl_olmocr_url")
@@ -47,6 +50,7 @@ def _get_openai_compat_url(opt: dict[str, Any]) -> str:
 
 
 def _get_openai_compat_model(opt: dict[str, Any]) -> str:
+    """Return the configured OpenAI-compatible model name for post-OCR VL calls."""
     return str(
         opt.get("post_ocr_vl_ollama_openai_model")
         or opt.get("post_ocr_vl_olmocr_model")
@@ -55,6 +59,7 @@ def _get_openai_compat_model(opt: dict[str, Any]) -> str:
 
 
 def _get_openai_compat_api_key(opt: dict[str, Any]) -> str | None:
+    """Return the configured API key for OpenAI-compatible post-OCR VL calls."""
     return (
         opt.get("post_ocr_vl_ollama_openai_api_key")
         or opt.get("post_ocr_vl_olmocr_api_key")
@@ -65,6 +70,7 @@ def _get_openai_compat_api_key(opt: dict[str, Any]) -> str | None:
 
 
 def _native_ollama_chat_url(server_url: str) -> str | None:
+    """Build the native Ollama chat endpoint from a server URL when possible."""
     parsed = urlparse(server_url)
     if not parsed.scheme or not parsed.netloc:
         return None
@@ -297,6 +303,7 @@ class WordProfile:
 
 
 def supports_post_ocr_vl(method: str | None, select: str | None = None) -> bool:
+    """Return whether the selected OCR method supports post-OCR VL checks."""
     effective_method = select if select in POST_OCR_VL_METHODS else method
     return effective_method in POST_OCR_VL_METHODS
 
@@ -306,6 +313,7 @@ def apply_post_ocr_vl_check(
     out_dir: Path,
     opt: dict,
 ) -> dict[str, Any]:
+    """Audit suspicious OCR output with VL backends and record correction metadata."""
     json_path = Path(json_path)
     out_dir = Path(out_dir)
     progress_path = post_ocr_vl_progress_path(json_path)
@@ -668,6 +676,7 @@ def apply_post_ocr_vl_check(
 
 
 def get_ocr_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the nested OCR payload object used by post-OCR helpers."""
     if isinstance(payload.get("overall_ocr_res"), dict):
         return payload["overall_ocr_res"]
     return payload
@@ -681,6 +690,7 @@ def collect_word_candidates(
     word_profile: WordProfile | None = None,
     include_line_text_fallback: bool = True,
 ) -> list[WordCandidate]:
+    """Collect words or fallback lines that should be checked by VL backends."""
     text_word = ocr_payload.get("text_word") or []
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
     rec_scores = ocr_payload.get("rec_scores") or []
@@ -771,6 +781,7 @@ def collect_line_text_fallback_candidates(
     low_confidence_threshold: float,
     word_profile: WordProfile,
 ) -> list[WordCandidate]:
+    """Collect fallback line candidates when suspicious text lacks word boxes."""
     rec_texts = ocr_payload.get("rec_texts") or []
     rec_scores = ocr_payload.get("rec_scores") or []
     if not isinstance(rec_texts, list):
@@ -830,6 +841,7 @@ def collect_line_text_fallback_candidates(
 
 
 def line_has_usable_word_boxes(ocr_payload: dict[str, Any], line_index: int) -> bool:
+    """Return whether a line has usable word boxes for word-level VL checks."""
     text_word = ocr_payload.get("text_word") or []
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
     if not isinstance(text_word, list) or line_index >= len(text_word):
@@ -853,6 +865,7 @@ def line_has_usable_word_boxes(ocr_payload: dict[str, Any], line_index: int) -> 
 
 
 def line_text_tokens(text: str) -> list[LineTextToken]:
+    """Split raw line text into tokens while preserving source spans."""
     return [
         LineTextToken(
             index=index,
@@ -868,6 +881,7 @@ def group_candidate_batches(
     candidates: list[WordCandidate],
     group_lines: bool,
 ) -> list[list[WordCandidate]]:
+    """Group suspicious candidates into word or line batches for VL requests."""
     if not group_lines:
         return [[candidate] for candidate in candidates]
 
@@ -907,6 +921,7 @@ def group_candidate_batches(
 
 
 def should_process_batch_as_line(batch: list[WordCandidate]) -> bool:
+    """Return whether a candidate batch should be checked as one line image."""
     return len(batch) > 1 or any(candidate.source == "line_text" for candidate in batch)
 
 
@@ -926,6 +941,7 @@ def process_line_batch(
     applied_count: int,
     saved_tile_count: int,
 ) -> tuple[int, int, int]:
+    """Run one grouped line batch through the configured VL backend."""
     line_index = batch[0].line_index
     current_word = ", ".join(candidate.text for candidate in batch)
     current_word = current_word[:160]
@@ -1125,6 +1141,7 @@ def process_single_line_text_batch(
     saved_tile_count: int,
     ocr_payload: dict[str, Any],
 ) -> tuple[int, int, int]:
+    """Run a fallback line-text batch when word geometry is unavailable."""
     record = candidate_record(candidate)
     record["crop_type"] = "line"
     record["line_group_size"] = 1
@@ -1200,6 +1217,7 @@ def process_single_line_text_batch(
 
 
 def is_word_token(text: str) -> bool:
+    """Return whether a token looks like a natural-language word."""
     stripped = text.strip()
     if not stripped:
         return False
@@ -1212,6 +1230,7 @@ def is_word_token(text: str) -> bool:
 
 
 def is_ocr_token(text: str) -> bool:
+    """Return whether a token is suitable for OCR weirdness scoring."""
     stripped = text.strip()
     if not stripped:
         return False
@@ -1220,6 +1239,7 @@ def is_ocr_token(text: str) -> bool:
 
 
 def detect_ocr_language(ocr_payload: dict[str, Any]) -> tuple[str | None, str]:
+    """Infer the dominant OCR language for spellchecking and candidate ranking."""
     configured = extract_configured_language(ocr_payload)
     if configured:
         return configured, "metadata"
@@ -1244,6 +1264,7 @@ def detect_ocr_language(ocr_payload: dict[str, Any]) -> tuple[str | None, str]:
 
 
 def extract_configured_language(ocr_payload: dict[str, Any]) -> str | None:
+    """Extract an explicitly configured OCR language code from the payload."""
     for key in LANGUAGE_KEYS:
         language = normalize_language_code(ocr_payload.get(key))
         if language:
@@ -1262,6 +1283,7 @@ def extract_configured_language(ocr_payload: dict[str, Any]) -> str | None:
 
 
 def normalize_language_code(value: Any) -> str | None:
+    """Normalize a language name or code into a compact ISO-style code."""
     if not value:
         return None
     language = str(value).strip().casefold()
@@ -1276,6 +1298,7 @@ def normalize_language_code(value: Any) -> str | None:
 
 
 def ocr_language_sample(ocr_payload: dict[str, Any], max_chars: int = 12000) -> str:
+    """Build a representative OCR text sample for language detection."""
     texts: list[str] = []
     rec_texts = ocr_payload.get("rec_texts")
     if isinstance(rec_texts, list):
@@ -1293,6 +1316,7 @@ def ocr_language_sample(ocr_payload: dict[str, Any], max_chars: int = 12000) -> 
 
 
 def build_spellchecker(language: str | None) -> SpellCheckerAdapter | None:
+    """Build a spellchecker adapter for a detected OCR language when supported."""
     if not language:
         return None
 
@@ -1314,6 +1338,7 @@ def build_word_profile(
     ocr_payload: dict[str, Any],
     low_confidence_threshold: float,
 ) -> WordProfile:
+    """Build token frequency and confidence context used for candidate scoring."""
     language, language_source = detect_ocr_language(ocr_payload)
     spellchecker = build_spellchecker(language)
     text_word = ocr_payload.get("text_word") or []
@@ -1387,6 +1412,7 @@ def build_word_profile(
 
 
 def normalize_word_token(text: str) -> str:
+    """Normalize a token for OCR comparison and spellcheck heuristics."""
     value = str(text or "").strip()
     value = value.replace("\u2018", "'").replace("\u2019", "'").replace("`", "'")
     value = value.strip(WORD_STRIP_CHARS)
@@ -1395,10 +1421,12 @@ def normalize_word_token(text: str) -> str:
 
 
 def is_alpha_word(token: str) -> bool:
+    """Return whether a token is composed only of letters."""
     return bool(WORDISH_RE.fullmatch(token))
 
 
 def is_training_word(token: str) -> bool:
+    """Return whether a token is useful for local common-word statistics."""
     if not is_alpha_word(token):
         return False
     if not 3 <= len(token) <= 18:
@@ -1411,6 +1439,7 @@ def is_training_word(token: str) -> bool:
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
+    """Return a simple percentile estimate for a numeric sample."""
     if not values:
         return None
     ordered = sorted(values)
@@ -1419,6 +1448,7 @@ def percentile(values: list[float], fraction: float) -> float | None:
 
 
 def group_common_words_by_length(token_counts: Counter[str]) -> dict[int, list[str]]:
+    """Group the most common OCR words by length for near-match checks."""
     words_by_length: dict[int, list[str]] = {}
     for token, count in token_counts.items():
         if count < 2 or not is_alpha_word(token) or len(token) < 3:
@@ -1428,6 +1458,7 @@ def group_common_words_by_length(token_counts: Counter[str]) -> dict[int, list[s
 
 
 def levenshtein_limited(left: str, right: str, limit: int) -> int:
+    """Compute Levenshtein distance with an early-exit limit."""
     if abs(len(left) - len(right)) > limit:
         return limit + 1
 
@@ -1454,6 +1485,7 @@ def score_weirdness(
     line_score: float | None,
     low_confidence_threshold: float,
 ) -> float:
+    """Score a candidate token for how likely it is to be OCR noise."""
     return score_word_weirdness(text, line_score, low_confidence_threshold, None)[0]
 
 
@@ -1464,6 +1496,7 @@ def score_word_weirdness(
     word_profile: WordProfile | None,
     check_subtokens: bool = True,
 ) -> tuple[float, list[str]]:
+    """Combine heuristics that estimate whether a token deserves VL review."""
     stripped = text.strip()
     normalized = stripped.strip(WORD_STRIP_CHARS)
     normalized_word = normalize_word_token(stripped)
@@ -1586,6 +1619,7 @@ def score_hyphenated_subtokens(
     low_confidence_threshold: float,
     word_profile: WordProfile,
 ) -> tuple[float, list[str]]:
+    """Score each side of a hyphenated token and return the strongest signal."""
     if not re.search(r"[-/]", text):
         return 0.0, []
 
@@ -1622,15 +1656,18 @@ def score_hyphenated_subtokens(
 
 
 def has_merged_word_box_text(text: str) -> bool:
+    """Return whether a token looks like merged OCR text with punctuation inside."""
     parts = re.findall(r"[A-Za-z0-9]+", text)
     return len(parts) > 1 and bool(re.search(r"\s", text.strip()))
 
 
 def has_repeated_punctuation(text: str) -> bool:
+    """Return whether a token contains repeated punctuation artifacts."""
     return bool(re.search(r"\.{2,}|,{2,}|;{2,}|:{2,}|!{2,}|\?{2,}|--+", text))
 
 
 def has_odd_internal_casing(text: str) -> bool:
+    """Return whether a token has suspicious mixed casing inside the word."""
     if len(text) < 4:
         return False
     if text.islower() or text.isupper() or text.istitle():
@@ -1646,6 +1683,7 @@ def should_flag_near_common_word(
     anomaly_score: float | None,
     word_profile: WordProfile,
 ) -> bool:
+    """Return whether a token is suspiciously close to a common OCR word."""
     _word, distance, common_count = match
     if distance <= 1:
         return common_count >= 3 or len(token) >= 6
@@ -1669,6 +1707,7 @@ def should_spellcheck_word(
     token: str,
     word_profile: WordProfile,
 ) -> bool:
+    """Return whether a token should be considered a spellcheck miss."""
     if not is_alpha_word(token):
         return False
     if not 4 <= len(token) <= 30:
@@ -1691,6 +1730,7 @@ def spellcheck_issue_weight(
     low_confidence_threshold: float,
     word_profile: WordProfile | None = None,
 ) -> float:
+    """Return the weight contributed by a spellcheck issue for one token."""
     if issue is None:
         return 0.0
 
@@ -1717,6 +1757,7 @@ def should_flag_titlecase_spell_miss(
     token: str,
     word_profile: WordProfile | None,
 ) -> bool:
+    """Return whether a titlecase token is a conservative spellcheck miss."""
     if word_profile is None:
         return False
     if len(token) < 7:
@@ -1727,6 +1768,7 @@ def should_flag_titlecase_spell_miss(
 
 
 def is_legitimate_letter_digit_token(text: str) -> bool:
+    """Return whether an alphanumeric token is likely a legitimate code or label."""
     normalized = text.strip(".,:;!?()[]{}\"'")
     return bool(
         re.fullmatch(r"\d+(st|nd|rd|th)", normalized, flags=re.IGNORECASE)
@@ -1740,6 +1782,7 @@ def crop_word_tile(
     box: list[float],
     padding_px: int,
 ) -> tuple[Image.Image, list[int]]:
+    """Crop an image tile around one suspicious OCR word candidate."""
     x0, y0, x1, y1 = box
     width = max(1, x1 - x0)
     height = max(1, y1 - y0)
@@ -1766,6 +1809,7 @@ def crop_line_tile(
     candidates: list[WordCandidate],
     padding_px: int,
 ) -> tuple[Image.Image, list[int]]:
+    """Crop an image tile that covers a whole suspicious line batch."""
     box = line_bbox_for_candidates(ocr_payload, line_index, candidates)
     if box is None:
         raise ValueError(f"Could not resolve line box for line {line_index}")
@@ -1794,6 +1838,7 @@ def line_bbox_for_candidates(
     line_index: int,
     candidates: list[WordCandidate],
 ) -> list[float] | None:
+    """Compute a shared bounding box that covers a candidate line batch."""
     for key in ("rec_boxes", "rec_polys", "dt_polys"):
         geometries = ocr_payload.get(key)
         if isinstance(geometries, list) and line_index < len(geometries):
@@ -1819,10 +1864,12 @@ def line_bbox_for_candidates(
 
 
 def valid_bbox(box: list[float] | None) -> bool:
+    """Return whether a bounding box is present and geometrically valid."""
     return bool(box and len(box) == 4 and box[2] > box[0] and box[3] > box[1])
 
 
 def union_bbox(boxes: list[list[float]]) -> list[float] | None:
+    """Return a bounding box that encloses all supplied boxes."""
     valid_boxes = [box for box in boxes if valid_bbox(box)]
     if not valid_boxes:
         return None
@@ -1835,6 +1882,7 @@ def union_bbox(boxes: list[list[float]]) -> list[float] | None:
 
 
 def upscale_small_tile(tile: Image.Image) -> Image.Image:
+    """Upscale very small cropped tiles before sending them to VL backends."""
     min_height = 96
     max_width = 768
     if tile.height >= min_height:
@@ -1852,6 +1900,7 @@ def run_backend_check(
     original_text: str,
     opt: dict,
 ) -> str:
+    """Dispatch one cropped tile to the selected post-OCR VL backend."""
     if backend == "paddlevl":
         return request_paddlevl_word(tile, original_text, opt)
     if backend == "olmocr":
@@ -1860,6 +1909,7 @@ def run_backend_check(
 
 
 def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> str:
+    """Request a word-level correction from the PaddleOCR-VL backend."""
     base_url = str(
         opt.get("post_ocr_vl_paddlevl_url") or DEFAULT_PADDLE_VL_API_URL
     ).rstrip("/")
@@ -1923,6 +1973,7 @@ def _build_word_correction_prompt(original_text: str, model_name: str = None) ->
 
 
 def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str:
+    """Request a word-level correction from an OLMOCR-compatible backend."""
     server_url = _get_openai_compat_url(opt).rstrip("/")
     completion_url = (
         server_url
@@ -2014,6 +2065,7 @@ def request_olmocr_line(
     candidates: list[WordCandidate],
     opt: dict,
 ) -> tuple[str, dict[tuple[int, int], str]]:
+    """Request line-level corrections from an OLMOCR-compatible backend."""
     server_url = _get_openai_compat_url(opt).rstrip("/")
     completion_url = (
         server_url
@@ -2072,6 +2124,7 @@ def build_olmocr_line_prompt(
     candidates: list[WordCandidate],
     model_name: str = None,
 ) -> str:
+    """Build the line-level prompt used for grouped OLMOCR correction calls."""
     use_line_text_tokens = any(candidate.source == "line_text" for candidate in candidates)
     line_words = line_words_for_prompt(
         ocr_payload,
@@ -2143,6 +2196,7 @@ def line_words_for_prompt(
     line_index: int,
     use_line_text_tokens: bool = False,
 ) -> list[str]:
+    """Extract ordered candidate words for inclusion in a line-level prompt."""
     if use_line_text_tokens:
         rec_texts = ocr_payload.get("rec_texts") or []
         if isinstance(rec_texts, list) and line_index < len(rec_texts):
@@ -2162,6 +2216,7 @@ def parse_olmocr_line_corrections(
     candidates: list[WordCandidate],
     model_name: str = None,
 ) -> dict[tuple[int, int], str]:
+    """Parse structured line-correction output returned by an OLMOCR backend."""
     data = parse_json_response(text)
     if data is None:
         return {}
@@ -2218,6 +2273,7 @@ def candidate_from_line_correction_item(
     by_word_index: dict[int, WordCandidate],
     by_original: dict[str, list[WordCandidate]],
 ) -> WordCandidate | None:
+    """Convert one parsed line-correction item into a candidate correction record."""
     target = parse_optional_int(item.get("target") or item.get("target_index"))
     if target in by_target:
         return by_target[target]
@@ -2235,6 +2291,7 @@ def candidate_from_line_correction_item(
 
 
 def parse_json_response(text: str) -> Any:
+    """Parse a JSON response, including fenced-code variants, into Python data."""
     value = str(text or "").strip()
     if not value:
         return None
@@ -2265,6 +2322,7 @@ def choose_line_correction(
     corrected_text: str | None,
     error: Any = None,
 ) -> tuple[str | None, str]:
+    """Choose the best line-level correction for one suspicious OCR candidate."""
     if error:
         return None, "backend_error"
     if corrected_text is None:
@@ -2279,10 +2337,12 @@ def choose_line_correction(
 
 
 def candidate_key(candidate: WordCandidate) -> tuple[int, int]:
+    """Return a stable sort key for a word candidate."""
     return candidate.line_index, candidate.word_index
 
 
 def extract_paddlevl_text(data: Any) -> str:
+    """Extract the best text string from a PaddleOCR-VL response payload."""
     if not isinstance(data, dict):
         return ""
 
@@ -2317,6 +2377,7 @@ def choose_correction(
     original_text: str,
     results: list[dict[str, Any]],
 ) -> tuple[str | None, str]:
+    """Choose an accepted correction string from one backend response."""
     usable = [
         restore_missing_spacing(original_text, clean_vl_text(result.get("text", "")))
         for result in results
@@ -2338,6 +2399,7 @@ def choose_correction(
 
 
 def is_clean_correction(original_text: str, corrected_text: str) -> bool:
+    """Return whether a proposed correction is safe to apply automatically."""
     corrected = corrected_text.strip()
     if not corrected or len(corrected) > 80:
         return False
@@ -2357,6 +2419,7 @@ def apply_candidate_correction(
     candidate: WordCandidate,
     corrected_text: str,
 ) -> None:
+    """Apply one accepted correction to the OCR payload in place."""
     if candidate.source == "line_text":
         apply_line_text_correction(ocr_payload, candidate, corrected_text)
         return
@@ -2375,6 +2438,7 @@ def apply_line_text_correction(
     candidate: WordCandidate,
     corrected_text: str,
 ) -> None:
+    """Apply a text-span replacement to a fallback line-level OCR string."""
     rec_texts = ocr_payload.get("rec_texts")
     if not isinstance(rec_texts, list) or candidate.line_index >= len(rec_texts):
         return
@@ -2392,6 +2456,7 @@ def line_text_replacement_span(
     line_text: str,
     candidate: WordCandidate,
 ) -> tuple[int, int] | None:
+    """Find the character span to replace inside a line-level OCR string."""
     if (
         candidate.line_text_start is not None
         and candidate.line_text_end is not None
@@ -2421,6 +2486,7 @@ def apply_word_correction(
     word_index: int,
     corrected_text: str,
 ) -> None:
+    """Apply a word-level correction to the OCR payload arrays."""
     text_word = ocr_payload.get("text_word") or []
     if line_index >= len(text_word):
         return
@@ -2439,6 +2505,7 @@ def apply_word_correction(
 
 
 def candidate_record(candidate: WordCandidate) -> dict[str, Any]:
+    """Serialize a word candidate into progress/reporting metadata."""
     record = {
         "line_index": candidate.line_index,
         "word_index": candidate.word_index,
@@ -2456,6 +2523,7 @@ def candidate_record(candidate: WordCandidate) -> dict[str, Any]:
 
 
 def post_ocr_vl_progress_path(json_path: Path) -> Path:
+    """Return the sidecar progress file path for a post-OCR VL run."""
     return json_path.with_name(f"{json_path.stem}.post_ocr_vl_progress.json")
 
 
@@ -2464,6 +2532,7 @@ def write_post_ocr_vl_progress(
     metadata: dict[str, Any],
     **updates: Any,
 ) -> None:
+    """Write a human-readable post-OCR VL progress report beside the JSON."""
     payload = {
         "status": updates.pop("status", "running"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -2575,6 +2644,7 @@ def _parse_deepseek_ocr_response(text: str) -> str:
 
 
 def _extract_best_word_candidate(text: str, original_text: str, minimum_score: float = 0.55) -> str:
+    """Extract the best replacement token from a noisy free-form VL response."""
     value = str(text or "").strip()
     if not value:
         return ""
@@ -2640,6 +2710,7 @@ def extract_line_fallback_candidate_text(
     backend: str,
     opt: dict[str, Any],
 ) -> str:
+    """Extract a fallback token value from a line-text correction candidate."""
     value = str(text or "").strip()
     if not value:
         return ""
@@ -2666,6 +2737,7 @@ def extract_line_fallback_candidate_text(
 
 
 def clean_vl_text(text: Any, model_name: str = None) -> str:
+    """Normalize raw VL backend text before comparing or applying it."""
     value = str(text or "").strip()
     if not value:
         return ""
@@ -2708,12 +2780,14 @@ def clean_vl_text(text: Any, model_name: str = None) -> str:
 
 
 def image_to_base64(image: Image.Image) -> str:
+    """Encode a PIL image as a base64 PNG payload for API requests."""
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def resolve_image_path(payload: dict[str, Any], json_path: Path) -> Path | None:
+    """Resolve the source image path associated with an OCR JSON payload."""
     for key in ("input_path", "original_input_path"):
         raw = payload.get(key)
         if raw:
@@ -2732,6 +2806,7 @@ def resolve_image_path(payload: dict[str, Any], json_path: Path) -> Path | None:
 
 
 def normalize_backend(value: Any) -> str:
+    """Normalize a backend selection into a supported post-OCR VL backend key."""
     backend = str(value or DEFAULT_POST_OCR_VL_BACKEND).strip().lower()
     if backend in {"paddle", "paddlevl", "paddle_vl", "paddle-vl"}:
         return "paddlevl"
@@ -2743,12 +2818,14 @@ def normalize_backend(value: Any) -> str:
 
 
 def backends_for_request(backend: str) -> list[str]:
+    """Expand a backend selection into the concrete backends to call."""
     if backend == "both":
         return ["paddlevl", "olmocr"]
     return [backend]
 
 
 def geometry_to_bbox(geometry: Any) -> list[float] | None:
+    """Normalize stored OCR geometry into a plain bounding box list."""
     if hasattr(geometry, "tolist"):
         geometry = geometry.tolist()
 
@@ -2772,10 +2849,12 @@ def geometry_to_bbox(geometry: Any) -> list[float] | None:
 
 
 def normalize_for_compare(value: str) -> str:
+    """Normalize text for lenient equality checks between OCR variants."""
     return re.sub(r"\W+", "", value.casefold())
 
 
 def normalize_for_acceptance(value: str) -> str:
+    """Normalize text for stricter acceptance comparisons."""
     return " ".join(
         match.group(0).casefold()
         for match in OCR_WORDISH_RE.finditer(str(value or ""))
@@ -2783,6 +2862,7 @@ def normalize_for_acceptance(value: str) -> str:
 
 
 def restore_missing_spacing(original_text: str, corrected_text: str) -> str:
+    """Restore spaces that a backend may have dropped from a correction."""
     original = str(original_text or "").strip()
     corrected = str(corrected_text or "").strip()
     if not original or not corrected:
@@ -2869,15 +2949,18 @@ def restore_missing_spacing(original_text: str, corrected_text: str) -> str:
 
 
 def corrections_equivalent(left: str, right: str) -> bool:
+    """Return whether two correction strings are equivalent after normalization."""
     return normalize_for_acceptance(left) == normalize_for_acceptance(right)
 
 
 def safe_filename(value: str) -> str:
+    """Return a filesystem-safe filename fragment derived from free text."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
     return (cleaned or "word")[:40]
 
 
 def parse_int(value: Any, default: int, minimum: int | None = None) -> int:
+    """Parse an integer option with a fallback and optional lower bound."""
     try:
         parsed = int(float(value))
     except (TypeError, ValueError):
@@ -2888,6 +2971,7 @@ def parse_int(value: Any, default: int, minimum: int | None = None) -> int:
 
 
 def parse_float(value: Any, default: float) -> float:
+    """Parse a float option with a fallback default."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -2895,6 +2979,7 @@ def parse_float(value: Any, default: float) -> float:
 
 
 def parse_optional_int(value: Any) -> int | None:
+    """Parse an optional integer value and return `None` when unset."""
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -2902,6 +2987,7 @@ def parse_optional_int(value: Any) -> int | None:
 
 
 def parse_optional_float(value: Any) -> float | None:
+    """Parse an optional float value and return `None` when unset."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -2909,4 +2995,5 @@ def parse_optional_float(value: Any) -> float | None:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write a JSON payload with the repo standard UTF-8 formatting."""
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

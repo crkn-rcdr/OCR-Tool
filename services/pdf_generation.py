@@ -1,3 +1,5 @@
+"""Generate searchable PDFs from normalized OCR JSON and matching source images."""
+
 import json
 import re
 import traceback

@@ -1,3 +1,5 @@
+"""Send OCR run logs by email using SMTP settings from the environment."""
+
 import os
 from pathlib import Path
 import smtplib
@@ -51,6 +53,7 @@ def send_log_email(log_dir, smtp_host, smtp_port, from_email, to_email):
 
 
 def main():
+    """Load configured SMTP settings and send the current OCR log bundle."""
     send_log_email(
         log_dir=LOG_DIR,
         smtp_host=SMTP_HOST,
