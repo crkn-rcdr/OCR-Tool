@@ -890,7 +890,6 @@ compose.yaml               PaddleOCR-VL Docker services
 setup_wsl.sh               WSL setup helper
 requirements.txt           Main Windows / full environment dependencies
 requirements-wsl.txt       WSL-friendly dependency set
-testdata/source/           Bundled smoke-test corpus
 engine/                    Paddle engine setup and compatibility code
 services/
   auto_ocr.py              Auto Routing logic
@@ -909,10 +908,6 @@ services/
   constants.py             Shared file-extension/constants
   email_notify.py          Optional email log sender
   fonts/                   Fonts used for PDF generation
-tools/
-  save_tiles.py            Save demo tiles using repo tiling logic
-  compare_ocr_errors.py    Paddle vs ABBYY error workbook generator
-  compare_ocr_to_human.py  Human-transcription comparison workbook generator
 utils/                     Shared utilities
 logs/                      Run logs
 output/                    Typical output folder
