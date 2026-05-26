@@ -1017,6 +1017,7 @@ def generate_alto(
     output_dir: Path = Path("."),
     lang: str | None = None,
     method: str | None = None,
+    data_payload: dict | None = None,
 ) -> Path:
     """
     Generate an ALTO XML file from OCR JSON and an image file.
@@ -1055,8 +1056,11 @@ def generate_alto(
         SystemExit: If OCR data is missing or saving fails.
     """
 
-    with open(json_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    if data_payload is None:
+        with open(json_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        data = data_payload
 
     lines, select_paddlevl = build_alto_lines(data)
 

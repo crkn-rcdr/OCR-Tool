@@ -1,6 +1,8 @@
 """Generate searchable PDFs from normalized OCR JSON and matching source images."""
 
+import copy
 import json
+import math
 import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -190,12 +192,22 @@ def find_image_for_json(json_path, input_dir):
     # Try to read hints from the JSON itself.
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
+        data = remap_payload_to_original_image(data)
     except Exception:
         data = {}
 
     # Prefer an explicit input path recorded in the JSON.
-    input_path_field = data.get("input_path") or data.get("fileName")
-    if input_path_field:
+    input_path_candidates = [
+        data.get("original_input_path"),
+        (data.get("source_preprocessing") or {}).get("original_input_path")
+        if isinstance(data.get("source_preprocessing"), dict)
+        else None,
+        data.get("input_path"),
+        data.get("fileName"),
+    ]
+    for input_path_field in input_path_candidates:
+        if not input_path_field:
+            continue
         candidate = Path(input_path_field)
 
         if candidate.is_absolute() and candidate.exists():
@@ -231,6 +243,208 @@ def find_image_for_json(json_path, input_dir):
             return matches[0]
 
     return None
+
+
+GEOMETRY_KEYS = {
+    "bbox",
+    "box",
+    "boxes",
+    "polygon",
+    "polygons",
+    "poly",
+    "polys",
+    "points",
+    "coordinate",
+    "coordinates",
+    "dt_polys",
+    "rec_polys",
+    "rec_boxes",
+    "text_word_boxes",
+    "block_bbox",
+    "block_polygon_points",
+    "crop_box",
+}
+GEOMETRY_SUFFIXES = ("_bbox", "_box", "_boxes", "_poly", "_polys", "_points")
+GEOMETRY_SKIP_KEYS = {"source_preprocessing", "tile_processing", "post_ocr_vl_check"}
+
+
+def should_transform_key(key):
+    if not key:
+        return False
+    if key in GEOMETRY_KEYS:
+        return True
+    return key.endswith(GEOMETRY_SUFFIXES)
+
+
+def looks_like_bbox(value):
+    return (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(isinstance(item, (int, float)) for item in value)
+    )
+
+
+def looks_like_point_sequence(value):
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(
+            isinstance(point, list)
+            and len(point) == 2
+            and all(isinstance(item, (int, float)) for item in point)
+            for point in value
+        )
+    )
+
+
+def rotate_point(x, y, angle_degrees, center_x, center_y):
+    theta = math.radians(angle_degrees)
+    cos_theta = math.cos(theta)
+    sin_theta = math.sin(theta)
+    dx = float(x) - center_x
+    dy = float(y) - center_y
+    return [
+        center_x + (dx * cos_theta) - (dy * sin_theta),
+        center_y + (dx * sin_theta) + (dy * cos_theta),
+    ]
+
+
+def offset_geometry_value(value, offset_x, offset_y):
+    if looks_like_bbox(value):
+        return [
+            value[0] + offset_x,
+            value[1] + offset_y,
+            value[2] + offset_x,
+            value[3] + offset_y,
+        ]
+
+    if looks_like_point_sequence(value):
+        return [[point[0] + offset_x, point[1] + offset_y] for point in value]
+
+    if isinstance(value, dict):
+        return offset_nested_geometry(value, offset_x, offset_y)
+
+    if isinstance(value, list):
+        return [offset_geometry_value(item, offset_x, offset_y) for item in value]
+
+    return value
+
+
+def offset_nested_geometry(value, offset_x, offset_y, key=None):
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if child_key in GEOMETRY_SKIP_KEYS:
+                updated[child_key] = copy.deepcopy(child_value)
+            elif should_transform_key(child_key):
+                updated[child_key] = offset_geometry_value(
+                    child_value, offset_x, offset_y
+                )
+            else:
+                updated[child_key] = offset_nested_geometry(
+                    child_value, offset_x, offset_y, key=child_key
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_transform_key(key):
+            return offset_geometry_value(value, offset_x, offset_y)
+        return [
+            offset_nested_geometry(item, offset_x, offset_y, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def rotate_geometry_value(value, angle_degrees, width, height):
+    center_x = float(width) / 2.0
+    center_y = float(height) / 2.0
+
+    if looks_like_bbox(value):
+        x0, y0, x1, y1 = [float(v) for v in value]
+        rotated = [
+            rotate_point(x0, y0, angle_degrees, center_x, center_y),
+            rotate_point(x1, y0, angle_degrees, center_x, center_y),
+            rotate_point(x1, y1, angle_degrees, center_x, center_y),
+            rotate_point(x0, y1, angle_degrees, center_x, center_y),
+        ]
+        xs = [point[0] for point in rotated]
+        ys = [point[1] for point in rotated]
+        return [min(xs), min(ys), max(xs), max(ys)]
+
+    if looks_like_point_sequence(value):
+        return [
+            rotate_point(point[0], point[1], angle_degrees, center_x, center_y)
+            for point in value
+        ]
+
+    if isinstance(value, dict):
+        return rotate_nested_geometry(value, angle_degrees, width, height)
+
+    if isinstance(value, list):
+        return [rotate_geometry_value(item, angle_degrees, width, height) for item in value]
+
+    return value
+
+
+def rotate_nested_geometry(value, angle_degrees, width, height, key=None):
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if child_key in GEOMETRY_SKIP_KEYS:
+                updated[child_key] = copy.deepcopy(child_value)
+            elif should_transform_key(child_key):
+                updated[child_key] = rotate_geometry_value(
+                    child_value, angle_degrees, width, height
+                )
+            else:
+                updated[child_key] = rotate_nested_geometry(
+                    child_value, angle_degrees, width, height, key=child_key
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_transform_key(key):
+            return rotate_geometry_value(value, angle_degrees, width, height)
+        return [
+            rotate_nested_geometry(item, angle_degrees, width, height, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def remap_payload_to_original_image(data):
+    metadata = data.get("source_preprocessing")
+    if not isinstance(metadata, dict):
+        return data
+
+    remapped = copy.deepcopy(data)
+    width = int(metadata.get("width") or 0)
+    height = int(metadata.get("height") or 0)
+    angle = float(metadata.get("deskew_angle_degrees") or 0.0)
+    if angle and width > 0 and height > 0:
+        remapped = rotate_nested_geometry(remapped, -angle, width, height)
+
+    offset_x = int(metadata.get("coordinate_offset_x") or 0)
+    offset_y = int(metadata.get("coordinate_offset_y") or 0)
+    if offset_x or offset_y:
+        remapped = offset_nested_geometry(remapped, offset_x, offset_y)
+
+    original_input_path = (
+        metadata.get("original_input_path")
+        or remapped.get("original_input_path")
+        or remapped.get("input_path")
+    )
+    if original_input_path:
+        remapped["input_path"] = str(original_input_path)
+        remapped["original_input_path"] = str(original_input_path)
+        overall_ocr_res = remapped.get("overall_ocr_res")
+        if isinstance(overall_ocr_res, dict):
+            overall_ocr_res["input_path"] = str(original_input_path)
+
+    return remapped
 
 
 def extract_ocr_data(data):
@@ -1117,6 +1331,7 @@ def build_pdf(json_path, input_dir, method, lang, select):
             output_dir=json_path.parent,
             lang=lang,
             method=method,
+            data_payload=data,
         )
 
         output_xml = json_path.parent / f"{json_path.stem}.xml"
