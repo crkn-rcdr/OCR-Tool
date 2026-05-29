@@ -63,8 +63,10 @@ OPTION_LABELS = {
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
     "post_ocr_vl_group_lines": "Group post-OCR VL same-line candidates",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
-    "post_ocr_vl_ollama_openai_url": "Post-OCR Ollama OpenAI URL",
-    "post_ocr_vl_ollama_openai_model": "Post-OCR Ollama OpenAI model",
+    "post_ocr_vl_ollama_openai_url": "Post-OCR OpenAI-compatible URL",
+    "post_ocr_vl_ollama_openai_model": "Post-OCR OpenAI-compatible model",
+    "post_ocr_vl_chandra_url": "Post-OCR Chandra URL",
+    "post_ocr_vl_chandra_model": "Post-OCR Chandra model",
 }
 
 OPTION_ORDER = [
@@ -107,6 +109,8 @@ OPTION_ORDER = [
     "post_ocr_vl_paddlevl_url",
     "post_ocr_vl_ollama_openai_url",
     "post_ocr_vl_ollama_openai_model",
+    "post_ocr_vl_chandra_url",
+    "post_ocr_vl_chandra_model",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -128,6 +132,13 @@ TILE_DETAIL_KEYS = {
     *GRID_TILE_KEYS,
     *DOCLAYOUT_TILE_KEYS,
 }
+POST_OCR_VL_BACKEND_LABELS = {
+    "paddlevl": "PaddleVL",
+    "olmocr": "OpenAI-compatible",
+    "chandra": "Chandra",
+    "both": "PaddleVL + OpenAI-compatible",
+    "both_chandra": "PaddleVL + Chandra",
+}
 POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
@@ -141,6 +152,8 @@ POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_paddlevl_url",
     "post_ocr_vl_ollama_openai_url",
     "post_ocr_vl_ollama_openai_model",
+    "post_ocr_vl_chandra_url",
+    "post_ocr_vl_chandra_model",
 }
 
 DOCLAYOUT_DEFAULT_OPTIONS = {
@@ -183,6 +196,7 @@ def option_applies_to_strategy(key, opt):
     method = opt.get("method")
     tile_enabled = bool(opt.get("tile_source_images", False))
     strategy = tile_strategy_from_options(opt)
+    backend = str(opt.get("post_ocr_vl_backend") or "").strip().lower()
 
     if method != "PP-OCRv5" and key == "text_det_max_side_limit":
         return False
@@ -196,6 +210,15 @@ def option_applies_to_strategy(key, opt):
             and bool(opt.get("post_ocr_vl_enabled"))
             and bool(opt.get("post_ocr_vl_max_words_enabled"))
         )
+
+    if key in {"post_ocr_vl_ollama_openai_url", "post_ocr_vl_ollama_openai_model"}:
+        return backend in {"olmocr", "both"}
+
+    if key in {"post_ocr_vl_chandra_url", "post_ocr_vl_chandra_model"}:
+        return backend in {"chandra", "both_chandra"}
+
+    if key == "post_ocr_vl_paddlevl_url":
+        return backend in {"paddlevl", "both", "both_chandra"}
 
     if key in POST_OCR_VL_DETAIL_KEYS:
         return method == "PP-OCRv5" and bool(opt.get("post_ocr_vl_enabled"))
@@ -282,6 +305,10 @@ def format_option_value(key, value):
     if key == "tile_strategy":
         return TILE_STRATEGY_LABELS.get(str(value), str(value))
 
+    if key == "post_ocr_vl_backend":
+        backend = str(value or "").strip().lower()
+        return POST_OCR_VL_BACKEND_LABELS.get(backend, str(value))
+
     if isinstance(value, bool):
         return "on" if value else "off"
 
@@ -343,8 +370,11 @@ def models_for_run(opt, select=None):
         models.append(f"Tile OCR strategy: {strategy_label}")
 
     if opt.get("post_ocr_vl_enabled") and effective_method == "PP-OCRv5":
-        backend = opt.get("post_ocr_vl_backend") or "paddlevl"
-        models.append(f"Post-OCR word check: {backend}")
+        backend = str(opt.get("post_ocr_vl_backend") or "paddlevl")
+        models.append(
+            "Post-OCR word check: "
+            f"{POST_OCR_VL_BACKEND_LABELS.get(backend, backend)}"
+        )
 
     if effective_method in {"PP-OCRv5", "PP-StructureV3"} and preprocessing_steps:
         models.append(

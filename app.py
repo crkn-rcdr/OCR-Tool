@@ -13,6 +13,8 @@ from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.auto_ocr import run_auto_job
 from services.ocr_defaults import (
+    DEFAULT_CHANDRA_API_URL,
+    DEFAULT_CHANDRA_MODEL,
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
@@ -44,6 +46,13 @@ from services.ocr_defaults import (
 from services.tile_ocr import tile_grid_for_strategy
 
 LOCAL_OCR_METHODS = {"PP-OCRv5", "PP-StructureV3"}
+POST_OCR_VL_BACKEND_CHOICES = [
+    ("PaddleVL", "paddlevl"),
+    ("Chandra", "chandra"),
+    ("OpenAI-compatible", "olmocr"),
+    ("PaddleVL + Chandra", "both_chandra"),
+    ("PaddleVL + OpenAI-compatible", "both"),
+]
 
 APP_CSS = """
 #fixed-header {
@@ -290,6 +299,51 @@ def update_options(method, tile_strategy):
     )
 
 
+def normalize_post_ocr_vl_backend_choice(value):
+    """Normalize a post-OCR backend value to the supported UI keys."""
+    backend = str(value or DEFAULT_POST_OCR_VL_BACKEND).strip().lower()
+    if backend in {"paddle", "paddlevl", "paddle_vl", "paddle-vl"}:
+        return "paddlevl"
+    if backend in {"chandra", "chandra_ocr", "chandra-ocr"}:
+        return "chandra"
+    if backend in {
+        "both_chandra",
+        "chandra_both",
+        "paddlevl_chandra",
+        "paddlevl+chandra",
+        "paddlevl-chandra",
+    }:
+        return "both_chandra"
+    if backend in {"olm", "olmocr", "olm-ocr", "olm_ocr"}:
+        return "olmocr"
+    if backend == "both":
+        return "both"
+    return DEFAULT_POST_OCR_VL_BACKEND
+
+
+def update_post_ocr_vl_backend_controls(backend):
+    """Show only the configuration inputs relevant to the selected VL backend."""
+    backend = normalize_post_ocr_vl_backend_choice(backend)
+    uses_paddlevl = backend in {"paddlevl", "both", "both_chandra"}
+    uses_openai_compat = backend in {"olmocr", "both"}
+    uses_chandra = backend in {"chandra", "both_chandra"}
+    standalone_openai_compat = backend == "olmocr"
+
+    return (
+        gr.update(visible=uses_paddlevl),
+        gr.update(visible=uses_openai_compat),
+        gr.update(visible=uses_chandra),
+        gr.update(
+            interactive=standalone_openai_compat,
+            info=(
+                "Only used for the standalone OpenAI-compatible backend."
+                if standalone_openai_compat
+                else "Ignored unless backend is standalone OpenAI-compatible."
+            ),
+        ),
+    )
+
+
 def build_paddle_options(
     language,
     use_textline_orientation,
@@ -356,10 +410,14 @@ def build_post_ocr_vl_options(
     post_ocr_vl_paddlevl_url,
     post_ocr_vl_ollama_openai_url,
     post_ocr_vl_ollama_openai_model,
+    post_ocr_vl_chandra_url,
+    post_ocr_vl_chandra_model,
 ):
     return {
         "post_ocr_vl_enabled": bool(post_ocr_vl_enabled),
-        "post_ocr_vl_backend": post_ocr_vl_backend or DEFAULT_POST_OCR_VL_BACKEND,
+        "post_ocr_vl_backend": normalize_post_ocr_vl_backend_choice(
+            post_ocr_vl_backend
+        ),
         "post_ocr_vl_candidate_mode": (
             post_ocr_vl_candidate_mode or DEFAULT_POST_OCR_VL_CANDIDATE_MODE
         ),
@@ -394,6 +452,12 @@ def build_post_ocr_vl_options(
         ),
         "post_ocr_vl_ollama_openai_model": (
             post_ocr_vl_ollama_openai_model or DEFAULT_OLLAMA_OPENAI_MODEL
+        ),
+        "post_ocr_vl_chandra_url": (
+            post_ocr_vl_chandra_url or DEFAULT_CHANDRA_API_URL
+        ),
+        "post_ocr_vl_chandra_model": (
+            post_ocr_vl_chandra_model or DEFAULT_CHANDRA_MODEL
         ),
     }
 
@@ -438,6 +502,8 @@ def submit_config(
     post_ocr_vl_paddlevl_url,
     post_ocr_vl_ollama_openai_url,
     post_ocr_vl_ollama_openai_model,
+    post_ocr_vl_chandra_url,
+    post_ocr_vl_chandra_model,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -521,12 +587,14 @@ def submit_config(
                     post_ocr_vl_low_confidence_threshold,
                     post_ocr_vl_apply_corrections,
                     post_ocr_vl_save_tiles,
-                    post_ocr_vl_group_lines,
-                    post_ocr_vl_paddlevl_url,
-                    post_ocr_vl_ollama_openai_url,
-                    post_ocr_vl_ollama_openai_model,
-                )
+                post_ocr_vl_group_lines,
+                post_ocr_vl_paddlevl_url,
+                post_ocr_vl_ollama_openai_url,
+                post_ocr_vl_ollama_openai_model,
+                post_ocr_vl_chandra_url,
+                post_ocr_vl_chandra_model,
             )
+        )
         else:
             opt["post_ocr_vl_enabled"] = False
       
@@ -677,12 +745,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         )
 
         post_ocr_vl_backend = gr.Dropdown(
-            choices=[
-                ("Ollama OpenAI", "olmocr"),
-                ("PaddleVL", "paddlevl"),
-                ("Both", "both"),
-            ],
-            value=DEFAULT_POST_OCR_VL_BACKEND,
+            choices=POST_OCR_VL_BACKEND_CHOICES,
+            value=normalize_post_ocr_vl_backend_choice(DEFAULT_POST_OCR_VL_BACKEND),
             label="Post-OCR VL Backend",
         )
 
@@ -735,32 +799,62 @@ with gr.Blocks(css=APP_CSS) as demo:
 
         post_ocr_vl_group_lines = gr.Checkbox(
             value=DEFAULT_POST_OCR_VL_GROUP_LINES,
-            label="Group same-line suspicious words for Ollama OpenAI.",
+            label="Group same-line suspicious words for OpenAI-compatible backend.",
+            interactive=normalize_post_ocr_vl_backend_choice(DEFAULT_POST_OCR_VL_BACKEND) == "olmocr",
+            info="Only used for the standalone OpenAI-compatible backend.",
         )
 
-        post_ocr_vl_paddlevl_url = gr.Textbox(
-            label="PaddleVL API URL",
-            value=DEFAULT_PADDLE_VL_API_URL,
-            info="Used when backend is PaddleVL.",
-        )
+        with gr.Column(
+            visible=normalize_post_ocr_vl_backend_choice(DEFAULT_POST_OCR_VL_BACKEND)
+            in {"paddlevl", "both", "both_chandra"}
+        ) as post_ocr_vl_paddlevl_options:
+            post_ocr_vl_paddlevl_url = gr.Textbox(
+                label="PaddleVL API URL",
+                value=DEFAULT_PADDLE_VL_API_URL,
+                info="Used when backend includes PaddleVL.",
+            )
 
-        post_ocr_vl_ollama_openai_url = gr.Textbox(
-            label="Ollama OpenAI API URL",
-            value=DEFAULT_OLLAMA_OPENAI_API_URL,
-            info="Used when backend is Ollama OpenAI; requests go to /chat/completions.",
-        )
+        with gr.Column(
+            visible=normalize_post_ocr_vl_backend_choice(DEFAULT_POST_OCR_VL_BACKEND)
+            in {"olmocr", "both"}
+        ) as post_ocr_vl_openai_options:
+            post_ocr_vl_ollama_openai_url = gr.Textbox(
+                label="OpenAI-Compatible API URL",
+                value=DEFAULT_OLLAMA_OPENAI_API_URL,
+                info="Used when backend includes the generic OpenAI-compatible path; requests go to /chat/completions.",
+            )
 
-        post_ocr_vl_ollama_openai_model = gr.Dropdown(
-            label="Ollama OpenAI Model",
-            choices=[
-                ("Chandra OCR 2", "fredrezones55/chandra-ocr-2"),
-                ("olmOCR 2", "richardyoung/olmocr2"),
-                ("DeepSeek OCR 3B", "deepseek-ocr:3b"),
-            ],
-            value=DEFAULT_OLLAMA_OPENAI_MODEL,
-            allow_custom_value=True,
-            info="Any model name served by the OpenAI-compatible endpoint, for example fredrezones55/chandra-ocr-2, richardyoung/olmocr2, or deepseek-ocr:3b.",
-        )
+            post_ocr_vl_ollama_openai_model = gr.Dropdown(
+                label="OpenAI-Compatible Model",
+                choices=[
+                    ("olmOCR 2", "richardyoung/olmocr2"),
+                    ("DeepSeek OCR 3B", "deepseek-ocr:3b"),
+                ],
+                value=DEFAULT_OLLAMA_OPENAI_MODEL,
+                allow_custom_value=True,
+                info="Any non-Chandra model served by the OpenAI-compatible endpoint, for example richardyoung/olmocr2 or deepseek-ocr:3b.",
+            )
+
+        with gr.Column(
+            visible=normalize_post_ocr_vl_backend_choice(DEFAULT_POST_OCR_VL_BACKEND)
+            in {"chandra", "both_chandra"}
+        ) as post_ocr_vl_chandra_options:
+            post_ocr_vl_chandra_url = gr.Textbox(
+                label="Chandra API URL",
+                value=DEFAULT_CHANDRA_API_URL,
+                info="Used when backend includes Chandra; requests go to /chat/completions.",
+            )
+
+            post_ocr_vl_chandra_model = gr.Dropdown(
+                label="Chandra Model",
+                choices=[
+                    ("Chandra OCR 2 (local GGUF)", "mradermacher/chandra-ocr-2-GGUF:Q4_K_M"),
+                    ("Chandra OCR 2 (Ollama)", "fredrezones55/chandra-ocr-2"),
+                ],
+                value=DEFAULT_CHANDRA_MODEL,
+                allow_custom_value=True,
+                info="Any Chandra model served by the selected Chandra endpoint.",
+            )
 
     # PaddleVL-specific OCR options.
     with gr.Column(visible=False) as paddlevl_options:
@@ -808,7 +902,7 @@ with gr.Blocks(css=APP_CSS) as demo:
         text_det_max_side_limit = gr.Slider(
             minimum=1000,
             maximum=20000,
-            value=12000,
+            value=DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
             step=1000,
             label="Max Side Limit",
         )
@@ -903,6 +997,8 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_ollama_openai_url,
         post_ocr_vl_ollama_openai_model,
+        post_ocr_vl_chandra_url,
+        post_ocr_vl_chandra_model,
     ]
 
     # Update visible OCR option sections
@@ -944,6 +1040,17 @@ with gr.Blocks(css=APP_CSS) as demo:
         outputs=post_ocr_vl_max_words,
     )
 
+    post_ocr_vl_backend.change(
+        fn=update_post_ocr_vl_backend_controls,
+        inputs=post_ocr_vl_backend,
+        outputs=[
+            post_ocr_vl_paddlevl_options,
+            post_ocr_vl_openai_options,
+            post_ocr_vl_chandra_options,
+            post_ocr_vl_group_lines,
+        ],
+    )
+
 
 
     # Open a folder selection dialog for the input folder.
@@ -970,15 +1077,22 @@ with gr.Blocks(css=APP_CSS) as demo:
             gr.update(interactive=True)
         ]
 
-    def after_run(post_ocr_vl_max_words_enabled_value):
+    def after_run(post_ocr_vl_max_words_enabled_value, post_ocr_vl_backend_value):
         """
         Re-enable UI components after OCR processing completes.
         """
         updates = []
+        normalized_backend = normalize_post_ocr_vl_backend_choice(
+            post_ocr_vl_backend_value
+        )
         for component in ui_components:
             if component is post_ocr_vl_max_words:
                 updates.append(
                     gr.update(interactive=bool(post_ocr_vl_max_words_enabled_value))
+                )
+            elif component is post_ocr_vl_group_lines:
+                updates.append(
+                    gr.update(interactive=(normalized_backend == "olmocr"))
                 )
             else:
                 updates.append(gr.update(interactive=True))
@@ -1044,11 +1158,13 @@ with gr.Blocks(css=APP_CSS) as demo:
         post_ocr_vl_paddlevl_url,
         post_ocr_vl_ollama_openai_url,
         post_ocr_vl_ollama_openai_model,
+        post_ocr_vl_chandra_url,
+        post_ocr_vl_chandra_model,
     ],
     outputs=output
     ).then(
     fn=after_run,
-    inputs=post_ocr_vl_max_words_enabled,
+    inputs=[post_ocr_vl_max_words_enabled, post_ocr_vl_backend],
     outputs=[*ui_components, stop_btn]
     )
 

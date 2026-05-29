@@ -24,6 +24,8 @@ from PIL import Image
 from spellchecker import SpellChecker
 
 from services.ocr_defaults import (
+    DEFAULT_CHANDRA_API_URL,
+    DEFAULT_CHANDRA_MODEL,
     DEFAULT_OLLAMA_OPENAI_API_URL,
     DEFAULT_OLLAMA_OPENAI_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
@@ -40,8 +42,36 @@ from services.ocr_defaults import (
 logger = logging.getLogger(__name__)
 
 
-def _get_openai_compat_url(opt: dict[str, Any]) -> str:
+def _legacy_chandra_model(opt: dict[str, Any]) -> str | None:
+    """Return a legacy generic OpenAI-compatible model when it clearly targets Chandra."""
+    model = opt.get("post_ocr_vl_ollama_openai_model") or opt.get("post_ocr_vl_olmocr_model")
+    if model and _is_chandra_model(str(model)):
+        return str(model)
+    return None
+
+
+def _legacy_chandra_url(opt: dict[str, Any]) -> str | None:
+    """Return a legacy generic OpenAI-compatible URL when it was used for Chandra."""
+    if not _legacy_chandra_model(opt):
+        return None
+    url = opt.get("post_ocr_vl_ollama_openai_url") or opt.get("post_ocr_vl_olmocr_url")
+    return str(url) if url else None
+
+
+def _normalize_openai_backend_name(backend: Any) -> str:
+    """Normalize an OpenAI-compatible backend key to either generic or Chandra."""
+    return "chandra" if str(backend or "").strip().lower() == "chandra" else "olmocr"
+
+
+def _get_openai_compat_url(opt: dict[str, Any], backend: str = "olmocr") -> str:
     """Return the configured OpenAI-compatible base URL for post-OCR VL calls."""
+    backend = _normalize_openai_backend_name(backend)
+    if backend == "chandra":
+        return str(
+            opt.get("post_ocr_vl_chandra_url")
+            or _legacy_chandra_url(opt)
+            or DEFAULT_CHANDRA_API_URL
+        )
     return str(
         opt.get("post_ocr_vl_ollama_openai_url")
         or opt.get("post_ocr_vl_olmocr_url")
@@ -49,8 +79,15 @@ def _get_openai_compat_url(opt: dict[str, Any]) -> str:
     )
 
 
-def _get_openai_compat_model(opt: dict[str, Any]) -> str:
+def _get_openai_compat_model(opt: dict[str, Any], backend: str = "olmocr") -> str:
     """Return the configured OpenAI-compatible model name for post-OCR VL calls."""
+    backend = _normalize_openai_backend_name(backend)
+    if backend == "chandra":
+        return str(
+            opt.get("post_ocr_vl_chandra_model")
+            or _legacy_chandra_model(opt)
+            or DEFAULT_CHANDRA_MODEL
+        )
     return str(
         opt.get("post_ocr_vl_ollama_openai_model")
         or opt.get("post_ocr_vl_olmocr_model")
@@ -58,8 +95,19 @@ def _get_openai_compat_model(opt: dict[str, Any]) -> str:
     )
 
 
-def _get_openai_compat_api_key(opt: dict[str, Any]) -> str | None:
+def _get_openai_compat_api_key(opt: dict[str, Any], backend: str = "olmocr") -> str | None:
     """Return the configured API key for OpenAI-compatible post-OCR VL calls."""
+    backend = _normalize_openai_backend_name(backend)
+    if backend == "chandra":
+        return (
+            opt.get("post_ocr_vl_chandra_api_key")
+            or opt.get("post_ocr_vl_ollama_openai_api_key")
+            or opt.get("post_ocr_vl_olmocr_api_key")
+            or os.getenv("CHANDRA_API_KEY")
+            or os.getenv("OLLAMA_OPENAI_API_KEY")
+            or os.getenv("OPENAI_COMPAT_API_KEY")
+            or os.getenv("OLMOCR_API_KEY")
+        )
     return (
         opt.get("post_ocr_vl_ollama_openai_api_key")
         or opt.get("post_ocr_vl_olmocr_api_key")
@@ -67,6 +115,15 @@ def _get_openai_compat_api_key(opt: dict[str, Any]) -> str | None:
         or os.getenv("OPENAI_COMPAT_API_KEY")
         or os.getenv("OLMOCR_API_KEY")
     )
+
+
+def _extract_openai_message_text(data: dict[str, Any]) -> str:
+    """Extract the best available assistant text from an OpenAI-style response."""
+    message = data.get("choices", [{}])[0].get("message", {})
+    content = message.get("content", "")
+    if str(content or "").strip():
+        return str(content)
+    return str(message.get("reasoning_content", "") or "")
 
 
 def _native_ollama_chat_url(server_url: str) -> str | None:
@@ -392,7 +449,7 @@ def apply_post_ocr_vl_check(
     backend_order = backends_for_request(metadata["backend"])
 
     include_line_text_fallback = any(
-        backend in {"olmocr", "paddlevl"} for backend in backend_order
+        backend in {"olmocr", "chandra", "paddlevl"} for backend in backend_order
     )
 
     suspicious_word_count = len(
@@ -421,7 +478,9 @@ def apply_post_ocr_vl_check(
     metadata["line_text_fallback_candidate_count"] = sum(
         1 for candidate in candidates if candidate.source == "line_text"
     )
-    openai_model_name = _get_openai_compat_model(opt) if "olmocr" in backend_order else ""
+    openai_model_name = (
+        _get_openai_compat_model(opt, "olmocr") if "olmocr" in backend_order else ""
+    )
     metadata["line_grouping_active"] = (
         metadata["group_line_candidates"]
         and backend_order == ["olmocr"]
@@ -1903,8 +1962,8 @@ def run_backend_check(
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
     if backend == "paddlevl":
         return request_paddlevl_word(tile, original_text, opt)
-    if backend == "olmocr":
-        return request_olmocr_word(tile, original_text, opt)
+    if backend in {"olmocr", "chandra"}:
+        return request_olmocr_word(tile, original_text, opt, backend=backend)
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
@@ -1972,15 +2031,21 @@ def _build_word_correction_prompt(original_text: str, model_name: str = None) ->
     )
 
 
-def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str:
+def request_olmocr_word(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    backend: str = "olmocr",
+) -> str:
     """Request a word-level correction from an OLMOCR-compatible backend."""
-    server_url = _get_openai_compat_url(opt).rstrip("/")
+    backend = _normalize_openai_backend_name(backend)
+    server_url = _get_openai_compat_url(opt, backend).rstrip("/")
     completion_url = (
         server_url
         if server_url.endswith("/chat/completions")
         else f"{server_url}/chat/completions"
     )
-    model = _get_openai_compat_model(opt)
+    model = _get_openai_compat_model(opt, backend)
     prompt = _build_word_correction_prompt(original_text, model_name=model)
     payload = {
         "model": model,
@@ -2002,7 +2067,7 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         "max_tokens": 32,
     }
     headers = {"Content-Type": "application/json"}
-    api_key = _get_openai_compat_api_key(opt)
+    api_key = _get_openai_compat_api_key(opt, backend)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -2016,8 +2081,7 @@ def request_olmocr_word(tile: Image.Image, original_text: str, opt: dict) -> str
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
 
     data = response.json()
-    message = data.get("choices", [{}])[0].get("message", {})
-    content = message.get("content", "")
+    content = _extract_openai_message_text(data)
     if _is_chandra_model(model):
         if not str(content or "").strip():
             native_url = _native_ollama_chat_url(server_url)
@@ -2064,15 +2128,17 @@ def request_olmocr_line(
     ocr_payload: dict[str, Any],
     candidates: list[WordCandidate],
     opt: dict,
+    backend: str = "olmocr",
 ) -> tuple[str, dict[tuple[int, int], str]]:
     """Request line-level corrections from an OLMOCR-compatible backend."""
-    server_url = _get_openai_compat_url(opt).rstrip("/")
+    backend = _normalize_openai_backend_name(backend)
+    server_url = _get_openai_compat_url(opt, backend).rstrip("/")
     completion_url = (
         server_url
         if server_url.endswith("/chat/completions")
         else f"{server_url}/chat/completions"
     )
-    model = _get_openai_compat_model(opt)
+    model = _get_openai_compat_model(opt, backend)
     line_index = candidates[0].line_index
     prompt = build_olmocr_line_prompt(ocr_payload, line_index, candidates, model_name=model)
     payload = {
@@ -2095,7 +2161,7 @@ def request_olmocr_line(
         "max_tokens": min(512, max(128, len(candidates) * 64)),
     }
     headers = {"Content-Type": "application/json"}
-    api_key = _get_openai_compat_api_key(opt)
+    api_key = _get_openai_compat_api_key(opt, backend)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -2109,11 +2175,7 @@ def request_olmocr_line(
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
 
     data = response.json()
-    content = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
+    content = _extract_openai_message_text(data)
     text = str(content or "").strip()
     return text, parse_olmocr_line_corrections(text, candidates, model_name=model)
 
@@ -2715,8 +2777,8 @@ def extract_line_fallback_candidate_text(
     if not value:
         return ""
 
-    if backend == "olmocr":
-        model = _get_openai_compat_model(opt)
+    if backend in {"olmocr", "chandra"}:
+        model = _get_openai_compat_model(opt, backend)
         if _is_chandra_model(model):
             return clean_vl_text(
                 _extract_chandra_word_candidate(value, original_text),
@@ -2810,8 +2872,18 @@ def normalize_backend(value: Any) -> str:
     backend = str(value or DEFAULT_POST_OCR_VL_BACKEND).strip().lower()
     if backend in {"paddle", "paddlevl", "paddle_vl", "paddle-vl"}:
         return "paddlevl"
+    if backend in {"chandra", "chandra_ocr", "chandra-ocr"}:
+        return "chandra"
     if backend in {"olm", "olmocr", "olm-ocr", "olm_ocr"}:
         return "olmocr"
+    if backend in {
+        "both_chandra",
+        "chandra_both",
+        "paddlevl_chandra",
+        "paddlevl+chandra",
+        "paddlevl-chandra",
+    }:
+        return "both_chandra"
     if backend == "both":
         return "both"
     return DEFAULT_POST_OCR_VL_BACKEND
@@ -2821,6 +2893,8 @@ def backends_for_request(backend: str) -> list[str]:
     """Expand a backend selection into the concrete backends to call."""
     if backend == "both":
         return ["paddlevl", "olmocr"]
+    if backend == "both_chandra":
+        return ["paddlevl", "chandra"]
     return [backend]
 
 

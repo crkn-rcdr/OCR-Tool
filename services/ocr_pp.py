@@ -1,5 +1,7 @@
 """Run local Paddle OCR jobs, including tiling, normalization, and outputs."""
 
+import copy
+import gc
 import json
 import threading
 from pathlib import Path
@@ -25,6 +27,7 @@ from services.tile_ocr import (
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
+from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
 
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
@@ -42,6 +45,14 @@ RUN_LOCK = threading.Lock()
 
 # Global flag to signal stopping the OCR process
 STOP_FLAG = False
+
+GPU_RECOVERY_ERROR_MARKERS = (
+    "cudnn_status_not_supported",
+    "cudnn error(3000)",
+    "cuda error(2)",
+    "cudaerrormemoryallocation",
+    "out of memory",
+)
 
 
 def describe_tiling(opt):
@@ -101,7 +112,118 @@ def stop_ocr():
     """
     global STOP_FLAG
     STOP_FLAG = True
-   
+
+
+def is_recoverable_gpu_ocr_error(exc: Exception, opt: dict) -> bool:
+    """Return whether an OCR exception should trigger a safer retry path."""
+    device = str(opt.get("device") or "").strip().lower()
+    if device.startswith("cpu"):
+        return False
+
+    message = str(exc).lower()
+    return any(marker in message for marker in GPU_RECOVERY_ERROR_MARKERS)
+
+
+def release_paddle_gpu_memory() -> None:
+    """Best-effort cleanup after a failed GPU OCR attempt."""
+    gc.collect()
+
+    try:
+        import paddle
+
+        if paddle.device.is_compiled_with_cuda():
+            paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
+    """Build safer retry configurations for PP-OCRv5 GPU/CPU recovery."""
+    if opt.get("method") != "PP-OCRv5":
+        return []
+
+    base = copy.deepcopy(opt)
+    safe_side_limit = DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+    base_limit = int(base.get("text_det_limit_side_len") or safe_side_limit)
+    base_max_side = int(base.get("text_det_max_side_limit") or safe_side_limit)
+    base_rec_batch = int(base.get("text_recognition_batch_size") or 1)
+
+    attempts: list[tuple[dict, str]] = []
+
+    reduced_gpu = copy.deepcopy(base)
+    reduced_gpu["device"] = "gpu"
+    reduced_gpu["text_det_limit_side_len"] = min(base_limit, safe_side_limit)
+    reduced_gpu["text_det_max_side_limit"] = min(base_max_side, safe_side_limit)
+    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, 8)
+    if reduced_gpu != base:
+        attempts.append(
+            (
+                reduced_gpu,
+                "completed after retrying on GPU with reduced detector limits",
+            )
+        )
+
+    cpu_fallback = copy.deepcopy(reduced_gpu)
+    cpu_fallback["device"] = "cpu"
+    cpu_fallback["text_recognition_batch_size"] = min(
+        int(cpu_fallback.get("text_recognition_batch_size") or 1),
+        4,
+    )
+    attempts.append(
+        (
+            cpu_fallback,
+            "completed using CPU fallback after GPU memory/cuDNN failure",
+        )
+    )
+
+    return attempts
+
+
+def cleanup_partial_ocr_json_outputs(out_dir: Path, stem: str) -> None:
+    """Remove partial OCR JSON outputs before a retry attempt."""
+    for candidate in out_dir.glob(f"{stem}*.json"):
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
+
+def save_local_ocr_results_with_recovery(
+    image_path: Path,
+    out_dir: Path,
+    opt: dict,
+) -> str | None:
+    """Run local OCR and retry with safer settings on recoverable GPU failures."""
+    cleanup_partial_ocr_json_outputs(out_dir, image_path.stem)
+
+    attempt_queue: list[tuple[dict, str | None]] = [(opt, None)]
+    attempt_queue.extend(build_safe_ppocr_retry_options(opt))
+    allow_retries = True
+    last_exc: Exception | None = None
+
+    for attempt_opt, success_note in attempt_queue:
+        cleanup_partial_ocr_json_outputs(out_dir, image_path.stem)
+        try:
+            output = engine.infer(str(image_path), attempt_opt)
+            for res in output:
+                res.save_to_json(save_path=str(out_dir))
+            return success_note
+        except Exception as exc:
+            last_exc = exc
+            if allow_retries and is_recoverable_gpu_ocr_error(exc, attempt_opt):
+                allow_retries = False
+                release_paddle_gpu_memory()
+                continue
+            if success_note is not None:
+                release_paddle_gpu_memory()
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+
+    raise RuntimeError(f"OCR did not produce output for image: {image_path.name}")
+
 
 def run_ocr_job(input_path, output_root, opt,select=None):
     """
@@ -176,7 +298,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                final_json = run_ocr_for_image(
+                final_json, recovery_note = run_ocr_for_image(
                     image_path=input_path,
                     out_dir=out_dir,
                     opt=opt,
@@ -184,6 +306,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 )
 
                 success_count += 1
+                if recovery_note:
+                    messages.append(f"{input_path.name} {recovery_note}")
                 if tile_source_images and supports_tiled_ocr(method, select):
                     messages.append(
                         f"{input_path.name} created from {describe_tiling(opt)} and saved in {out_dir}"
@@ -247,7 +371,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         return
 
                     try:
-                        run_ocr_for_image(
+                        _, recovery_note = run_ocr_for_image(
                             image_path=img,
                             out_dir=out_dir,
                             opt=opt,
@@ -257,6 +381,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         success_count += 1
                         folder_success += 1
 
+                        if recovery_note:
+                            messages.append(f"{img.name} {recovery_note}")
                         if tile_source_images and supports_tiled_ocr(method, select):
                             messages.append(
                                 f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
@@ -360,12 +486,9 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
         )
         maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
         maybe_apply_output_text_cleanup(final_json, opt)
-        return final_json
+        return final_json, None
 
-    output = engine.infer(str(ocr_image_path), opt)
-
-    for res in output:
-        res.save_to_json(save_path=str(out_dir))
+    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, opt)
 
     json_file = out_dir / f"{ocr_image_path.stem}_res.json"
     if not json_file.exists():
@@ -381,7 +504,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
     maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
     maybe_apply_output_text_cleanup(final_json, opt)
 
-    return final_json
+    return final_json, recovery_note
 
 
 def maybe_apply_post_ocr_vl_check(

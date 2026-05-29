@@ -55,6 +55,7 @@ class PaddleEngine:
        
         return {
             "method": opt.get("method"),
+            "device": opt.get("device"),
             "use_doc_orientation_classify": opt.get(
                 "use_doc_orientation_classify", False
             ),
@@ -145,6 +146,8 @@ class PaddleEngine:
             "text_recognition_batch_size": params["text_recognition_batch_size"],
         }
 
+        if params["device"] is not None:
+            kwargs["device"] = params["device"]
         if params["lang"] is not None:
             kwargs["lang"] = params["lang"]
         print("[DEBUG] init kwargs:", kwargs, flush=True)

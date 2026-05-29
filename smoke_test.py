@@ -2,6 +2,8 @@ import argparse
 from pathlib import Path
 
 from services.ocr_defaults import (
+    DEFAULT_CHANDRA_API_URL,
+    DEFAULT_CHANDRA_MODEL,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OLLAMA_OPENAI_API_URL,
@@ -272,7 +274,7 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         dest="post_ocr_vl_group_lines",
         default=DEFAULT_POST_OCR_VL_GROUP_LINES,
-        help="Disable grouped line crops for same-line Ollama OpenAI candidates.",
+        help="Disable grouped line crops for same-line OpenAI-compatible candidates.",
     )
     parser.add_argument(
         "--post-ocr-vl-paddlevl-url",
@@ -284,14 +286,26 @@ def parse_args() -> argparse.Namespace:
         "--post-ocr-vl-olmocr-url",
         dest="post_ocr_vl_ollama_openai_url",
         default=DEFAULT_OLLAMA_OPENAI_API_URL,
-        help="OpenAI-compatible Ollama API URL for post-OCR word checks.",
+        help="OpenAI-compatible API URL for generic post-OCR word checks.",
     )
     parser.add_argument(
         "--post-ocr-vl-ollama-openai-model",
         "--post-ocr-vl-olmocr-model",
         dest="post_ocr_vl_ollama_openai_model",
         default=DEFAULT_OLLAMA_OPENAI_MODEL,
-        help="Model name served by the OpenAI-compatible endpoint, for example fredrezones55/chandra-ocr-2, richardyoung/olmocr2, or deepseek-ocr:3b.",
+        help="Model name served by the generic OpenAI-compatible endpoint, for example richardyoung/olmocr2 or deepseek-ocr:3b.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-chandra-url",
+        dest="post_ocr_vl_chandra_url",
+        default=DEFAULT_CHANDRA_API_URL,
+        help="OpenAI-compatible URL for the dedicated Chandra endpoint.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-chandra-model",
+        dest="post_ocr_vl_chandra_model",
+        default=DEFAULT_CHANDRA_MODEL,
+        help="Model name served by the dedicated Chandra endpoint.",
     )
     return parser.parse_args()
 
@@ -362,6 +376,8 @@ def build_options(args: argparse.Namespace) -> dict:
                 "post_ocr_vl_paddlevl_url": args.post_ocr_vl_paddlevl_url,
                 "post_ocr_vl_ollama_openai_url": args.post_ocr_vl_ollama_openai_url,
                 "post_ocr_vl_ollama_openai_model": args.post_ocr_vl_ollama_openai_model,
+                "post_ocr_vl_chandra_url": args.post_ocr_vl_chandra_url,
+                "post_ocr_vl_chandra_model": args.post_ocr_vl_chandra_model,
             }
         )
 

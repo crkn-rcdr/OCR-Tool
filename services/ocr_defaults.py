@@ -60,6 +60,17 @@ DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS = True
 DEFAULT_POST_OCR_VL_SAVE_TILES = False
 DEFAULT_POST_OCR_VL_GROUP_LINES = True
 DEFAULT_PADDLE_VL_API_URL = os.getenv("PADDLE_VL_API_URL", "http://127.0.0.1:8080")
+DEFAULT_CHANDRA_API_URL = os.getenv(
+    "CHANDRA_API_URL",
+    os.getenv(
+        "CHANDRA_OPENAI_API_URL",
+        os.getenv("CHANDRA_OCR_API_URL", "http://127.0.0.1:8000/v1"),
+    ),
+)
+DEFAULT_CHANDRA_MODEL = os.getenv(
+    "CHANDRA_MODEL",
+    os.getenv("CHANDRA_OCR_MODEL", "mradermacher/chandra-ocr-2-GGUF:Q4_K_M"),
+)
 DEFAULT_OLLAMA_OPENAI_API_URL = os.getenv(
     "OLLAMA_OPENAI_API_URL",
     os.getenv("OPENAI_COMPAT_API_URL", os.getenv("OLMOCR_API_URL", "http://localhost:11434/v1")),

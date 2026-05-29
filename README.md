@@ -55,7 +55,9 @@ If you already know which environment you want:
 After setup:
 
 1. optionally start `PaddleVL` with `docker compose up -d`
-2. optionally start Ollama if you want post-OCR VL through an OpenAI-compatible endpoint
+2. optionally start a post-OCR VL endpoint:
+   - `Ollama` or another generic OpenAI-compatible endpoint for `olmocr` / `deepseek-ocr`
+   - `Chandra` on its own endpoint if you want the dedicated Chandra backend
 3. run `python app.py` or `python launcher.py`
 4. open `http://127.0.0.1:7860`
 
@@ -157,7 +159,8 @@ Optional components:
 
 - Docker Desktop or Docker Engine for `PaddleVL`
 - NVIDIA GPU support for the PaddleOCR-VL stack if you want GPU containers
-- Ollama or another OpenAI-compatible vision endpoint for post-OCR VL checks
+- a generic OpenAI-compatible vision endpoint for post-OCR VL checks
+- an optional dedicated Chandra endpoint if you want the standalone `Chandra` backend
 
 The repo is currently pinned around:
 
@@ -208,9 +211,15 @@ The default exposed service URL is:
 http://127.0.0.1:8080
 ```
 
-### 4. Optional: install and run Ollama for post-OCR VL
+### 4. Optional: start post-OCR VL backends
 
-If you want `PP-OCRv5` post-OCR VL checks through Ollama:
+If you want `PP-OCRv5` post-OCR VL checks beyond `PaddleVL`, you can use either
+or both of these paths.
+
+#### Option A: generic OpenAI-compatible endpoint via Ollama
+
+Use this for the `OpenAI-compatible` UI backend and models such as
+`richardyoung/olmocr2:7b-q8` or `deepseek-ocr:3b`.
 
 1. install Ollama for Windows
 2. start Ollama
@@ -219,15 +228,35 @@ If you want `PP-OCRv5` post-OCR VL checks through Ollama:
 Examples:
 
 ```powershell
-ollama pull fredrezones55/chandra-ocr-2
 ollama pull richardyoung/olmocr2:7b-q8
 ollama pull deepseek-ocr:3b
 ```
 
-The current app defaults expect an OpenAI-compatible endpoint at:
+The default generic OpenAI-compatible endpoint is:
 
 ```text
 http://localhost:11434/v1
+```
+
+#### Option B: dedicated Chandra endpoint
+
+Use this for the standalone `Chandra` UI backend or `PaddleVL + Chandra`.
+
+You can serve Chandra with:
+
+- `llama.cpp` or another OpenAI-compatible server
+- Ollama, if you specifically want Chandra through Ollama
+
+Example Ollama model:
+
+```powershell
+ollama pull fredrezones55/chandra-ocr-2
+```
+
+The local helper scripts in this repo assume the dedicated Chandra endpoint is:
+
+```text
+http://127.0.0.1:8000/v1
 ```
 
 ### 5. Run the app
@@ -325,12 +354,13 @@ docker compose up -d
 This is usually easiest when Docker Desktop is installed on Windows with WSL
 integration enabled.
 
-### 5. Optional: connect to Ollama
+### 5. Optional: connect to post-OCR VL endpoints
 
-You can run Ollama either:
+From WSL, you can reach:
 
-- on Windows and call it from WSL using `http://localhost:11434/v1`, or
-- directly inside WSL if you prefer
+- a generic OpenAI-compatible endpoint on Windows at `http://localhost:11434/v1`
+- a dedicated Chandra endpoint at whatever host/port you configured
+- a service running directly inside WSL, if you prefer
 
 ### 6. Run the app
 
@@ -381,7 +411,7 @@ Useful runtime environment variables include:
 - `OCR_TOOL_PORT`
   - default: `7860`
 
-### Ollama OpenAI / post-OCR VL
+### Generic OpenAI-compatible / post-OCR VL
 
 - `OLLAMA_OPENAI_API_URL`
   - default: `http://localhost:11434/v1`
@@ -402,10 +432,24 @@ Legacy compatibility is still accepted:
 - `OLMOCR_MODEL`
 - `OLMOCR_API_KEY`
 
+### Dedicated Chandra / post-OCR VL
+
+- `CHANDRA_API_URL`
+  - default: `http://127.0.0.1:8000/v1`
+- `CHANDRA_MODEL`
+  - default: `mradermacher/chandra-ocr-2-GGUF:Q4_K_M`
+
+Additional compatibility names are also accepted:
+
+- `CHANDRA_OPENAI_API_URL`
+- `CHANDRA_OCR_API_URL`
+- `CHANDRA_OCR_MODEL`
+
 ### Post-OCR VL behavior
 
 - `POST_OCR_VL_BACKEND`
   - default: `olmocr`
+  - supported values in practice: `paddlevl`, `olmocr`, `chandra`, `both`, `both_chandra`
 
 ### ALTO output
 
@@ -653,9 +697,11 @@ These controls are shown only for `PP-OCRv5`:
 
 - `Enable Post-OCR VL`
 - `Post-OCR VL Backend`
-  - `olmocr` via the `Ollama OpenAI` label
-  - `paddlevl`
-  - `both`
+  - `PaddleVL`
+  - `Chandra`
+  - `OpenAI-compatible`
+  - `PaddleVL + Chandra`
+  - `PaddleVL + OpenAI-compatible`
 - `Words to Check`
   - `suspicious`
   - `low_confidence`
@@ -668,11 +714,14 @@ These controls are shown only for `PP-OCRv5`:
 - `Low Confidence Threshold`
 - `Apply accepted VL corrections to OCR text.`
 - `Save post-OCR VL word tiles.`
-- `Group same-line suspicious words for Ollama OpenAI.`
+- `Group same-line suspicious words for OpenAI-compatible backend.`
 - `PaddleVL API URL`
-- `Ollama OpenAI API URL`
-- `Ollama OpenAI Model`
-  - the dropdown allows custom model names served by the target endpoint
+- `OpenAI-compatible API URL`
+- `OpenAI-compatible Model`
+  - the dropdown allows custom non-Chandra model names served by the target endpoint
+- `Chandra API URL`
+- `Chandra Model`
+  - the dropdown allows custom Chandra model names served by the target endpoint
 
 This feature is currently only active for `PP-OCRv5`.
 
@@ -680,7 +729,8 @@ It uses `text_word` and `text_word_boxes` from the PP-OCR result to crop
 suspicious words and send them to either:
 
 - `PaddleVL`
-- an OpenAI-compatible vision endpoint, labeled in the UI as `Ollama OpenAI`
+- a generic OpenAI-compatible vision endpoint
+- a dedicated Chandra endpoint
 
 The post-OCR step records metadata under `post_ocr_vl_check` in the JSON and
 can optionally:
@@ -691,8 +741,9 @@ can optionally:
 
 Current model notes:
 
-- `richardyoung/olmocr2:7b-q8` is the strongest current Ollama option in this app
-- `fredrezones55/chandra-ocr-2` now uses a Chandra-specific Ollama fallback path
+- `richardyoung/olmocr2:7b-q8` is the strongest current generic OpenAI-compatible option in this app
+- `mradermacher/chandra-ocr-2-GGUF:Q4_K_M` is the default dedicated local Chandra option
+- `fredrezones55/chandra-ocr-2` is a valid Chandra model when the Chandra endpoint is backed by Ollama
 - `deepseek-ocr:3b` has a model-aware cleanup path, but is still weaker for
   this word-correction use case
 
@@ -714,11 +765,11 @@ Rationale:
 - `Apply accepted VL corrections to OCR text.` is convenient for production
   output, but turning it off is safer when you are auditing model behavior
 - `Save post-OCR VL word tiles.` is mainly for debugging and spot-checking
-- `Group same-line suspicious words for Ollama OpenAI.` reduces repeated calls
+- `Group same-line suspicious words for OpenAI-compatible backend.` reduces repeated calls
   and gives the model line context, which often improves both speed and
   disambiguation
-- the backend URL and model fields exist so you can swap endpoints without
-  changing code
+- the separate backend URL and model fields exist so you can swap generic
+  OpenAI-compatible and Chandra endpoints independently without changing code
 - this stage exists because OCR confidence alone does not catch every real
   error, especially on historically noisy pages
 - targeted word or line review is cheaper than rerunning a whole page through a
@@ -825,7 +876,7 @@ python smoke_test.py \
   --post-ocr-vl-no-apply
 ```
 
-Run PP-OCRv5 with the Ollama/OpenAI-compatible post-OCR backend:
+Run PP-OCRv5 with the generic OpenAI-compatible post-OCR backend:
 
 ```bash
 python smoke_test.py \
@@ -835,7 +886,20 @@ python smoke_test.py \
   --post-ocr-vl-check \
   --post-ocr-vl-backend olmocr \
   --post-ocr-vl-ollama-openai-url http://localhost:11434/v1 \
-  --post-ocr-vl-ollama-openai-model fredrezones55/chandra-ocr-2
+  --post-ocr-vl-ollama-openai-model richardyoung/olmocr2:7b-q8
+```
+
+Run PP-OCRv5 with the dedicated Chandra backend:
+
+```bash
+python smoke_test.py \
+  --method PP-OCRv5 \
+  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
+  --output output-smoke-chandra \
+  --post-ocr-vl-check \
+  --post-ocr-vl-backend chandra \
+  --post-ocr-vl-chandra-url http://127.0.0.1:8000/v1 \
+  --post-ocr-vl-chandra-model mradermacher/chandra-ocr-2-GGUF:Q4_K_M
 ```
 
 The CLI still accepts the older aliases:
@@ -933,15 +997,16 @@ Make sure:
 - `docker compose up -d` is healthy
 - `http://127.0.0.1:8080/health` responds
 
-### Ollama post-OCR checks return empty or weak results
+### OpenAI-compatible or Chandra post-OCR checks return empty or weak results
 
 Check:
 
-- the Ollama server is running
-- the model name exists exactly as installed
-- the endpoint is `http://localhost:11434/v1`
+- the target server is running
+- the model name exists exactly as served by that endpoint
+- the generic OpenAI-compatible URL is `http://localhost:11434/v1` if using Ollama
+- the Chandra URL matches your dedicated Chandra server if using the `Chandra` backend
 
-Useful test:
+Useful Ollama test:
 
 ```powershell
 ollama list
