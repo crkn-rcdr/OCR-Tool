@@ -4,6 +4,7 @@ import json
 import os
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import List, Tuple
 from xml.dom import minidom
@@ -26,6 +27,13 @@ DOCLAYOUT_TILE_STRATEGIES = {
     "grid_3x2_doclayout_v3",
 }
 TITLE_LABELS = {"doc_title", "paragraph_title", "title"}
+
+
+def get_paddleocr_package_version() -> str:
+    try:
+        return version("paddleocr")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def get_image_dimensions(image_path: Path) -> Tuple[int, int]:
@@ -119,15 +127,12 @@ def clean_alto_text(text) -> str:
 def extract_source_ocr_payload(data):
     """Return the OCR payload object that ALTO generation should read from."""
     if "overall_ocr_res" in data:
-        return data["overall_ocr_res"], False
+        return data["overall_ocr_res"]
 
     if "rec_texts" in data:
-        return data, False
+        return data
 
-    parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
-        "parsing_res_list"
-    ]
-    return parsing_res_list, True
+    return {}
 
 
 def extract_word_level_lines(ocr_payload):
@@ -214,21 +219,9 @@ def extract_word_level_lines(ocr_payload):
     return lines
 
 
-def extract_line_level_items(source_payload, select_paddlevl):
+def extract_line_level_items(source_payload):
     """Extract OCR items from line-level structures when word arrays are unavailable."""
     items = []
-
-    if select_paddlevl:
-        for block in source_payload:
-            text = block.get("block_content", "")
-            poly = block.get("block_bbox")
-
-            if not text or not text.strip() or not poly:
-                continue
-
-            items.append(make_ocr_item(text, poly))
-
-        return items
 
     rec_texts = source_payload.get("rec_texts", [])
     rec_scores = source_payload.get("rec_scores", [])
@@ -253,18 +246,17 @@ def build_alto_lines(data):
             for line in block.get("lines", [])
             if line.get("strings")
         ]
-        return lines, False
+        return lines
 
-    source_payload, select_paddlevl = extract_source_ocr_payload(data)
+    source_payload = extract_source_ocr_payload(data)
 
-    if not select_paddlevl:
-        word_lines = extract_word_level_lines(source_payload)
-        if word_lines:
-            return word_lines, select_paddlevl
+    word_lines = extract_word_level_lines(source_payload)
+    if word_lines:
+        return word_lines
 
     # If we don't have explicit word-level arrays, try to build lines
     # from the available `rec_texts` / `rec_polys` tokens by spatial grouping.
-    items = extract_line_level_items(source_payload, select_paddlevl)
+    items = extract_line_level_items(source_payload)
 
     def group_words_into_lines(items):
         """Group word-level items into TextLine-like structures.
@@ -345,7 +337,7 @@ def build_alto_lines(data):
         return sort_lines_reading_order(lines)
 
     lines = group_words_into_lines(items)
-    return lines, select_paddlevl
+    return lines
 
 
 def calculate_line_box(boxes):
@@ -506,26 +498,17 @@ def detect_columns(lines, page_width, min_valley_width_ratio=0.03):
     return cols
 
 
-def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
+def group_lines_into_blocks(lines, page_width=None):
     """Group sorted `lines` into higher-level text blocks.
 
-    - If `select_paddlevl` is True (PaddleVL), each line represents a layout
-      block already, so return one block per line.
-    - Otherwise, cluster consecutive lines into blocks based on vertical
-      proximity using a median line-height heuristic.
+    Cluster consecutive lines into blocks based on vertical proximity using a
+    median line-height heuristic.
 
     Returns a list of blocks: {"box": [x1,y1,x2,y2], "lines": [...]}
     """
     if not lines:
         return []
 
-    if select_paddlevl:
-        blocks = []
-        for ln in lines:
-            blocks.append({"box": ln["box"], "lines": [ln]})
-        return blocks
-
-    # Non-PaddleVL: cluster by vertical gaps
     # If page_width not provided, estimate from line boxes
     if page_width is None:
         page_width = int(max((box_to_rect(l["box"])[2] for l in lines), default=0))
@@ -584,7 +567,7 @@ def group_lines_into_blocks(lines, select_paddlevl, page_width=None):
     return blocks
 
 
-def build_alto_blocks(data, lines, select_paddlevl, page_width):
+def build_alto_blocks(data, lines, page_width):
     """Choose the best available block structure for ALTO generation."""
     ocr_blocks = data.get("ocr_blocks")
     if isinstance(ocr_blocks, list) and ocr_blocks:
@@ -598,11 +581,7 @@ def build_alto_blocks(data, lines, select_paddlevl, page_width):
     if tile_blocks:
         return tile_blocks
 
-    return group_lines_into_blocks(
-        lines,
-        select_paddlevl,
-        page_width=page_width,
-    )
+    return group_lines_into_blocks(lines, page_width=page_width)
 
 
 def infer_page_width_from_lines(lines):
@@ -620,7 +599,7 @@ def infer_page_width_from_lines(lines):
 
 def build_ordered_blocks(data, page_width=None):
     """Build OCR blocks in the same reading order used for ALTO output."""
-    lines, select_paddlevl = build_alto_lines(data)
+    lines = build_alto_lines(data)
 
     if page_width is None:
         page_width = infer_page_width_from_lines(lines)
@@ -628,7 +607,6 @@ def build_ordered_blocks(data, page_width=None):
     blocks = build_alto_blocks(
         data,
         lines,
-        select_paddlevl,
         page_width=page_width,
     )
 
@@ -724,7 +702,6 @@ def build_blocks_from_doclayout_tiles(data, lines):
         blocks.extend(
             group_lines_into_blocks(
                 unassigned_lines,
-                select_paddlevl=False,
                 page_width=None,
             )
         )
@@ -989,7 +966,7 @@ def add_processing_description(alto, profile, file_name, measurement_unit):
 
     software = ET.SubElement(step, "processingSoftware")
     ET.SubElement(software, "softwareName").text = "PaddleOCR"
-    ET.SubElement(software, "softwareVersion").text = "3.1.0"
+    ET.SubElement(software, "softwareVersion").text = get_paddleocr_package_version()
 
 
 def add_alto_styles(alto):
@@ -1062,7 +1039,7 @@ def generate_alto(
     else:
         data = data_payload
 
-    lines, select_paddlevl = build_alto_lines(data)
+    lines = build_alto_lines(data)
 
     # Use fileName from JSON if available; otherwise fall back to image name.
     file_name = data.get("fileName", image.name)
@@ -1124,7 +1101,7 @@ def generate_alto(
 
     # Group lines into TextBlocks. DocLayout-tiled JSON preserves its detected
     # content regions here so ALTO consumers see article-like blocks.
-    blocks = build_alto_blocks(data, lines, select_paddlevl, width)
+    blocks = build_alto_blocks(data, lines, width)
 
     if not blocks:
         # Fallback: if we have individual string boxes, use their overall box;
@@ -1167,7 +1144,7 @@ def generate_alto(
                     **box_to_alto_attrs(string_item["box"], scale),
                 }
 
-                if lang and not select_paddlevl:
+                if lang:
                     attrs["LANG"] = lang
 
                 wc = string_item.get("score")

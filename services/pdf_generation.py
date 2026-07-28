@@ -57,43 +57,6 @@ def polygon_to_rect(poly):
     return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
 
 
-def bbox_to_rect(bbox):
-    """Convert bbox or polygon to fitz.Rect.
-
-    Supports:
-    - [x0, y0, x1, y1]
-    - [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
-    """
-    if hasattr(bbox, "tolist"):
-        bbox = bbox.tolist()
-
-    # Polygon format.
-    if (
-        isinstance(bbox, list)
-        and len(bbox) > 0
-        and isinstance(bbox[0], (list, tuple))
-    ):
-        xs = [float(p[0]) for p in bbox]
-        ys = [float(p[1]) for p in bbox]
-
-        return fitz.Rect(
-            min(xs),
-            min(ys),
-            max(xs),
-            max(ys),
-        )
-
-    # Standard bbox format.
-    x0, y0, x1, y1 = bbox
-
-    return fitz.Rect(
-        float(x0),
-        float(y0),
-        float(x1),
-        float(y1),
-    )
-
-
 def normalize_text(text):
     """Normalize OCR text by removing line breaks and repeated spaces."""
     if text is None:
@@ -104,18 +67,6 @@ def normalize_text(text):
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
-
-def normalize_text_keep_newlines(text):
-    """Normalize text but keep paragraph line breaks."""
-    if text is None:
-        return ""
-
-    text = str(text)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n\s*\n+", "\n", text)
-
-    return text.strip()
 
 def contains_cjk(text):
     """Return True if text contains Chinese, Japanese, or Korean characters."""
@@ -458,21 +409,6 @@ def extract_ocr_data(data):
         texts = ocr_res.get("rec_texts") or []
         polys = ocr_res.get("rec_polys") or []
 
-    elif "result" in data:
-        parsing_res_list = data["result"]["layoutParsingResults"][0][
-            "prunedResult"
-        ]["parsing_res_list"]
-
-        for block in parsing_res_list:
-            text = block.get("block_content")
-
-            # Prefer polygon points when PaddleVL provides them. They preserve
-            # irregular or non-rectangular layout regions better than bbox.
-            poly = block.get("block_polygon_points") or block.get("block_bbox")
-
-            texts.append(text)
-            polys.append(poly)
-
     elif "rec_texts" in data:
         texts = data.get("rec_texts") or []
         polys = data.get("rec_polys") or []
@@ -490,21 +426,14 @@ def build_items(texts, polys, method, select):
     """Build OCR items from OCR text and geometry."""
     items = []
 
-    is_paddlevl = method == "PaddleVL" or select == "PaddleVL"
-
     for text, poly in zip(texts, polys):
-        if is_paddlevl:
-            text = normalize_text_keep_newlines(text)
-        else:
-            text = normalize_text(text)
+        text = normalize_text(text)
 
         if not text:
             continue
 
-        if method in ["PP-StructureV3", "PP-OCRv5"] or select == "PP-StructureV3":
+        if method == "PP-OCRv6":
             rect = polygon_to_rect(poly)
-        elif is_paddlevl:
-            rect = bbox_to_rect(poly)
         else:
             continue
 
@@ -683,27 +612,7 @@ def make_cjk_blocks_from_items(line_items):
 
 
 def build_text_blocks(items, method=None, select=None):
-    """Build text blocks for PDF writing.
-
-    PaddleVL returns paragraph-level layout blocks instead of
-    line-level OCR boxes. Therefore, PaddleVL content should
-    be written as paragraph text.
-    """
-    if method == "PaddleVL" or select == "PaddleVL":
-        blocks = []
-
-        for item in items:
-            blocks.append(
-                {
-                    "mode": "paragraph",
-                    "text": item.text,
-                    "rect": item.rect,
-                    "font_alias": choose_font_alias(item.text),
-                }
-            )
-
-        return blocks
-
+    """Build text blocks for PDF writing."""
     ordered_items = sort_items_reading_order(items)
     lines = group_items_into_lines(ordered_items)
 
@@ -834,163 +743,6 @@ def fit_textbox(
     )
 
     return True
-
-def wrap_text_to_width(text, font_obj, fontsize, max_width):
-    """Wrap text into lines based on actual font width."""
-    lines = []
-
-    for paragraph in text.split("\n"):
-        paragraph = paragraph.strip()
-
-        if not paragraph:
-            continue
-
-        # CJK text usually has no spaces, so wrap by character.
-        if contains_cjk(paragraph):
-            current_line = ""
-
-            for char in paragraph:
-                test_line = current_line + char
-                width = font_obj.text_length(test_line, fontsize=fontsize)
-
-                if width <= max_width or not current_line:
-                    current_line = test_line
-                else:
-                    lines.append(current_line)
-                    current_line = char
-
-            if current_line:
-                lines.append(current_line)
-
-            continue
-
-        words = paragraph.split()
-        current_line = ""
-
-        for word in words:
-            test_line = word if not current_line else f"{current_line} {word}"
-            width = font_obj.text_length(test_line, fontsize=fontsize)
-
-            if width <= max_width or not current_line:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = word
-
-        if current_line:
-            lines.append(current_line)
-
-    return lines
-
-
-def fit_paragraph_textbox(
-    page,
-    rect,
-    text,
-    fontname,
-    font_obj,
-    min_fontsize=1.0,
-    max_fontsize=16.0,
-):
-    """Write all PaddleVL paragraph text without dropping content.
-
-    PaddleVL provides paragraph-level boxes instead of OCR line boxes.
-    This function splits text into estimated virtual lines and writes
-    every line as invisible searchable text.
-    """
-    text = normalize_text_keep_newlines(text)
-
-    if not text:
-        return False
-
-    rect = fitz.Rect(rect)
-
-    if rect.width <= 1 or rect.height <= 1:
-        return False
-
-    pad_x = max(0.5, rect.width * 0.005)
-    pad_y = max(0.5, rect.height * 0.025)
-
-    write_rect = fitz.Rect(
-        rect.x0 + pad_x,
-        rect.y0 + pad_y,
-        rect.x1 - pad_x,
-        rect.y1 - pad_y,
-    )
-
-    if write_rect.width <= 1 or write_rect.height <= 1:
-        return False
-
-    fontsize = min(max_fontsize, max(min_fontsize, rect.height * 0.065))
-
-    lines = []
-
-    for _ in range(40):
-        lines = wrap_text_to_width(
-            text=text,
-            font_obj=font_obj,
-            fontsize=fontsize,
-            max_width=write_rect.width,
-        )
-
-        if not lines:
-            return False
-
-        line_height = fontsize * 1.08
-        total_height = len(lines) * line_height
-
-        if total_height <= write_rect.height:
-            break
-
-        fontsize *= 0.9
-
-        if fontsize <= min_fontsize:
-            fontsize = min_fontsize
-
-            lines = wrap_text_to_width(
-                text=text,
-                font_obj=font_obj,
-                fontsize=fontsize,
-                max_width=write_rect.width,
-            )
-
-            break
-
-    if not lines:
-        return False
-
-    # Compress vertically instead of dropping text.
-    if len(lines) > 1:
-        line_height = min(
-            fontsize * 1.08,
-            write_rect.height / len(lines),
-        )
-    else:
-        line_height = fontsize * 1.08
-
-    fontsize = min(fontsize, max(0.5, line_height * 0.95))
-
-    y = write_rect.y0 + fontsize
-    written_count = 0
-
-    for line in lines:
-        if y > write_rect.y1:
-            y = write_rect.y1
-
-        page.insert_text(
-            point=fitz.Point(write_rect.x0, y),
-            text=line,
-            fontname=fontname,
-            fontsize=fontsize,
-            render_mode=3,
-            overlay=True,
-            
-        )
-
-        written_count += 1
-        y += line_height
-
-    return written_count == len(lines)
 
 def measure_char_weights(text, font_obj, fontsize):
     """Measure approximate visual width for each character."""
@@ -1214,15 +966,6 @@ def write_block(page, block, font_objects):
             font_obj=font_obj,
         )
 
-    if mode == "paragraph":
-        return fit_paragraph_textbox(
-            page=page,
-            rect=rect,
-            text=text,
-            fontname=font_alias,
-            font_obj=font_obj,
-        )
-
     return False
 
 
@@ -1259,17 +1002,12 @@ def build_pdf(json_path, input_dir, method, lang, select):
         with Image.open(image_path) as img:
             width, height = img.size
 
-        if method == "PaddleVL" or select == "PaddleVL":
+        blocks = build_text_blocks_from_ordered_lines(data, page_width=width)
+
+        if not blocks:
             texts, polys = extract_ocr_data(data)
             items = build_items(texts, polys, method, select)
             blocks = build_text_blocks(items, method, select)
-        else:
-            blocks = build_text_blocks_from_ordered_lines(data, page_width=width)
-
-            if not blocks:
-                texts, polys = extract_ocr_data(data)
-                items = build_items(texts, polys, method, select)
-                blocks = build_text_blocks(items, method, select)
 
         doc = fitz.open()
         page = doc.new_page(width=width, height=height)

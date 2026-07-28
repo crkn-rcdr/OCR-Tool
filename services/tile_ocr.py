@@ -24,7 +24,8 @@ from services.ocr_defaults import (
 )
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 
-SUPPORTED_TILING_METHODS = {"PP-OCRv5", "PP-StructureV3"}
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
+SUPPORTED_TILING_METHODS = set(PADDLE_OCR_METHODS)
 TILE_GRID_SIZE = 3
 DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
@@ -82,7 +83,6 @@ DOCLAYOUT_EXCLUDED_LABELS = {
     "number",
     "seal",
 }
-EXTRA_STRUCTURE_KEYS = ("table_res_list", "seal_res_list", "formula_res_list")
 GEOMETRY_KEYS = {
     "bbox",
     "box",
@@ -158,10 +158,7 @@ def run_tiled_local_ocr(
     """Run OCR on a tiled workflow and merge the tile-level results."""
     effective_method = get_effective_method(opt.get("method"), select)
     if effective_method is None:
-        raise ValueError(
-            "Source-image tiling is only supported for PP-OCRv5, "
-            "PP-StructureV3."
-        )
+        raise ValueError("Source-image tiling is only supported for PP-OCRv6.")
 
     tile_opt = dict(opt)
     tile_opt["tile_source_images"] = False
@@ -261,19 +258,7 @@ def run_tiled_local_ocr(
         )
         raise RuntimeError(f"No tiled OCR output was produced. {error_summary}")
 
-    if effective_method == "PP-OCRv5":
-        merged = merge_ppocr_tile_results(
-            tile_results,
-            image_path,
-            grid_rows,
-            grid_cols,
-            overlap_px,
-            tile_strategy,
-        )
-        add_tile_errors_to_metadata(merged, tile_errors)
-        return merged
-
-    merged = merge_ppstructure_tile_results(
+    merged = merge_ppocr_tile_results(
         tile_results,
         image_path,
         grid_rows,
@@ -1646,117 +1631,6 @@ def ocr_block_sort_key(block: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def merge_ppstructure_tile_results(
-    tile_results: list[dict[str, Any]],
-    image_path: Path,
-    grid_rows: int,
-    grid_cols: int,
-    overlap_px: int,
-    tile_strategy: str,
-) -> dict[str, Any]:
-    """Merge PP-Structure tile outputs back into one page-level payload."""
-    first = tile_results[0]["json"] if tile_results else {}
-
-    merged = {
-        "input_path": str(image_path),
-        "page_index": first.get("page_index", 0),
-        "model_settings": first.get("model_settings", {}),
-        "overall_ocr_res": merge_nested_overall_ocr(tile_results, image_path, grid_cols),
-        "parsing_res_list": merge_parsing_results(tile_results),
-        "tile_processing": build_tile_metadata(
-            tile_results,
-            image_path,
-            grid_rows,
-            grid_cols,
-            overlap_px,
-            tile_strategy,
-        ),
-    }
-
-    layout_det_res = merge_layout_detection_results(tile_results, image_path)
-    if layout_det_res is not None:
-        merged["layout_det_res"] = layout_det_res
-
-    for key in EXTRA_STRUCTURE_KEYS:
-        merged_items = []
-
-        for tile_result in tile_results:
-            tile = tile_result["tile"]
-            raw_items = tile_result["json"].get(key) or []
-
-            for item in raw_items:
-                merged_items.append(
-                    offset_nested_geometry(deepcopy(item), tile.left, tile.top)
-                )
-
-        if merged_items:
-            merged[key] = sorted(
-                merged_items,
-                key=lambda item: geometry_sort_key(find_sort_geometry(item)),
-            )
-
-    return merged
-
-
-def merge_nested_overall_ocr(
-    tile_results: list[dict[str, Any]],
-    image_path: Path,
-    grid_cols: int,
-) -> dict[str, Any]:
-    """Merge nested `overall_ocr_res` payloads after tiled OCR."""
-    first = {}
-    entries = []
-    max_row, max_col = tile_grid_max_indices(tile_results)
-
-    for tile_result in tile_results:
-        tile = tile_result["tile"]
-        overall = tile_result["json"].get("overall_ocr_res") or {}
-        if not first and overall:
-            first = overall
-        entries.extend(
-            collect_owned_ocr_entries_for_tile(
-                overall,
-                tile,
-                max_row,
-                max_col,
-            )
-        )
-
-    # Merge possible fragments created by tiling, using fixed-grid seam positions.
-    seam_positions = grid_vertical_seams(image_path, grid_cols)
-    entries = merge_adjacent_word_fragments(entries, seam_x=seam_positions)
-    entries = dedupe_overlapping_entries(entries)
-
-    merged = {
-        "input_path": str(image_path),
-        "page_index": first.get("page_index", 0),
-        "model_settings": first.get("model_settings", {}),
-        "text_det_params": first.get("text_det_params", {}),
-        "text_type": first.get("text_type", "general"),
-        "text_rec_score_thresh": first.get("text_rec_score_thresh", 0.0),
-        "return_word_box": first.get("return_word_box", False),
-        "rec_texts": [entry["text"] for entry in entries],
-        "rec_scores": [entry["score"] for entry in entries],
-        "rec_polys": [entry["rec_poly"] for entry in entries],
-        "rec_boxes": [geometry_to_bbox(entry["rec_poly"]) for entry in entries],
-        "dt_polys": [entry["dt_poly"] for entry in entries],
-    }
-
-    if any("angle" in entry for entry in entries):
-        merged["textline_orientation_angles"] = [
-            entry.get("angle", -1) for entry in entries
-        ]
-
-    if any("text_word_boxes" in entry for entry in entries):
-        merged["text_word_boxes"] = [
-            entry.get("text_word_boxes", []) for entry in entries
-        ]
-        merged["text_word"] = [entry.get("text_word", []) for entry in entries]
-
-    normalize_ocr_word_boxes_in_payload(merged)
-    return merged
-
-
 def grid_vertical_seams(image_path: Path, grid_cols: int) -> list[int]:
     """Return the x positions of vertical seams in a fixed grid tiling layout."""
     if grid_cols <= 1:
@@ -1769,66 +1643,6 @@ def grid_vertical_seams(image_path: Path, grid_cols: int) -> list[int]:
         return []
 
     return [(width * index) // grid_cols for index in range(1, grid_cols)]
-
-
-def merge_parsing_results(tile_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge tile-level parsing results into one page-level list."""
-    merged_blocks = []
-
-    for tile_result in tile_results:
-        tile = tile_result["tile"]
-        parsing_res_list = tile_result["json"].get("parsing_res_list") or []
-
-        for block in parsing_res_list:
-            merged_blocks.append(
-                offset_nested_geometry(deepcopy(block), tile.left, tile.top)
-            )
-
-    merged_blocks.sort(key=lambda block: geometry_sort_key(find_sort_geometry(block)))
-
-    for index, block in enumerate(merged_blocks):
-        if "block_id" in block:
-            block["block_id"] = index
-        if "block_order" in block:
-            block["block_order"] = index
-
-    return merged_blocks
-
-
-def merge_layout_detection_results(
-    tile_results: list[dict[str, Any]],
-    image_path: Path,
-) -> dict[str, Any] | None:
-    """Merge tile-level layout detections into page-level coordinates."""
-    layout_template = None
-    merged_boxes = []
-
-    for tile_result in tile_results:
-        tile = tile_result["tile"]
-        layout_det_res = tile_result["json"].get("layout_det_res")
-
-        if not isinstance(layout_det_res, dict):
-            continue
-
-        if layout_template is None:
-            layout_template = deepcopy(layout_det_res)
-            layout_template["boxes"] = []
-
-        for box in layout_det_res.get("boxes") or []:
-            merged_boxes.append(
-                offset_nested_geometry(deepcopy(box), tile.left, tile.top)
-            )
-
-    if layout_template is None:
-        return None
-
-    merged_boxes.sort(key=lambda box: geometry_sort_key(find_sort_geometry(box)))
-    layout_template["boxes"] = merged_boxes
-
-    if "input_path" in layout_template:
-        layout_template["input_path"] = str(image_path)
-
-    return layout_template
 
 
 def collect_ocr_entries(tile_results: list[dict[str, Any]]) -> list[dict[str, Any]]:

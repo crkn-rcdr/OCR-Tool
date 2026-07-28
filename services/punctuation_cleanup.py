@@ -142,41 +142,7 @@ def clean_ocr_payload_text_in_place(payload: dict[str, Any]) -> bool:
                         string_item["text"] = cleaned
                         changed = True
 
-    parsing_res_list = _extract_parsing_res_list(payload)
-    text_keys: list[str | None] = []
-    cleaned_block_texts = clean_ocr_line_list(
-        [
-            block.get(key)
-            if isinstance(block, dict)
-            and (key := next((name for name in ("block_content", "text", "markdown") if name in block), None))
-            else ""
-            for block in parsing_res_list
-        ]
-    )
-    for index, block in enumerate(parsing_res_list):
-        if not isinstance(block, dict):
-            text_keys.append(None)
-            continue
-        key = next((name for name in ("block_content", "text", "markdown") if name in block), None)
-        text_keys.append(key)
-        if not key:
-            continue
-        cleaned = cleaned_block_texts[index]
-        if cleaned != block.get(key):
-            block[key] = cleaned
-            changed = True
-
     return changed
-
-
-def _extract_parsing_res_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the nested PaddleVL parsing result list when present."""
-    try:
-        return payload["result"]["layoutParsingResults"][0]["prunedResult"][
-            "parsing_res_list"
-        ]
-    except (KeyError, IndexError, TypeError):
-        return []
 
 
 def _clean_line_sequence(lines: list[str]) -> list[str]:

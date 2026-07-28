@@ -2,16 +2,15 @@
 
 This repository is an internal OCR application for CRKN staff. It combines:
 
-- `PP-OCRv5` for the main local OCR workflow
-- `PP-StructureV3` for Paddle's structure-oriented OCR workflow
-- `PaddleVL` for the PaddleOCR-VL Docker service
-- optional post-OCR visual language checks for `PP-OCRv5`
+- `PP-OCRv6` for the main local OCR workflow
+- `PaddleOCR-VL 1.6` for optional post-OCR visual language checks
 
 The app can run as:
 
 - a Gradio desktop/web app from `app.py`
 - a simple launcher from `launcher.py`
 - a CLI smoke-test runner from `smoke_test.py`
+- a managed shared-PC Windows bundle under `windows_bundle/`
 - analysis and reporting helpers under `tools/`
 
 ## Overview
@@ -20,8 +19,8 @@ At a high level, the app:
 
 1. loads one image or a folder of images
 2. optionally preprocesses the page image
-3. runs OCR with one of the supported backends
-4. optionally runs a post-OCR word check on suspicious `PP-OCRv5` words
+3. runs local OCR with `PP-OCRv6`
+4. optionally runs a post-OCR word check on suspicious `PP-OCRv6` words
 5. writes normalized JSON output
 6. writes either:
    - TXT files, or
@@ -54,98 +53,23 @@ If you already know which environment you want:
 
 After setup:
 
-1. optionally start `PaddleVL` with `docker compose up -d`
-2. optionally start a post-OCR VL endpoint:
-   - `Ollama` or another generic OpenAI-compatible endpoint for `olmocr` / `deepseek-ocr`
-   - `Chandra` on its own endpoint if you want the dedicated Chandra backend
-3. run `python app.py` or `python launcher.py`
-4. open `http://127.0.0.1:7860`
+1. optionally start `PaddleOCR-VL 1.6` with `docker compose up -d`
+2. run `python app.py` or `python launcher.py`
+3. open `http://127.0.0.1:7860`
 
 If you want a scriptable non-Gradio path instead, use [Smoke Test CLI](#smoke-test-cli).
 
-## Choose A Method
+## OCR Method
 
-The main method choices are:
+The app and smoke-test CLI are locked to the current best evaluated path:
 
-- `PP-OCRv5`
-- `PP-StructureV3`
-- `PaddleVL`
-- `Auto Routing`
-
-Practical rationale:
-
-- `PP-OCRv5` is the best general default when you want the most tunable local
+- `PP-OCRv6` is the best general default when you want the most tunable local
   OCR path and access to post-OCR VL correction.
-- `PP-StructureV3` is useful when the page is fairly clean and you want a
-  simpler structure-oriented Paddle path without the extra post-correction
-  layer.
-- `PaddleVL` is the better bet for visually difficult pages where a vision
-  model may handle warped layout, uneven lighting, or awkward region structure
-  better than the local OCR pipeline.
-- `Auto Routing` is for mixed batches where manual per-folder method selection
-  would be tedious.
+- `PaddleOCR-VL 1.6` for optional post-OCR word checking for suspicious word crops and as the configured Docker/API service version. The configured PaddleOCR-VL service uses `PaddleOCR-VL-1.6-0.9B`. In the app it
+is used by the `post process` checkbox to review suspicious PP-OCRv6 word crops.
 
-### `PP-OCRv5`
-
-This is the main local OCR path and the best default for most runs.
-
-Available with:
-
-- preprocessing
-- black-border cropping
-- fixed-grid tiling
-- PP-DocLayoutV3 tiling
-- post-OCR VL word checking
-- TXT output
-- searchable PDF
-- ALTO XML
-
-### `PP-StructureV3`
-
-This is available as a direct Paddle structure pipeline, but in the current app
-it is intentionally simpler than `PP-OCRv5`.
-
-Current behavior:
-
-- preprocessing is available
-- the Gradio app hides source-image tiling and forces it off at submit time
-- the shared tiling service and `smoke_test.py` still support fixed-grid tiling
-  for `PP-StructureV3` (`grid` and `grid_3x2` only)
-- post-OCR VL is disabled
-- TXT output or PDF/ALTO output still works
-
-The UI now hides tiling and post-OCR VL controls for `PP-StructureV3`, and the
-submit path also forces those options off even if they were previously enabled.
-
-### `PaddleVL`
-
-This uses the PaddleOCR-VL service from Docker Compose.
-
-Use it when you want the service-based VLM OCR path rather than the local
-Paddle OCR pipelines.
-
-Current app behavior:
-
-- the Gradio app exposes `Use layout detection during inference`
-- `services/ocr_vl.py` can forward additional PaddleX request keys when they
-  are supplied programmatically, but those extra options are not currently
-  surfaced in the Gradio UI
-
-### `Auto Routing`
-
-This route analyzes image quality and chooses between:
-
-- `PP-StructureV3` for cleaner pages
-- `PaddleVL` for pages with skew, warping, or illumination problems
-
-Use it mainly for mixed folders. It is less useful for controlled benchmarking.
-
-Current limitation:
-
-- the Gradio app still shows tiling controls for `Auto Routing`, but the submit
-  path rejects source-image tiling at run time
-- `smoke_test.py` still accepts tiling flags for `Auto Routing`; those options
-  only matter when the router ultimately picks a local OCR backend
+The Docker configs and image build files are pinned to `PaddleOCR-VL-1.6` /
+`PaddleOCR-VL-1.6-0.9B`.
 
 ## Setup
 
@@ -157,16 +81,9 @@ Current limitation:
 
 Optional components:
 
-- Docker Desktop or Docker Engine for `PaddleVL`
+- Docker Desktop or Docker Engine for `PaddleOCR-VL 1.6`
 - NVIDIA GPU support for the PaddleOCR-VL stack if you want GPU containers
-- a generic OpenAI-compatible vision endpoint for post-OCR VL checks
-- an optional dedicated Chandra endpoint if you want the standalone `Chandra` backend
 
-The repo is currently pinned around:
-
-- `paddleocr==3.5.0`
-- `paddlex[ocr]==3.5.2`
-- `PyMuPDF==1.27.2`
 
 ## Windows Setup
 
@@ -195,9 +112,9 @@ Notes:
 - it includes Paddle OCR dependencies, Gradio, PDF generation, and optional
   libraries used by the app
 
-### 3. Optional: start PaddleVL
+### 3. Optional: start PaddleOCR-VL 1.6
 
-If you want `PaddleVL` or `Auto Routing`, start the Docker services:
+If you want post-OCR VL checks, start the Docker services:
 
 ```powershell
 docker compose up -d
@@ -211,55 +128,7 @@ The default exposed service URL is:
 http://127.0.0.1:8080
 ```
 
-### 4. Optional: start post-OCR VL backends
-
-If you want `PP-OCRv5` post-OCR VL checks beyond `PaddleVL`, you can use either
-or both of these paths.
-
-#### Option A: generic OpenAI-compatible endpoint via Ollama
-
-Use this for the `OpenAI-compatible` UI backend and models such as
-`richardyoung/olmocr2:7b-q8` or `deepseek-ocr:3b`.
-
-1. install Ollama for Windows
-2. start Ollama
-3. pull one or more supported models
-
-Examples:
-
-```powershell
-ollama pull richardyoung/olmocr2:7b-q8
-ollama pull deepseek-ocr:3b
-```
-
-The default generic OpenAI-compatible endpoint is:
-
-```text
-http://localhost:11434/v1
-```
-
-#### Option B: dedicated Chandra endpoint
-
-Use this for the standalone `Chandra` UI backend or `PaddleVL + Chandra`.
-
-You can serve Chandra with:
-
-- `llama.cpp` or another OpenAI-compatible server
-- Ollama, if you specifically want Chandra through Ollama
-
-Example Ollama model:
-
-```powershell
-ollama pull fredrezones55/chandra-ocr-2
-```
-
-The local helper scripts in this repo assume the dedicated Chandra endpoint is:
-
-```text
-http://127.0.0.1:8000/v1
-```
-
-### 5. Run the app
+### 4. Run the app
 
 From the repo root:
 
@@ -411,45 +280,10 @@ Useful runtime environment variables include:
 - `OCR_TOOL_PORT`
   - default: `7860`
 
-### Generic OpenAI-compatible / post-OCR VL
-
-- `OLLAMA_OPENAI_API_URL`
-  - default: `http://localhost:11434/v1`
-- `OLLAMA_OPENAI_MODEL`
-  - default: `richardyoung/olmocr2:7b-q8`
-- `OLLAMA_OPENAI_API_KEY`
-  - optional
-
-Additional compatibility names are also accepted:
-
-- `OPENAI_COMPAT_API_URL`
-- `OPENAI_COMPAT_MODEL`
-- `OPENAI_COMPAT_API_KEY`
-
-Legacy compatibility is still accepted:
-
-- `OLMOCR_API_URL`
-- `OLMOCR_MODEL`
-- `OLMOCR_API_KEY`
-
-### Dedicated Chandra / post-OCR VL
-
-- `CHANDRA_API_URL`
-  - default: `http://127.0.0.1:8000/v1`
-- `CHANDRA_MODEL`
-  - default: `mradermacher/chandra-ocr-2-GGUF:Q4_K_M`
-
-Additional compatibility names are also accepted:
-
-- `CHANDRA_OPENAI_API_URL`
-- `CHANDRA_OCR_API_URL`
-- `CHANDRA_OCR_MODEL`
-
 ### Post-OCR VL behavior
 
-- `POST_OCR_VL_BACKEND`
-  - default: `olmocr`
-  - supported values in practice: `paddlevl`, `olmocr`, `chandra`, `both`, `both_chandra`
+The post-OCR VL backend is fixed to PaddleOCR-VL 1.6. Configure the service URL
+with `PADDLE_VL_API_URL`.
 
 ### ALTO output
 
@@ -475,320 +309,59 @@ python launcher.py
 
 ## Gradio Option Guide
 
-This section combines the control reference and the rationale for when you
-would actually use each option.
+The Gradio app exposes only the production controls:
 
-### Always-visible controls
-
-These controls are always present in the app:
-
+- `Select Processing Method`
 - `Image Input Folder`
 - `Output Folder`
-- `Use document orientation classification during inference.`
-- `Use document image unwarping during inference.`
-- `Generate a text file with OCR results for each image.`
-- `Clean punctuation artifacts in TXT, PDF, and ALTO output.`
+- `Select Language`
+- `Generate TXT instead of PDF/ALTO.`
+- `pre process`
+- `post process`
 
-The current Gradio defaults for local OCR are:
-
-- preprocessing starts with `background_flatten` selected
-- `Crop black border before OCR.` starts enabled
-- `Enable Post-OCR VL` starts enabled for `PP-OCRv5`
-
-Rationale:
-
-- the defaults lean toward historical newspaper scans, where mild background
-  cleanup and black-border cropping often help more than they hurt
-- post-OCR VL starts enabled on `PP-OCRv5` because this repo is tuned around
-  catching suspicious OCR words after the first pass rather than trusting raw
-  OCR output completely
+The detailed OCR tuning values are fixed in `app.py` from the evaluation-backed
+recipe. For `PP-OCRv6`, the app enables source-image tiling with
+`3x2 + PP-DocLayoutV3`, `96` px overlap, `32` px DocLayout padding, `0.20`
+DocLayout threshold, and the recovery tile. This favors text recall on dense
+historical pages; cleanup happens later in the pipeline.
 
 ### Generate TXT vs PDF/ALTO
 
-`Generate a text file with OCR results for each image` means:
+`Generate TXT instead of PDF/ALTO.` writes one TXT file per image and skips
+searchable PDF and ALTO generation. Leave it off for normal archival output.
 
-- generate TXT
-- skip searchable PDF and ALTO generation
+### pre process
 
-If this is off, the app generates searchable PDF and ALTO instead.
+`pre process` means:
 
-Rationale:
+- crop the detected black scan border before OCR
+- run OCR on the page crop
+- offset OCR geometry back into the original image coordinates
+- apply `background_flatten` to even newspaper page shading
+- save the OCR-facing PNG under `_preprocessed/`
 
-- choose TXT when you want quick inspection, downstream NLP, or lightweight
-  comparison work
-- choose PDF and ALTO when you need searchable facsimiles or richer layout
-  output for archival workflows
+This matches the strongest preprocessing result from the evaluation work:
+isolate the page and flatten uneven background without adding more aggressive
+steps that can damage useful detail.
 
-### Clean Punctuation Artifacts
+### post process
 
-This option is available in the UI as:
+`post process` means:
 
-- `Clean punctuation artifacts in TXT, PDF, and ALTO output`
+- clean conservative punctuation artifacts in the saved OCR JSON
+- for `PP-OCRv6`, send suspicious word crops to PaddleVL
+- apply only accepted PaddleVL corrections
+- write post-OCR review artifacts beside the OCR output
 
-Current behavior:
+The fixed post-OCR settings are:
 
-- it applies a conservative text cleanup based on the punctuation issue logic in
-  [tools/compare_ocr_errors.py](tools/compare_ocr_errors.py)
-- it runs on the saved OCR JSON before output files are generated
-- it therefore affects:
-  - TXT
-  - searchable PDF text layer
-  - ALTO XML text
-- it does not change source images
-
-The cleanup is intentionally narrow. It mainly targets:
-
-- repeated punctuation like `..`, `,,`, `;;`
-- line-start punctuation debris
-- quote/punctuation tangles such as `.).)`
-- obvious missing spaces after punctuation in OCR text
-
-It is meant to reduce OCR punctuation artifacts without aggressively rewriting
-word content.
-
-Rationale:
-
-- this is intentionally conservative because punctuation cleanup is far safer
-  than automatic word rewriting
-- it is most useful when OCR output is already readable but littered with small
-  artifacts that hurt downstream searching or presentation
-
-### Preprocessing
-
-These controls are used by local OCR methods:
-
-- `Image Preprocessing Steps`
-  - choices: `light_clean`, `background_flatten`, `contrast`, `deskew`,
-    `sauvola_binary`
-- `Crop black border before OCR.`
-
-Current defaults differ by entry point:
-
-- Gradio UI: `background_flatten` starts selected
-- `smoke_test.py`: defaults to no preprocessing unless you pass a preset or
-  explicit `--preprocessing-step` flags
-
-Useful starting presets:
-
-- clean scans: no preprocessing
-- newspaper with dark scanner border:
-  - black-border cropping
-- uneven background:
-  - light clean
-  - background flatten
-  - contrast
-
-If preprocessing is enabled, the OCR-facing image is written under
-`_preprocessed/`.
-
-Why each preprocessing step exists:
-
-- `light_clean`: removes a small amount of scanner grime and noise without
-  changing the page too aggressively
-- `background_flatten`: evens out newspaper-style background shading so text
-  stands out more consistently
-- `contrast`: boosts separation between text strokes and the page background
-- `deskew`: helps when the whole page is rotated enough to hurt line finding
-- `sauvola_binary`: useful for difficult foreground/background separation, but
-  it is more aggressive and can damage subtle detail on already-good scans
-
-Rationale:
-
-- preprocessing exists because OCR quality usually fails first on image quality,
-  not language modeling
-
-### Tiling
-
-These controls are used by local OCR methods, with some method-specific
-visibility limits:
-
-- `Enable Tiling`
-- `Tile Strategy`
-  - `grid`
-  - `grid_3x2`
-  - `doclayout_v3`
-  - `grid_doclayout_v3`
-  - `grid_3x2_doclayout_v3`
-- `Tile Overlap (px)`
-- `DocLayout Padding (px)`
-- `DocLayout Threshold`
-- `Use DocLayout recovery tile.`
-
-Current app behavior:
-
-- `PP-OCRv5`: full tiling UI is available
-- `PP-StructureV3`: the Gradio app hides tiling controls and forces tiling off,
-  even though the shared tiling service still supports fixed-grid tiling
-- `PaddleVL`: preprocessing controls stay visible but disabled, while tiling
-  controls are hidden because the service consumes the original image
-- `Auto Routing`: tiling controls are visible, but the submit path currently
-  rejects source-image tiling
-
-Why you would pick each tiling strategy:
-
-- `grid`: a simple fixed split for long newspaper columns or tall pages
-- `grid_3x2`: better for dense broadsheet-style layouts that need both vertical
-  and horizontal subdivision
-- `doclayout_v3`: best when page segmentation is the real problem and you want
-  OCR to focus only on likely text regions
-- `grid_doclayout_v3`: a compromise that first reduces page scale, then applies
-  layout segmentation inside each large band
-- `grid_3x2_doclayout_v3`: the most aggressive segmentation option and usually
-  the best choice for very large, cluttered pages, though it is also slower
-
-What the tiling knobs are for:
-
-- `Tile Overlap (px)` protects against words being cut at tile edges, but too
-  much overlap increases duplicate detections
-- `DocLayout Padding (px)` gives each layout crop a little extra context so
-  letters near edges are less likely to be clipped
-- `DocLayout Threshold` tunes how readily layout regions are accepted
-  lower values recover more content but can bring in more junk
-- `Use DocLayout recovery tile.` adds a fallback crop so missed layout regions
-  do not disappear entirely
-
-Rationale:
-
-- tiling exists because large historical pages often exceed the comfortable
-  scale for a single OCR pass and benefit from smaller local crops
-- the DocLayout-based strategies exist to reduce the amount of blank space,
-  separators, illustrations, and unrelated regions sent through OCR
-
-### PP-OCRv5 and PP-StructureV3 recognition controls
-
-These PaddleOCR controls are shown for `PP-OCRv5`, `PP-StructureV3`, and
-`Auto Routing`:
-
-- `Select Language`
-- `Text Detection Threshold`
-- `Text Detection Limit Type`
-- `Text Detection Limit Side Length`
-- `Text Detection Box Threshold`
-- `Text Detection Unclip Ratio`
-- `Text Recognition Score Threshold`
-- `Text Recognition Batch Size`
-- `Use textline orientation classification during inference.`
-
-`Max Side Limit` is only shown for `PP-OCRv5`.
-
-Rationale:
-
-- `Select Language` matters because recognition dictionaries and character
-  priors strongly affect OCR accuracy
-- the detection threshold controls trade recall against precision
-  lower values recover faint text but also admit more false positives
-- `Text Detection Limit Type` and `Text Detection Limit Side Length` control
-  how aggressively the image is resized before detection, which affects both
-  speed and small-text recovery
-- `Max Side Limit` is a safety valve for very large pages where PaddleX would
-  otherwise spend too much time or memory
-- `Text Detection Box Threshold` and `Text Detection Unclip Ratio` tune how
-  tight or generous the detected text regions are
-- `Text Recognition Score Threshold` is a post-recognition filter; lower values
-  keep more questionable text for later review, higher values are stricter
-- `Text Recognition Batch Size` is mostly a throughput knob and may need to be
-  reduced if GPU memory is tight
-- `Use textline orientation classification during inference.` helps when lines
-  may be rotated, vertical, or inconsistently aligned, but it adds overhead
-
-### PP-OCRv5 post-OCR VL controls
-
-These controls are shown only for `PP-OCRv5`:
-
-- `Enable Post-OCR VL`
-- `Post-OCR VL Backend`
-  - `PaddleVL`
-  - `Chandra`
-  - `OpenAI-compatible`
-  - `PaddleVL + Chandra`
-  - `PaddleVL + OpenAI-compatible`
-- `Words to Check`
-  - `suspicious`
-  - `low_confidence`
-  - `all`
-- `Enable Max Words Check`
-- `Max Words to Check`
-  - disabled unless `Enable Max Words Check` is turned on
-  - when disabled, the effective limit is `0`, meaning no cap
-- `Word Tile Padding (px)`
-- `Low Confidence Threshold`
-- `Apply accepted VL corrections to OCR text.`
-- `Save post-OCR VL word tiles.`
-- `Group same-line suspicious words for OpenAI-compatible backend.`
-- `PaddleVL API URL`
-- `OpenAI-compatible API URL`
-- `OpenAI-compatible Model`
-  - the dropdown allows custom non-Chandra model names served by the target endpoint
-- `Chandra API URL`
-- `Chandra Model`
-  - the dropdown allows custom Chandra model names served by the target endpoint
-
-This feature is currently only active for `PP-OCRv5`.
-
-It uses `text_word` and `text_word_boxes` from the PP-OCR result to crop
-suspicious words and send them to either:
-
-- `PaddleVL`
-- a generic OpenAI-compatible vision endpoint
-- a dedicated Chandra endpoint
-
-The post-OCR step records metadata under `post_ocr_vl_check` in the JSON and
-can optionally:
-
-- save the cropped tiles
-- write a `.post_ocr_vl.csv` audit file
-- apply accepted corrections back into `text_word` and `rec_texts`
-
-Current model notes:
-
-- `richardyoung/olmocr2:7b-q8` is the strongest current generic OpenAI-compatible option in this app
-- `mradermacher/chandra-ocr-2-GGUF:Q4_K_M` is the default dedicated local Chandra option
-- `fredrezones55/chandra-ocr-2` is a valid Chandra model when the Chandra endpoint is backed by Ollama
-- `deepseek-ocr:3b` has a model-aware cleanup path, but is still weaker for
-  this word-correction use case
-
-Rationale:
-
-- `Enable Post-OCR VL` is for cases where first-pass OCR is decent overall but
-  you still want targeted review of suspicious words
-- `Post-OCR VL Backend` lets you trade local service behavior against external
-  model behavior; `both` is useful for evaluation but slower and more expensive
-- `Words to Check` is the main speed/coverage tradeoff
-  `suspicious` is the practical default, `low_confidence` is broader, and
-  `all` is mostly for debugging or benchmarking
-- `Enable Max Words Check` is there to keep difficult pages from exploding into
-  hundreds of VL calls
-- `Word Tile Padding (px)` adds local visual context around a word crop
-  too little padding can clip helpful context, too much can dilute the target
-- `Low Confidence Threshold` controls how aggressively lines are treated as
-  risky; higher values flag more text
-- `Apply accepted VL corrections to OCR text.` is convenient for production
-  output, but turning it off is safer when you are auditing model behavior
-- `Save post-OCR VL word tiles.` is mainly for debugging and spot-checking
-- `Group same-line suspicious words for OpenAI-compatible backend.` reduces repeated calls
-  and gives the model line context, which often improves both speed and
-  disambiguation
-- the separate backend URL and model fields exist so you can swap generic
-  OpenAI-compatible and Chandra endpoints independently without changing code
-- this stage exists because OCR confidence alone does not catch every real
-  error, especially on historically noisy pages
-- targeted word or line review is cheaper than rerunning a whole page through a
-  larger vision-language model
-- grouped line crops help because neighboring words often disambiguate a bad
-  token better than an isolated crop does
-
-### PaddleVL-only controls
-
-- `Use layout detection during inference.`
-
-This control is shown for `PaddleVL` and `Auto Routing`.
-
-Rationale:
-
-- layout detection helps when the page contains multiple logical regions, mixed
-  reading order, or non-body-text blocks
-- disabling it can be useful on simpler pages if you want a faster, less
-  segmented run
+- backend: `paddlevl`
+- candidate mode: `suspicious`
+- max words: disabled
+- word crop padding: `5` px
+- low-confidence threshold: `0.90`
+- apply accepted corrections: enabled
+- save word tiles: disabled
 
 ## Outputs
 
@@ -857,75 +430,38 @@ Target a specific image:
 
 ```bash
 python smoke_test.py \
-  --method PP-OCRv5 \
+  --method PP-OCRv6 \
   --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
   --output output-smoke
 ```
 
-Run PP-OCRv5 with PaddleVL post-OCR auditing:
+Run PP-OCRv6 with PaddleVL post-OCR auditing:
 
 ```bash
 python smoke_test.py \
-  --method PP-OCRv5 \
+  --method PP-OCRv6 \
   --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
   --output output-smoke-post-vl \
   --post-ocr-vl-check \
-  --post-ocr-vl-backend paddlevl \
   --post-ocr-vl-candidate-mode suspicious \
   --post-ocr-vl-max-words 25 \
   --post-ocr-vl-no-apply
 ```
 
-Run PP-OCRv5 with the generic OpenAI-compatible post-OCR backend:
-
-```bash
-python smoke_test.py \
-  --method PP-OCRv5 \
-  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke-ollama \
-  --post-ocr-vl-check \
-  --post-ocr-vl-backend olmocr \
-  --post-ocr-vl-ollama-openai-url http://localhost:11434/v1 \
-  --post-ocr-vl-ollama-openai-model richardyoung/olmocr2:7b-q8
-```
-
-Run PP-OCRv5 with the dedicated Chandra backend:
-
-```bash
-python smoke_test.py \
-  --method PP-OCRv5 \
-  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke-chandra \
-  --post-ocr-vl-check \
-  --post-ocr-vl-backend chandra \
-  --post-ocr-vl-chandra-url http://127.0.0.1:8000/v1 \
-  --post-ocr-vl-chandra-model mradermacher/chandra-ocr-2-GGUF:Q4_K_M
-```
-
-The CLI still accepts the older aliases:
-
-- `--post-ocr-vl-olmocr-url`
-- `--post-ocr-vl-olmocr-model`
-
 `smoke_test.py` covers almost all of the same option families as the Gradio
 app, plus a couple of script-only details:
 
-- `--preprocessing-preset` is a legacy single-flag shortcut that maps to
-  multiple preprocessing steps unless `--preprocessing-step` is supplied
-- `--preprocessing-step` can be repeated to build an explicit preprocessing
-  pipeline
 - `--disable-doclayout-recovery` turns off the fallback tile used to recover
   regions missed by PP-DocLayoutV3
 - `--post-ocr-vl-no-apply`, `--post-ocr-vl-no-save-tiles`, and
   `--post-ocr-vl-no-group-lines` are negative flags for the corresponding
   positive Gradio checkboxes
-- `PP-StructureV3` tiling is still reachable from `smoke_test.py`, even though
-  the Gradio app hides it
 
 Current smoke-test defaults are slightly different from the Gradio UI:
 
-- preprocessing defaults to `none`
-- post-OCR VL defaults to enabled for `PP-OCRv5`
+- preprocessing defaults to the same best pre-process bundle when
+  `--crop-black-border` is active
+- post-OCR VL defaults to enabled for `PP-OCRv6`
 - `--tile-strategy` defaults to `grid_doclayout_v3`
 
 ## Helper Scripts
@@ -954,12 +490,11 @@ compose.yaml               PaddleOCR-VL Docker services
 setup_wsl.sh               WSL setup helper
 requirements.txt           Main Windows / full environment dependencies
 requirements-wsl.txt       WSL-friendly dependency set
+windows_bundle/            Shared-PC Windows start/stop/install scripts
 engine/                    Paddle engine setup and compatibility code
 services/
-  auto_ocr.py              Auto Routing logic
-  ocr_pp.py                PP-OCRv5 and PP-StructureV3 execution
-  ocr_vl.py                PaddleVL execution
-  post_ocr_vl.py           Post-OCR VL checks for PP-OCRv5
+  ocr_pp.py                PP-OCRv6 execution
+  post_ocr_vl.py           Post-OCR VL checks for PP-OCRv6
   image_preprocessing.py   Preprocessing steps
   tile_ocr.py              Tiling logic
   pdf_generation.py        Searchable PDF generation
@@ -984,11 +519,6 @@ output/                    Typical output folder
 In WSL or headless environments, `tkinter` may be unavailable. Paste the input
 and output paths manually.
 
-### `PP-StructureV3` shows fewer advanced options
-
-This is expected. The current app intentionally disables source-image tiling and
-post-OCR VL for `PP-StructureV3`.
-
 ### PaddleVL methods fail immediately
 
 Make sure:
@@ -996,21 +526,6 @@ Make sure:
 - Docker is running
 - `docker compose up -d` is healthy
 - `http://127.0.0.1:8080/health` responds
-
-### OpenAI-compatible or Chandra post-OCR checks return empty or weak results
-
-Check:
-
-- the target server is running
-- the model name exists exactly as served by that endpoint
-- the generic OpenAI-compatible URL is `http://localhost:11434/v1` if using Ollama
-- the Chandra URL matches your dedicated Chandra server if using the `Chandra` backend
-
-Useful Ollama test:
-
-```powershell
-ollama list
-```
 
 ### A PDF opens in VS Code with a binary / encoding warning
 

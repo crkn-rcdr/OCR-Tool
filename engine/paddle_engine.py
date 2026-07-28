@@ -1,6 +1,7 @@
 import threading
 from .paddlex_compat import apply_headless_opencv_patch
 from services.ocr_defaults import (
+    DEFAULT_OCR_VERSION,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
     DEFAULT_TEXT_DET_LIMIT_TYPE,
@@ -12,8 +13,9 @@ from services.ocr_defaults import (
 )
 
 apply_headless_opencv_patch()
-from paddleocr import PPStructureV3
 from paddleocr import PaddleOCR  
+
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
 
 def option_or_default(opt: dict, key: str, default):
@@ -55,6 +57,7 @@ class PaddleEngine:
        
         return {
             "method": opt.get("method"),
+            "ocr_version": DEFAULT_OCR_VERSION,
             "device": opt.get("device"),
             "use_doc_orientation_classify": opt.get(
                 "use_doc_orientation_classify", False
@@ -150,14 +153,13 @@ class PaddleEngine:
             kwargs["device"] = params["device"]
         if params["lang"] is not None:
             kwargs["lang"] = params["lang"]
-        print("[DEBUG] init kwargs:", kwargs, flush=True)
         
-        if method == "PP-OCRv5":
-            kwargs["return_word_box"] = True
-            self.pipeline = PaddleOCR(**kwargs)
-        elif method in ["PP-StructureV3","Auto Routing"]:
-            
-            self.pipeline = PPStructureV3(**kwargs)
+        if method not in PADDLE_OCR_METHODS:
+            raise ValueError(f"Unsupported OCR method: {method}")
+
+        kwargs["ocr_version"] = params["ocr_version"]
+        kwargs["return_word_box"] = True
+        self.pipeline = PaddleOCR(**kwargs)
 
         self._init_params = params
         self.method = method
@@ -178,7 +180,7 @@ class PaddleEngine:
             "text_rec_score_thresh": params["text_rec_score_thresh"],
         }
 
-        if self.method == "PP-OCRv5" and hasattr(self.pipeline, "paddlex_pipeline"):
+        if self.method in PADDLE_OCR_METHODS and hasattr(self.pipeline, "paddlex_pipeline"):
             return self.pipeline.paddlex_pipeline.predict(
                 image_path,
                 **predict_kwargs,

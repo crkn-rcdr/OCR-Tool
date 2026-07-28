@@ -6,7 +6,6 @@ import base64
 import json
 import logging
 import math
-import os
 import re
 import csv
 from difflib import SequenceMatcher
@@ -16,7 +15,6 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 from langdetect import DetectorFactory, LangDetectException, detect_langs
@@ -24,15 +22,10 @@ from PIL import Image
 from spellchecker import SpellChecker
 
 from services.ocr_defaults import (
-    DEFAULT_CHANDRA_API_URL,
-    DEFAULT_CHANDRA_MODEL,
-    DEFAULT_OLLAMA_OPENAI_API_URL,
-    DEFAULT_OLLAMA_OPENAI_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
-    DEFAULT_POST_OCR_VL_GROUP_LINES,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -42,110 +35,13 @@ from services.ocr_defaults import (
 logger = logging.getLogger(__name__)
 
 
-def _legacy_chandra_model(opt: dict[str, Any]) -> str | None:
-    """Return a legacy generic OpenAI-compatible model when it clearly targets Chandra."""
-    model = opt.get("post_ocr_vl_ollama_openai_model") or opt.get("post_ocr_vl_olmocr_model")
-    if model and _is_chandra_model(str(model)):
-        return str(model)
-    return None
-
-
-def _legacy_chandra_url(opt: dict[str, Any]) -> str | None:
-    """Return a legacy generic OpenAI-compatible URL when it was used for Chandra."""
-    if not _legacy_chandra_model(opt):
-        return None
-    url = opt.get("post_ocr_vl_ollama_openai_url") or opt.get("post_ocr_vl_olmocr_url")
-    return str(url) if url else None
-
-
-def _normalize_openai_backend_name(backend: Any) -> str:
-    """Normalize an OpenAI-compatible backend key to either generic or Chandra."""
-    return "chandra" if str(backend or "").strip().lower() == "chandra" else "olmocr"
-
-
-def _get_openai_compat_url(opt: dict[str, Any], backend: str = "olmocr") -> str:
-    """Return the configured OpenAI-compatible base URL for post-OCR VL calls."""
-    backend = _normalize_openai_backend_name(backend)
-    if backend == "chandra":
-        return str(
-            opt.get("post_ocr_vl_chandra_url")
-            or _legacy_chandra_url(opt)
-            or DEFAULT_CHANDRA_API_URL
-        )
-    return str(
-        opt.get("post_ocr_vl_ollama_openai_url")
-        or opt.get("post_ocr_vl_olmocr_url")
-        or DEFAULT_OLLAMA_OPENAI_API_URL
-    )
-
-
-def _get_openai_compat_model(opt: dict[str, Any], backend: str = "olmocr") -> str:
-    """Return the configured OpenAI-compatible model name for post-OCR VL calls."""
-    backend = _normalize_openai_backend_name(backend)
-    if backend == "chandra":
-        return str(
-            opt.get("post_ocr_vl_chandra_model")
-            or _legacy_chandra_model(opt)
-            or DEFAULT_CHANDRA_MODEL
-        )
-    return str(
-        opt.get("post_ocr_vl_ollama_openai_model")
-        or opt.get("post_ocr_vl_olmocr_model")
-        or DEFAULT_OLLAMA_OPENAI_MODEL
-    )
-
-
-def _get_openai_compat_api_key(opt: dict[str, Any], backend: str = "olmocr") -> str | None:
-    """Return the configured API key for OpenAI-compatible post-OCR VL calls."""
-    backend = _normalize_openai_backend_name(backend)
-    if backend == "chandra":
-        return (
-            opt.get("post_ocr_vl_chandra_api_key")
-            or opt.get("post_ocr_vl_ollama_openai_api_key")
-            or opt.get("post_ocr_vl_olmocr_api_key")
-            or os.getenv("CHANDRA_API_KEY")
-            or os.getenv("OLLAMA_OPENAI_API_KEY")
-            or os.getenv("OPENAI_COMPAT_API_KEY")
-            or os.getenv("OLMOCR_API_KEY")
-        )
-    return (
-        opt.get("post_ocr_vl_ollama_openai_api_key")
-        or opt.get("post_ocr_vl_olmocr_api_key")
-        or os.getenv("OLLAMA_OPENAI_API_KEY")
-        or os.getenv("OPENAI_COMPAT_API_KEY")
-        or os.getenv("OLMOCR_API_KEY")
-    )
-
-
-def _extract_openai_message_text(data: dict[str, Any]) -> str:
-    """Extract the best available assistant text from an OpenAI-style response."""
-    message = data.get("choices", [{}])[0].get("message", {})
-    content = message.get("content", "")
-    if str(content or "").strip():
-        return str(content)
-    return str(message.get("reasoning_content", "") or "")
-
-
-def _native_ollama_chat_url(server_url: str) -> str | None:
-    """Build the native Ollama chat endpoint from a server URL when possible."""
-    parsed = urlparse(server_url)
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    if parsed.port != 11434:
-        return None
-    return f"{parsed.scheme}://{parsed.netloc}/api/chat"
-
-
-POST_OCR_VL_METHODS = {"PP-OCRv5"}
-POST_OCR_VL_MAX_LINE_TARGETS = 8
+POST_OCR_VL_METHODS = {"PP-OCRv6"}
 WORD_RE = re.compile(r"[A-Za-z0-9]")
 ODD_CHAR_RE = re.compile(r"[^A-Za-z0-9'\u2019`.,:;!?()\\[\\]{}\\-/& ]")
 WORD_STRIP_CHARS = ".,:;!?()[]{}\"'`\u2018\u2019-–—"
 WORDISH_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
 LINE_TEXT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['\u2019][A-Za-z0-9]+)?")
 CONTROL_TAG_RE = re.compile(r"<\|[^>]*\|>")
-HTML_BREAK_TAG_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
-HTML_TAG_RE = re.compile(r"</?[^>]+>")
 OCR_WORDISH_RE = re.compile(r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*")
 JOINER_WORDS = {
     "a",
@@ -388,7 +284,7 @@ def apply_post_ocr_vl_check(
     metadata: dict[str, Any] = {
         "enabled": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "backend": normalize_backend(opt.get("post_ocr_vl_backend")),
+        "backend": DEFAULT_POST_OCR_VL_BACKEND,
         "candidate_mode": opt.get(
             "post_ocr_vl_candidate_mode",
             DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
@@ -413,9 +309,7 @@ def apply_post_ocr_vl_check(
         "save_tiles": bool(
             opt.get("post_ocr_vl_save_tiles", DEFAULT_POST_OCR_VL_SAVE_TILES)
         ),
-        "group_line_candidates": bool(
-            opt.get("post_ocr_vl_group_lines", DEFAULT_POST_OCR_VL_GROUP_LINES)
-        ),
+        "group_line_candidates": False,
         "progress_output": str(progress_path),
         "corrections": [],
     }
@@ -446,11 +340,9 @@ def apply_post_ocr_vl_check(
         word_profile.spellchecker.language if word_profile.spellchecker else None
     )
     metadata["word_profile_training_tokens"] = word_profile.training_token_count
-    backend_order = backends_for_request(metadata["backend"])
+    backend_order = [DEFAULT_POST_OCR_VL_BACKEND]
 
-    include_line_text_fallback = any(
-        backend in {"olmocr", "chandra", "paddlevl"} for backend in backend_order
-    )
+    include_line_text_fallback = "paddlevl" in backend_order
 
     suspicious_word_count = len(
         collect_word_candidates(
@@ -478,19 +370,8 @@ def apply_post_ocr_vl_check(
     metadata["line_text_fallback_candidate_count"] = sum(
         1 for candidate in candidates if candidate.source == "line_text"
     )
-    openai_model_name = (
-        _get_openai_compat_model(opt, "olmocr") if "olmocr" in backend_order else ""
-    )
-    metadata["line_grouping_active"] = (
-        metadata["group_line_candidates"]
-        and backend_order == ["olmocr"]
-        and not _is_chandra_model(openai_model_name)
-        and not _is_deepseek_ocr_model(openai_model_name)
-    )
-    candidate_batches = group_candidate_batches(
-        candidates,
-        group_lines=metadata["line_grouping_active"],
-    )
+    metadata["line_grouping_active"] = False
+    candidate_batches = group_candidate_batches(candidates)
     metadata["vl_request_count"] = len(candidate_batches)
     metadata["line_group_count"] = sum(
         1 for batch in candidate_batches if should_process_batch_as_line(batch)
@@ -936,52 +817,14 @@ def line_text_tokens(text: str) -> list[LineTextToken]:
     ]
 
 
-def group_candidate_batches(
-    candidates: list[WordCandidate],
-    group_lines: bool,
-) -> list[list[WordCandidate]]:
+def group_candidate_batches(candidates: list[WordCandidate]) -> list[list[WordCandidate]]:
     """Group suspicious candidates into word or line batches for VL requests."""
-    if not group_lines:
-        return [[candidate] for candidate in candidates]
-
-    indexed_by_line: dict[int, list[tuple[int, WordCandidate]]] = {}
-    for index, candidate in enumerate(candidates):
-        indexed_by_line.setdefault(candidate.line_index, []).append((index, candidate))
-
-    batches: list[tuple[int, list[WordCandidate]]] = []
-    grouped_lines: set[int] = set()
-    for line_index, entries in indexed_by_line.items():
-        has_line_text_candidate = any(
-            candidate.source == "line_text" for _index, candidate in entries
-        )
-        if len(entries) < 2 and not has_line_text_candidate:
-            continue
-
-        grouped_lines.add(line_index)
-        ordered = [candidate for _index, candidate in entries]
-        ordered.sort(key=lambda candidate: candidate.word_index)
-        for start in range(0, len(ordered), POST_OCR_VL_MAX_LINE_TARGETS):
-            chunk = ordered[start : start + POST_OCR_VL_MAX_LINE_TARGETS]
-            chunk_ids = {id(candidate) for candidate in chunk}
-            first_index = min(
-                index
-                for index, candidate in entries
-                if id(candidate) in chunk_ids
-            )
-            batches.append((first_index, chunk))
-
-    for index, candidate in enumerate(candidates):
-        if candidate.line_index in grouped_lines:
-            continue
-        batches.append((index, [candidate]))
-
-    batches.sort(key=lambda item: item[0])
-    return [batch for _index, batch in batches]
+    return [[candidate] for candidate in candidates]
 
 
 def should_process_batch_as_line(batch: list[WordCandidate]) -> bool:
     """Return whether a candidate batch should be checked as one line image."""
-    return len(batch) > 1 or any(candidate.source == "line_text" for candidate in batch)
+    return any(candidate.source == "line_text" for candidate in batch)
 
 
 def process_line_batch(
@@ -1099,54 +942,15 @@ def process_line_batch(
             ocr_payload,
         )
 
-    backend_result: dict[str, Any]
-    line_corrections: dict[tuple[int, int], str] = {}
-    try:
-        response_text, line_corrections = request_olmocr_line(
-            tile,
-            ocr_payload,
-            batch,
-            opt,
-        )
-        backend_result = {
-            "backend": "olmocr",
-            "text": response_text,
-            "parsed_correction_count": len(line_corrections),
-        }
-    except Exception as exc:
-        backend_result = {"backend": "olmocr", "error": str(exc)}
-
-    for candidate, record in zip(batch, records):
+    error = "Grouped line correction is disabled for the PaddleVL-only pipeline."
+    for record in records:
         record["crop_box"] = crop_box
         if tile_path is not None:
             record["tile_path"] = str(tile_path)
-
-        selected_text, reason = choose_line_correction(
-            candidate.text,
-            line_corrections.get(candidate_key(candidate)),
-            backend_result.get("error"),
-        )
-        record["backend_results"] = [
-            {
-                **backend_result,
-                "target_word_index": candidate.word_index,
-                "target_selected_text": selected_text,
-            }
-        ]
-        record["selected_text"] = selected_text
-        record["reason"] = reason
-
-        if (
-            metadata["apply_corrections"]
-            and selected_text
-            and reason == "accepted"
-        ):
-            apply_candidate_correction(ocr_payload, candidate, selected_text)
-            record["applied"] = True
-            applied_count += 1
-        else:
-            record["applied"] = False
-
+        record["backend_results"] = [{"backend": "paddlevl", "error": error}]
+        record["selected_text"] = None
+        record["reason"] = "line_group_disabled"
+        record["applied"] = False
         metadata["corrections"].append(record)
 
     processed_count += len(batch)
@@ -1209,7 +1013,7 @@ def process_single_line_text_batch(
         record["tile_path"] = str(tile_path)
 
     results = []
-    for backend in backends_for_request(metadata["backend"]):
+    for backend in [DEFAULT_POST_OCR_VL_BACKEND]:
         try:
             raw_text = run_backend_check(
                 backend,
@@ -1962,8 +1766,6 @@ def run_backend_check(
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
     if backend == "paddlevl":
         return request_paddlevl_word(tile, original_text, opt)
-    if backend in {"olmocr", "chandra"}:
-        return request_olmocr_word(tile, original_text, opt, backend=backend)
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
@@ -1996,413 +1798,6 @@ def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> s
     )
 
 
-def _build_word_correction_prompt(original_text: str, model_name: str = None) -> str:
-    """
-    Build a prompt for word correction that's optimized for the specific model.
-    
-    Args:
-        original_text: The OCR text that may need correction
-        model_name: Name of the VLM being used (optional, for model-specific prompting)
-    
-    Returns:
-        A prompt string optimized for the model
-    """
-    # For Chandra and other OCR-specialized models, use direct prompts
-    if model_name and _is_chandra_model(model_name):
-        return (
-            "What is the correct spelling of the target word in this newspaper image? "
-            "Return only the corrected word text, nothing else. "
-            f"Previous OCR reading: {original_text!r}"
-        )
-
-    if model_name and _is_deepseek_ocr_model(model_name):
-        return (
-            "Extract the text in the image. "
-            "Return only the visible target word text with no tags, no boxes, no markdown, "
-            "and no explanation. "
-            f"Previous OCR reading: {original_text!r}"
-        )
-    
-    # Default prompt for general vision models
-    return (
-        "Read the single target word in this newspaper crop. "
-        "Return only the corrected word, with visible punctuation only if it "
-        f"is part of the word. The previous OCR guess was: {original_text!r}."
-    )
-
-
-def request_olmocr_word(
-    tile: Image.Image,
-    original_text: str,
-    opt: dict,
-    backend: str = "olmocr",
-) -> str:
-    """Request a word-level correction from an OLMOCR-compatible backend."""
-    backend = _normalize_openai_backend_name(backend)
-    server_url = _get_openai_compat_url(opt, backend).rstrip("/")
-    completion_url = (
-        server_url
-        if server_url.endswith("/chat/completions")
-        else f"{server_url}/chat/completions"
-    )
-    model = _get_openai_compat_model(opt, backend)
-    prompt = _build_word_correction_prompt(original_text, model_name=model)
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_to_base64(tile)}"
-                        },
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.0,
-        "max_tokens": 32,
-    }
-    headers = {"Content-Type": "application/json"}
-    api_key = _get_openai_compat_api_key(opt, backend)
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    response = requests.post(
-        completion_url,
-        headers=headers,
-        json=payload,
-        timeout=(10, 120),
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
-
-    data = response.json()
-    content = _extract_openai_message_text(data)
-    if _is_chandra_model(model):
-        if not str(content or "").strip():
-            native_url = _native_ollama_chat_url(server_url)
-            if native_url:
-                native_payload = {
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt,
-                            "images": [image_to_base64(tile)],
-                        }
-                    ],
-                    "stream": False,
-                    "think": False,
-                    "options": {
-                        "temperature": 0,
-                        "num_predict": 32,
-                    },
-                }
-                native_response = requests.post(
-                    native_url,
-                    headers=headers,
-                    json=native_payload,
-                    timeout=(10, 120),
-                )
-                if native_response.status_code == 200:
-                    native_data = native_response.json()
-                    content = native_data.get("message", {}).get("content", "") or content
-        return clean_vl_text(
-            _extract_chandra_word_candidate(content, original_text),
-            model_name=model,
-        )
-    if _is_deepseek_ocr_model(model):
-        return clean_vl_text(
-            _extract_deepseek_word_candidate(content, original_text),
-            model_name=model,
-        )
-    return clean_vl_text(content, model_name=model)
-
-
-def request_olmocr_line(
-    tile: Image.Image,
-    ocr_payload: dict[str, Any],
-    candidates: list[WordCandidate],
-    opt: dict,
-    backend: str = "olmocr",
-) -> tuple[str, dict[tuple[int, int], str]]:
-    """Request line-level corrections from an OLMOCR-compatible backend."""
-    backend = _normalize_openai_backend_name(backend)
-    server_url = _get_openai_compat_url(opt, backend).rstrip("/")
-    completion_url = (
-        server_url
-        if server_url.endswith("/chat/completions")
-        else f"{server_url}/chat/completions"
-    )
-    model = _get_openai_compat_model(opt, backend)
-    line_index = candidates[0].line_index
-    prompt = build_olmocr_line_prompt(ocr_payload, line_index, candidates, model_name=model)
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_to_base64(tile)}"
-                        },
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.0,
-        "max_tokens": min(512, max(128, len(candidates) * 64)),
-    }
-    headers = {"Content-Type": "application/json"}
-    api_key = _get_openai_compat_api_key(opt, backend)
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    response = requests.post(
-        completion_url,
-        headers=headers,
-        json=payload,
-        timeout=(10, 120),
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
-
-    data = response.json()
-    content = _extract_openai_message_text(data)
-    text = str(content or "").strip()
-    return text, parse_olmocr_line_corrections(text, candidates, model_name=model)
-
-
-def build_olmocr_line_prompt(
-    ocr_payload: dict[str, Any],
-    line_index: int,
-    candidates: list[WordCandidate],
-    model_name: str = None,
-) -> str:
-    """Build the line-level prompt used for grouped OLMOCR correction calls."""
-    use_line_text_tokens = any(candidate.source == "line_text" for candidate in candidates)
-    line_words = line_words_for_prompt(
-        ocr_payload,
-        line_index,
-        use_line_text_tokens=use_line_text_tokens,
-    )
-    indexed_line = "\n".join(
-        f"{word_index}: {word!r}"
-        for word_index, word in enumerate(line_words)
-    )
-    if len(indexed_line) > 2500:
-        indexed_line = f"{indexed_line[:2500]}\n..."
-
-    targets = "\n".join(
-        f"{target_index}. word_index={candidate.word_index}, "
-        f"original_text={candidate.text!r}"
-        for target_index, candidate in enumerate(candidates, start=1)
-    )
-    
-    # For Chandra and other OCR-specialized models, use simpler prompt
-    if model_name and _is_chandra_model(model_name):
-        return (
-            "You are an OCR correction specialist. Read the newspaper line in the image.\n\n"
-            "Word positions (OCR text):\n"
-            f"{indexed_line}\n\n"
-            "Target words to correct:\n"
-            f"{targets}\n\n"
-            "Return ONLY valid JSON with this exact format (no other text):\n"
-            '{"corrections":[{"target":1,"word_index":0,"corrected_text":"word"}]}\n'
-            "Rules:\n"
-            "- Use 'target' to reference the target number (1-indexed)\n"
-            "- Include all target words, even if unchanged\n"
-            "- Repeat original text if correct\n"
-            "- Never use placeholder strings like 'word' or 'text'\n"
-            "- If you cannot read a word, repeat the original"
-        )
-
-    if model_name and _is_deepseek_ocr_model(model_name):
-        return (
-            "Extract the text in the image. "
-            "Return strict JSON only, with no tags, no markdown, and no explanation.\n\n"
-            "OCR line words by zero-based word_index:\n"
-            f"{indexed_line}\n\n"
-            "Target words to verify:\n"
-            f"{targets}\n\n"
-            "JSON schema:\n"
-            '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}\n'
-            "Include every target once. If a target is already correct or unreadable, repeat the original text."
-        )
-    
-    # Default prompt for general vision models
-    return (
-        "Read the newspaper line crop. Use the image as the source of truth; "
-        "the OCR text below is only to identify word positions.\n\n"
-        "OCR line words by zero-based word_index:\n"
-        f"{indexed_line}\n\n"
-        "Target words to verify:\n"
-        f"{targets}\n\n"
-        "Return strict JSON only, with this schema:\n"
-        '{"corrections":[{"target":1,"word_index":0,"corrected_text":"church"}]}\n'
-        "Do not return the literal string 'word' or other placeholders as a correction. "
-        "For each target, repeat the original text if it is already correct. "
-        "Do not include non-target words or any explanation."
-    )
-
-
-def line_words_for_prompt(
-    ocr_payload: dict[str, Any],
-    line_index: int,
-    use_line_text_tokens: bool = False,
-) -> list[str]:
-    """Extract ordered candidate words for inclusion in a line-level prompt."""
-    if use_line_text_tokens:
-        rec_texts = ocr_payload.get("rec_texts") or []
-        if isinstance(rec_texts, list) and line_index < len(rec_texts):
-            return [token.text for token in line_text_tokens(str(rec_texts[line_index] or ""))]
-
-    text_word = ocr_payload.get("text_word") or []
-    if not isinstance(text_word, list) or line_index >= len(text_word):
-        return []
-    words = text_word[line_index]
-    if not isinstance(words, list):
-        return []
-    return [str(word or "") for word in words]
-
-
-def parse_olmocr_line_corrections(
-    text: str,
-    candidates: list[WordCandidate],
-    model_name: str = None,
-) -> dict[tuple[int, int], str]:
-    """Parse structured line-correction output returned by an OLMOCR backend."""
-    data = parse_json_response(text)
-    if data is None:
-        return {}
-
-    if isinstance(data, dict):
-        raw_corrections = data.get("corrections")
-        if raw_corrections is None:
-            raw_corrections = data.get("targets")
-    else:
-        raw_corrections = data
-
-    if not isinstance(raw_corrections, list):
-        return {}
-
-    by_target = {
-        target_index: candidate
-        for target_index, candidate in enumerate(candidates, start=1)
-    }
-    by_word_index = {candidate.word_index: candidate for candidate in candidates}
-    by_original: dict[str, list[WordCandidate]] = {}
-    for candidate in candidates:
-        by_original.setdefault(normalize_for_compare(candidate.text), []).append(
-            candidate
-        )
-
-    corrections: dict[tuple[int, int], str] = {}
-    for item in raw_corrections:
-        if not isinstance(item, dict):
-            continue
-        candidate = candidate_from_line_correction_item(
-            item,
-            by_target,
-            by_word_index,
-            by_original,
-        )
-        if candidate is None:
-            continue
-        corrected = (
-            item.get("corrected_text")
-            or item.get("correction")
-            or item.get("text")
-            or item.get("selected_text")
-        )
-        if corrected is None:
-            continue
-        corrections[candidate_key(candidate)] = clean_vl_text(corrected, model_name=model_name)
-
-    return corrections
-
-
-def candidate_from_line_correction_item(
-    item: dict[str, Any],
-    by_target: dict[int, WordCandidate],
-    by_word_index: dict[int, WordCandidate],
-    by_original: dict[str, list[WordCandidate]],
-) -> WordCandidate | None:
-    """Convert one parsed line-correction item into a candidate correction record."""
-    target = parse_optional_int(item.get("target") or item.get("target_index"))
-    if target in by_target:
-        return by_target[target]
-
-    word_index = parse_optional_int(item.get("word_index"))
-    if word_index in by_word_index:
-        return by_word_index[word_index]
-
-    original_text = item.get("original_text") or item.get("original")
-    original_key = normalize_for_compare(str(original_text or ""))
-    matches = by_original.get(original_key) or []
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-
-def parse_json_response(text: str) -> Any:
-    """Parse a JSON response, including fenced-code variants, into Python data."""
-    value = str(text or "").strip()
-    if not value:
-        return None
-
-    fenced = re.search(
-        r"```(?:json)?\s*(.*?)```",
-        value,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if fenced:
-        value = fenced.group(1).strip()
-
-    for opening, closing in (("[", "]"), ("{", "}")):
-        start = value.find(opening)
-        end = value.rfind(closing)
-        if start == -1 or end == -1 or end <= start:
-            continue
-        fragment = value[start : end + 1]
-        try:
-            return json.loads(fragment)
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-def choose_line_correction(
-    original_text: str,
-    corrected_text: str | None,
-    error: Any = None,
-) -> tuple[str | None, str]:
-    """Choose the best line-level correction for one suspicious OCR candidate."""
-    if error:
-        return None, "backend_error"
-    if corrected_text is None:
-        return None, "line_no_target_result"
-
-    corrected = restore_missing_spacing(original_text, clean_vl_text(corrected_text))
-    if not is_clean_correction(original_text, corrected):
-        return None, "line_unclean_vl_text"
-    if corrections_equivalent(corrected, original_text):
-        return corrected, "unchanged"
-    return corrected, "accepted"
-
-
-def candidate_key(candidate: WordCandidate) -> tuple[int, int]:
-    """Return a stable sort key for a word candidate."""
-    return candidate.line_index, candidate.word_index
-
-
 def extract_paddlevl_text(data: Any) -> str:
     """Extract the best text string from a PaddleOCR-VL response payload."""
     if not isinstance(data, dict):
@@ -2417,22 +1812,7 @@ def extract_paddlevl_text(data: Any) -> str:
     if isinstance(rec_texts, list):
         return " ".join(str(item) for item in rec_texts if item)
 
-    try:
-        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
-            "parsing_res_list"
-        ]
-    except (KeyError, IndexError, TypeError):
-        parsing_res_list = []
-
-    texts = []
-    for block in parsing_res_list:
-        if not isinstance(block, dict):
-            continue
-        text = block.get("block_content") or block.get("text")
-        if text:
-            texts.append(str(text))
-
-    return " ".join(texts)
+    return ""
 
 
 def choose_correction(
@@ -2626,50 +2006,6 @@ def write_post_ocr_vl_progress(
         pass
 
 
-def _is_chandra_model(model_name: str) -> bool:
-    """Check if the model name indicates it's a Chandra model."""
-    if not model_name:
-        return False
-    model_lower = model_name.lower()
-    return "chandra" in model_lower or "chandra-ocr" in model_lower
-
-
-def _is_deepseek_ocr_model(model_name: str) -> bool:
-    """Check if the model name indicates it's a DeepSeek OCR model."""
-    if not model_name:
-        return False
-    model_lower = model_name.lower()
-    return "deepseek-ocr" in model_lower or "deepseekocr" in model_lower
-
-
-def _parse_chandra_response(text: str) -> str:
-    """
-    Parse Chandra OCR model responses, which may return JSON or formatted text.
-    
-    Chandra often returns responses in formats like:
-    - {"word": "corrected_text", "confidence": 0.95}
-    - {"corrected_text": "word"}
-    - Plain text with metadata
-    """
-    text = str(text or "").strip()
-    if not text:
-        return ""
-    
-    # Try to parse as JSON first
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            # Try common field names
-            for key in ("word", "corrected_text", "correction", "text", "result"):
-                if key in data and isinstance(data[key], str):
-                    return str(data[key]).strip()
-    except (json.JSONDecodeError, ValueError):
-        pass
-    
-    # If not JSON or JSON parsing failed, return text as-is for clean_vl_text to handle
-    return text
-
-
 def _strip_control_tag_artifacts(value: str) -> str:
     """Extract user-visible text from model outputs that include control tags."""
     if not value or not CONTROL_TAG_RE.search(value):
@@ -2688,21 +2024,6 @@ def _strip_control_tag_artifacts(value: str) -> str:
     collapsed = CONTROL_TAG_RE.sub(" ", value)
     collapsed = re.sub(r"\s+", " ", collapsed).strip()
     return collapsed.strip("{}[]()<>|+-,:;")
-
-
-def _parse_deepseek_ocr_response(text: str) -> str:
-    """Normalize DeepSeek OCR raw outputs that may include control tags."""
-    value = str(text or "").strip()
-    if not value:
-        return ""
-
-    # DeepSeek OCR may emit content through raw control-tagged text streams.
-    value = _strip_control_tag_artifacts(value)
-    value = HTML_BREAK_TAG_RE.sub("\n", value)
-    value = HTML_TAG_RE.sub(" ", value)
-    value = re.sub(r"^\+\s*", "", value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
 
 
 def _extract_best_word_candidate(text: str, original_text: str, minimum_score: float = 0.55) -> str:
@@ -2746,26 +2067,6 @@ def _extract_best_word_candidate(text: str, original_text: str, minimum_score: f
     return ""
 
 
-def _extract_deepseek_word_candidate(text: str, original_text: str) -> str:
-    """Pick the most plausible single-word OCR result from DeepSeek output."""
-    value = _parse_deepseek_ocr_response(text)
-    if not value:
-        return ""
-    return _extract_best_word_candidate(value, original_text, minimum_score=0.55)
-
-
-def _extract_chandra_word_candidate(text: str, original_text: str) -> str:
-    """Pick the most plausible word from Chandra OCR-style content."""
-    value = str(text or "").strip()
-    if not value:
-        return ""
-
-    value = HTML_BREAK_TAG_RE.sub("\n", value)
-    value = HTML_TAG_RE.sub(" ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return _extract_best_word_candidate(value, original_text, minimum_score=0.5)
-
-
 def extract_line_fallback_candidate_text(
     text: str,
     original_text: str,
@@ -2777,22 +2078,6 @@ def extract_line_fallback_candidate_text(
     if not value:
         return ""
 
-    if backend in {"olmocr", "chandra"}:
-        model = _get_openai_compat_model(opt, backend)
-        if _is_chandra_model(model):
-            return clean_vl_text(
-                _extract_chandra_word_candidate(value, original_text),
-                model_name=model,
-            )
-        if _is_deepseek_ocr_model(model):
-            return clean_vl_text(
-                _extract_deepseek_word_candidate(value, original_text),
-                model_name=model,
-            )
-        return clean_vl_text(
-            _extract_best_word_candidate(value, original_text, minimum_score=0.45)
-        )
-
     return clean_vl_text(
         _extract_best_word_candidate(value, original_text, minimum_score=0.45)
     )
@@ -2803,16 +2088,6 @@ def clean_vl_text(text: Any, model_name: str = None) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-
-    # Handle model-specific response formats
-    if model_name and _is_chandra_model(model_name):
-        value = _parse_chandra_response(value)
-        if not value:
-            return ""
-    elif model_name and _is_deepseek_ocr_model(model_name):
-        value = _parse_deepseek_ocr_response(value)
-        if not value:
-            return ""
 
     value = re.sub(r"```(?:text|markdown|yaml)?", "", value, flags=re.IGNORECASE)
     value = value.replace("```", "").strip()
@@ -2865,37 +2140,6 @@ def resolve_image_path(payload: dict[str, Any], json_path: Path) -> Path | None:
                 return candidate
 
     return None
-
-
-def normalize_backend(value: Any) -> str:
-    """Normalize a backend selection into a supported post-OCR VL backend key."""
-    backend = str(value or DEFAULT_POST_OCR_VL_BACKEND).strip().lower()
-    if backend in {"paddle", "paddlevl", "paddle_vl", "paddle-vl"}:
-        return "paddlevl"
-    if backend in {"chandra", "chandra_ocr", "chandra-ocr"}:
-        return "chandra"
-    if backend in {"olm", "olmocr", "olm-ocr", "olm_ocr"}:
-        return "olmocr"
-    if backend in {
-        "both_chandra",
-        "chandra_both",
-        "paddlevl_chandra",
-        "paddlevl+chandra",
-        "paddlevl-chandra",
-    }:
-        return "both_chandra"
-    if backend == "both":
-        return "both"
-    return DEFAULT_POST_OCR_VL_BACKEND
-
-
-def backends_for_request(backend: str) -> list[str]:
-    """Expand a backend selection into the concrete backends to call."""
-    if backend == "both":
-        return ["paddlevl", "olmocr"]
-    if backend == "both_chandra":
-        return ["paddlevl", "chandra"]
-    return [backend]
 
 
 def geometry_to_bbox(geometry: Any) -> list[float] | None:

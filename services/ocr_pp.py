@@ -29,6 +29,8 @@ from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
 
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
+
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
 #
@@ -138,8 +140,8 @@ def release_paddle_gpu_memory() -> None:
 
 
 def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
-    """Build safer retry configurations for PP-OCRv5 GPU/CPU recovery."""
-    if opt.get("method") != "PP-OCRv5":
+    """Build safer retry configurations for PaddleOCR GPU/CPU recovery."""
+    if opt.get("method") not in PADDLE_OCR_METHODS:
         return []
 
     base = copy.deepcopy(opt)
@@ -247,7 +249,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             OCR configuration options.
 
         select (str, optional):
-            OCR engine name (e.g., PaddleVL or PP-StructureV3).
+            Reserved for older routed runs; current execution uses PP-OCRv6.
 
     Yields:
         str:

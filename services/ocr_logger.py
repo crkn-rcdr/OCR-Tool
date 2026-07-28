@@ -7,6 +7,7 @@ from pathlib import Path
 from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
+    DEFAULT_OCR_VERSION,
     DEFAULT_PREPROCESSING_PRESET,
     DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
@@ -24,13 +25,15 @@ from services.ocr_defaults import (
     PREPROCESSING_STEP_LABELS,
 )
 
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
+
 OPTION_LABELS = {
     "method": "Method",
+    "ocr_version": "PaddleOCR model version",
     "lang": "Language",
     "use_doc_orientation_classify": "Document orientation classification",
     "use_doc_unwarping": "Document unwarping",
     "use_textline_orientation": "Textline orientation",
-    "use_layout_detection": "PaddleVL layout detection",
     "generate_text_file": "Generate TXT instead of PDF/ALTO",
     "clean_punctuation_issues": "Clean punctuation artifacts in output text",
     "preprocessing_steps": "Image preprocessing steps",
@@ -53,7 +56,6 @@ OPTION_LABELS = {
     "text_rec_score_thresh": "Text recognition score threshold",
     "text_recognition_batch_size": "Text recognition batch size",
     "post_ocr_vl_enabled": "Post-OCR VL word check",
-    "post_ocr_vl_backend": "Post-OCR VL backend",
     "post_ocr_vl_candidate_mode": "Post-OCR VL candidate mode",
     "post_ocr_vl_max_words_enabled": "Post-OCR VL max words enabled",
     "post_ocr_vl_max_words": "Post-OCR VL max words",
@@ -61,12 +63,7 @@ OPTION_LABELS = {
     "post_ocr_vl_low_confidence_threshold": "Post-OCR VL low confidence threshold",
     "post_ocr_vl_apply_corrections": "Apply post-OCR VL corrections",
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
-    "post_ocr_vl_group_lines": "Group post-OCR VL same-line candidates",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
-    "post_ocr_vl_ollama_openai_url": "Post-OCR OpenAI-compatible URL",
-    "post_ocr_vl_ollama_openai_model": "Post-OCR OpenAI-compatible model",
-    "post_ocr_vl_chandra_url": "Post-OCR Chandra URL",
-    "post_ocr_vl_chandra_model": "Post-OCR Chandra model",
 }
 
 OPTION_ORDER = [
@@ -75,7 +72,6 @@ OPTION_ORDER = [
     "use_doc_orientation_classify",
     "use_doc_unwarping",
     "use_textline_orientation",
-    "use_layout_detection",
     "generate_text_file",
     "clean_punctuation_issues",
     "preprocessing_steps",
@@ -97,7 +93,6 @@ OPTION_ORDER = [
     "text_rec_score_thresh",
     "text_recognition_batch_size",
     "post_ocr_vl_enabled",
-    "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
     "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
@@ -105,12 +100,7 @@ OPTION_ORDER = [
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
-    "post_ocr_vl_group_lines",
     "post_ocr_vl_paddlevl_url",
-    "post_ocr_vl_ollama_openai_url",
-    "post_ocr_vl_ollama_openai_model",
-    "post_ocr_vl_chandra_url",
-    "post_ocr_vl_chandra_model",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -132,15 +122,7 @@ TILE_DETAIL_KEYS = {
     *GRID_TILE_KEYS,
     *DOCLAYOUT_TILE_KEYS,
 }
-POST_OCR_VL_BACKEND_LABELS = {
-    "paddlevl": "PaddleVL",
-    "olmocr": "OpenAI-compatible",
-    "chandra": "Chandra",
-    "both": "PaddleVL + OpenAI-compatible",
-    "both_chandra": "PaddleVL + Chandra",
-}
 POST_OCR_VL_DETAIL_KEYS = {
-    "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
     "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
@@ -148,12 +130,7 @@ POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
-    "post_ocr_vl_group_lines",
     "post_ocr_vl_paddlevl_url",
-    "post_ocr_vl_ollama_openai_url",
-    "post_ocr_vl_ollama_openai_model",
-    "post_ocr_vl_chandra_url",
-    "post_ocr_vl_chandra_model",
 }
 
 DOCLAYOUT_DEFAULT_OPTIONS = {
@@ -196,32 +173,24 @@ def option_applies_to_strategy(key, opt):
     method = opt.get("method")
     tile_enabled = bool(opt.get("tile_source_images", False))
     strategy = tile_strategy_from_options(opt)
-    backend = str(opt.get("post_ocr_vl_backend") or "").strip().lower()
-
-    if method != "PP-OCRv5" and key == "text_det_max_side_limit":
+    if method not in PADDLE_OCR_METHODS and key == "text_det_max_side_limit":
         return False
 
     if key == "post_ocr_vl_enabled":
-        return method == "PP-OCRv5"
+        return method in PADDLE_OCR_METHODS
 
     if key == "post_ocr_vl_max_words":
         return (
-            method == "PP-OCRv5"
+            method in PADDLE_OCR_METHODS
             and bool(opt.get("post_ocr_vl_enabled"))
             and bool(opt.get("post_ocr_vl_max_words_enabled"))
         )
 
-    if key in {"post_ocr_vl_ollama_openai_url", "post_ocr_vl_ollama_openai_model"}:
-        return backend in {"olmocr", "both"}
-
-    if key in {"post_ocr_vl_chandra_url", "post_ocr_vl_chandra_model"}:
-        return backend in {"chandra", "both_chandra"}
-
     if key == "post_ocr_vl_paddlevl_url":
-        return backend in {"paddlevl", "both", "both_chandra"}
+        return method in PADDLE_OCR_METHODS and bool(opt.get("post_ocr_vl_enabled"))
 
     if key in POST_OCR_VL_DETAIL_KEYS:
-        return method == "PP-OCRv5" and bool(opt.get("post_ocr_vl_enabled"))
+        return method in PADDLE_OCR_METHODS and bool(opt.get("post_ocr_vl_enabled"))
 
     if key == "tile_source_images":
         return True
@@ -251,10 +220,8 @@ def default_strategy_options(opt):
 def default_paddle_options(opt):
     """Yield documented default OCR thresholds for Paddle-based runs."""
     method = opt.get("method")
-    if method in {"PP-OCRv5", "PP-StructureV3", "Auto Routing"}:
+    if method in PADDLE_OCR_METHODS:
         for key, value in PADDLE_DEFAULT_OPTIONS.items():
-            if method != "PP-OCRv5" and key == "text_det_max_side_limit":
-                continue
             if key not in opt:
                 yield key, value
 
@@ -305,10 +272,6 @@ def format_option_value(key, value):
     if key == "tile_strategy":
         return TILE_STRATEGY_LABELS.get(str(value), str(value))
 
-    if key == "post_ocr_vl_backend":
-        backend = str(value or "").strip().lower()
-        return POST_OCR_VL_BACKEND_LABELS.get(backend, str(value))
-
     if isinstance(value, bool):
         return "on" if value else "off"
 
@@ -347,18 +310,12 @@ def models_for_run(opt, select=None):
     ignore_black_border = bool(opt.get("ignore_black_border", DEFAULT_IGNORE_BLACK_BORDER))
     models = []
 
-    if select and select != method:
-        models.append(f"Auto Routing selected engine: {select}")
-
-    if effective_method == "PP-OCRv5":
-        models.append("OCR pipeline: PaddleOCR PP-OCRv5")
-        models.append("Text detection: PaddleOCR PP-OCRv5 detection model")
-        models.append("Text recognition: PP-OCRv5 server recognition model")
+    if effective_method in PADDLE_OCR_METHODS:
+        ocr_version = DEFAULT_OCR_VERSION
+        models.append(f"OCR pipeline: PaddleOCR {ocr_version}")
+        models.append(f"Text detection: PaddleOCR {ocr_version} detection model")
+        models.append(f"Text recognition: {ocr_version} recognition model")
         models.append("Word boxes: enabled")
-    elif effective_method == "PP-StructureV3":
-        models.append("OCR/layout pipeline: PP-StructureV3")
-    elif effective_method == "PaddleVL":
-        models.append("Layout parsing pipeline: PaddleOCR-VL API service")
     elif method:
         models.append(f"Primary pipeline: {method}")
 
@@ -369,19 +326,15 @@ def models_for_run(opt, select=None):
         strategy_label = TILE_STRATEGY_LABELS.get(str(tile_strategy), str(tile_strategy))
         models.append(f"Tile OCR strategy: {strategy_label}")
 
-    if opt.get("post_ocr_vl_enabled") and effective_method == "PP-OCRv5":
-        backend = str(opt.get("post_ocr_vl_backend") or "paddlevl")
-        models.append(
-            "Post-OCR word check: "
-            f"{POST_OCR_VL_BACKEND_LABELS.get(backend, backend)}"
-        )
+    if opt.get("post_ocr_vl_enabled") and effective_method in PADDLE_OCR_METHODS:
+        models.append("Post-OCR word check: PaddleVL")
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and preprocessing_steps:
+    if effective_method in PADDLE_OCR_METHODS and preprocessing_steps:
         models.append(
             f"Image preprocessing: {format_preprocessing_steps(preprocessing_steps)}"
         )
 
-    if effective_method in {"PP-OCRv5", "PP-StructureV3"} and ignore_black_border:
+    if effective_method in PADDLE_OCR_METHODS and ignore_black_border:
         models.append("Image preprocessing: crop black border and offset OCR geometry")
 
     models.append("PDF text layer: PyMuPDF")
@@ -417,7 +370,7 @@ def log_run_configuration(
 
 class OCRLoggerManger:
     """
-    Singleton-style logger manager shared across ocr_pp.py, ocr_vl.py, and auto_ocr.py.
+    Singleton-style logger manager shared by the OCR pipeline.
     """
     _initialized = False
     _summary_logger = None

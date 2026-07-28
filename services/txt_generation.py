@@ -8,20 +8,13 @@ from services.punctuation_cleanup import clean_ocr_line_list
 
 
 def extract_fallback_texts(data):
-    """Extract best-effort text lines from several supported OCR JSON layouts."""
+    """Extract best-effort text lines from supported PP-OCR JSON layouts."""
     if "overall_ocr_res" in data:
         ocr_res = data["overall_ocr_res"]
         return ocr_res["rec_texts"]
 
     if "rec_texts" in data:
         return data["rec_texts"]
-
-    if "result" in data:
-        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
-            "parsing_res_list"
-        ]
-
-        return [block.get("block_content") for block in parsing_res_list]
 
     return []
 
@@ -30,8 +23,7 @@ def generate_txt_file(json_path:Path):
     """
     Generate a TXT file from OCR JSON results.
 
-    Supports multiple OCR JSON formats and extracts
-    recognized text content into a plain text file.
+    Extracts recognized PP-OCR text content into a plain text file.
 
     Args:
         json_path (Path):
