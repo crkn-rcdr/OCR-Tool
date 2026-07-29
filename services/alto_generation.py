@@ -135,6 +135,35 @@ def extract_source_ocr_payload(data):
     return {}
 
 
+def extract_paddlevl_lines(data):
+    """Build line structures from PaddleVL layout parsing blocks."""
+    try:
+        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
+            "parsing_res_list"
+        ]
+    except (KeyError, IndexError, TypeError):
+        return []
+
+    lines = []
+    for index, block in enumerate(parsing_res_list):
+        if not isinstance(block, dict):
+            continue
+        text = block.get("block_content") or block.get("text") or block.get("markdown")
+        box = block.get("block_bbox") or block.get("block_polygon_points")
+        if not text or not box:
+            continue
+        item = make_ocr_item(text, box, line_index=index)
+        lines.append(
+            {
+                "box": normalize_box(box),
+                "score": block.get("score"),
+                "strings": [item],
+                "index": index,
+            }
+        )
+    return sort_lines_reading_order(lines)
+
+
 def extract_word_level_lines(ocr_payload):
     """Build line structures directly from word-level OCR arrays when available."""
     rec_texts = ocr_payload.get("rec_texts", [])
@@ -238,6 +267,9 @@ def extract_line_level_items(source_payload):
 
 def build_alto_lines(data):
     """Build normalized ALTO-style lines from the available OCR structures."""
+    if "result" in data:
+        return extract_paddlevl_lines(data)
+
     ocr_blocks = data.get("ocr_blocks")
     if isinstance(ocr_blocks, list) and ocr_blocks:
         lines = [

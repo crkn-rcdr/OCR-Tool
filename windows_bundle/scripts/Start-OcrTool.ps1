@@ -1,6 +1,8 @@
 param(
     [int]$Port = 7860,
-    [switch]$SkipPaddleVl
+    [switch]$SkipDockerServices,
+    [switch]$SkipPaddleVl,
+    [switch]$SkipOlmOcr
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +43,28 @@ function Resolve-RepoPython {
     throw "No repo virtual environment was found. Expected venv\Scripts\python.exe or .venv\Scripts\python.exe under $ProjectRoot."
 }
 
-function Start-PaddleVlService {
+function Wait-DockerHttpReady {
+    param(
+        [string]$Url,
+        [string]$ReadyMessage,
+        [string]$TimeoutMessage,
+        [int]$Minutes = 8
+    )
+
+    $deadline = (Get-Date).AddMinutes($Minutes)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-HttpReady -Url $Url -TimeoutSeconds 3) {
+            Write-Status $ReadyMessage
+            return $true
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    Write-Status $TimeoutMessage
+    return $false
+}
+
+function Start-DockerServices {
     param(
         [string]$ProjectRoot,
         [string]$LogFile
@@ -49,11 +72,11 @@ function Start-PaddleVlService {
 
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -eq $docker) {
-        Write-Status "Docker was not found. The app will start, but the post process checkbox needs Docker/PaddleVL."
+        Write-Status "Docker was not found. The app will start, but PaddleVL/OLM OCR services will be unavailable."
         return
     }
 
-    Write-Status "Starting PaddleOCR-VL service with Docker Compose..."
+    Write-Status "Starting OCR model services with Docker Compose..."
     $dockerOutLog = Join-Path (Split-Path -Parent $LogFile) "docker-compose.stdout.log"
     $dockerErrLog = Join-Path (Split-Path -Parent $LogFile) "docker-compose.stderr.log"
     $compose = Start-Process `
@@ -67,22 +90,26 @@ function Start-PaddleVlService {
         -PassThru
 
     if ($compose.ExitCode -ne 0) {
-        Write-Status "Docker Compose did not start cleanly. The app will still start, but post process may be unavailable."
+        Write-Status "Docker Compose did not start cleanly. The app will still start, but PaddleVL/OLM OCR may be unavailable."
         Add-Content -Path $LogFile -Value "docker compose up -d failed with exit code $($compose.ExitCode). See $dockerErrLog"
         return
     }
 
-    $healthUrl = "http://127.0.0.1:8080/health"
-    $deadline = (Get-Date).AddMinutes(8)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-HttpReady -Url $healthUrl -TimeoutSeconds 3) {
-            Write-Status "PaddleOCR-VL service is ready."
-            return
-        }
-        Start-Sleep -Seconds 5
+    if (-not $SkipOlmOcr) {
+        Wait-DockerHttpReady `
+            -Url "http://127.0.0.1:8000/v1/models" `
+            -ReadyMessage "OLM OCR service is ready." `
+            -TimeoutMessage "OLM OCR did not report healthy yet. OLM OCR may be unavailable." `
+            -Minutes 8 | Out-Null
     }
 
-    Write-Status "PaddleOCR-VL did not report healthy yet. The app is still usable without post process."
+    if (-not $SkipPaddleVl) {
+        Wait-DockerHttpReady `
+            -Url "http://127.0.0.1:8080/health" `
+            -ReadyMessage "PaddleOCR-VL service is ready." `
+            -TimeoutMessage "PaddleOCR-VL did not report healthy yet. The app is still usable without post process." `
+            -Minutes 8 | Out-Null
+    }
 }
 
 $projectRoot = Resolve-ProjectRoot
@@ -111,8 +138,8 @@ if (Test-HttpReady -Url $url -TimeoutSeconds 2) {
     exit 0
 }
 
-if (-not $SkipPaddleVl) {
-    Start-PaddleVlService -ProjectRoot $projectRoot -LogFile $startLog
+if (-not $SkipDockerServices) {
+    Start-DockerServices -ProjectRoot $projectRoot -LogFile $startLog
 }
 
 $python = Resolve-RepoPython -ProjectRoot $projectRoot
@@ -121,6 +148,10 @@ $env:OCR_TOOL_PROJECT_DIR = $projectRoot
 $env:OCR_TOOL_HOST = "127.0.0.1"
 $env:OCR_TOOL_PORT = [string]$Port
 $env:PADDLE_VL_API_URL = "http://127.0.0.1:8080"
+$env:OLMOCR_API_URL = "http://127.0.0.1:8000/v1"
+if (-not $env:OLMOCR_MODEL) {
+    $env:OLMOCR_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
+}
 
 Write-Status "Starting OCR Tool app..."
 $process = Start-Process `

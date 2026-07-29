@@ -249,7 +249,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             OCR configuration options.
 
         select (str, optional):
-            Reserved for older routed runs; current execution uses PP-OCRv6.
+            Optional effective OCR engine label for delegated callers.
 
     Yields:
         str:

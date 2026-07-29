@@ -10,11 +10,15 @@ except ModuleNotFoundError:
 from pathlib import Path
 
 from services.ocr_pp import run_ocr_job,stop_ocr
+from services.ocr_vl import run_paddlevl_job
+from services.ocr_olm import run_olmocr_job
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OCR_VERSION,
+    DEFAULT_OLMOCR_API_URL,
+    DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
@@ -38,6 +42,11 @@ from services.ocr_defaults import (
 from services.tile_ocr import tile_grid_for_strategy
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
+OCR_METHOD_CHOICES = [
+    ("PaddleOCR (PP-OCRv6)", "PP-OCRv6"),
+    ("PaddleVL", "PaddleVL"),
+    ("OLM OCR", "OLMOCR"),
+]
 
 APP_CSS = """
 #fixed-header {
@@ -65,7 +74,8 @@ POST_PROCESS_INFO = (
     "Cleans conservative punctuation artifacts in the saved OCR JSON. For "
     "PP-OCRv6, it also sends suspicious word crops to PaddleVL at "
     f"{DEFAULT_PADDLE_VL_API_URL}, applies only accepted corrections, and "
-    "writes the post-OCR review artifacts beside the OCR output."
+    "writes the post-OCR review artifacts beside the OCR output. This is "
+    "disabled for standalone PaddleVL and OLM OCR."
 )
 
 # Define the list of supported languages for the dropdown menu
@@ -271,6 +281,20 @@ def build_post_ocr_vl_options(post_process_enabled):
     }
 
 
+def processing_supported(method):
+    """Return whether the selected visible method supports pre/post processing."""
+    return method in PADDLE_OCR_METHODS
+
+
+def processing_control_updates(method, pre_value=True, post_value=True):
+    """Keep pre/post unavailable for standalone VL-style OCR methods."""
+    enabled = processing_supported(method)
+    return [
+        gr.update(value=bool(pre_value) if enabled else False, interactive=enabled),
+        gr.update(value=bool(post_value) if enabled else False, interactive=enabled),
+    ]
+
+
 def submit_config(
     method,
     image_input_folder,
@@ -283,7 +307,10 @@ def submit_config(
     """
     Validate user input and start the OCR processing pipeline.
     """
-    method = "PP-OCRv6"
+    method = method or "PP-OCRv6"
+    process_enabled = processing_supported(method)
+    pre_process_enabled = bool(pre_process_enabled) and process_enabled
+    post_process_enabled = bool(post_process_enabled) and process_enabled
 
     if not image_input_folder:
         yield "Please select an image input folder."
@@ -320,6 +347,10 @@ def submit_config(
         "tile_doclayout_padding_px": int(DEFAULT_DOCLAYOUT_PADDING_PX),
         "tile_doclayout_threshold": float(DEFAULT_DOCLAYOUT_THRESHOLD),
         "tile_doclayout_recovery": True,
+        "use_layout_detection": method == "PaddleVL",
+        "olmocr_url": DEFAULT_OLMOCR_API_URL,
+        "olmocr_model": DEFAULT_OLMOCR_MODEL,
+        "olmocr_max_tokens": 8192,
     }
 
     yield "Preparing OCR models... OCR will start after initialization is complete."
@@ -340,7 +371,17 @@ def submit_config(
 
     opt.update(paddle_options)
     opt.update(build_post_ocr_vl_options(post_process_enabled))
-    for message in run_ocr_job(input_path, output_root, opt):
+    if method in PADDLE_OCR_METHODS:
+        iterator = run_ocr_job(input_path, output_root, opt)
+    elif method == "PaddleVL":
+        iterator = run_paddlevl_job(input_path, output_root, opt)
+    elif method == "OLMOCR":
+        iterator = run_olmocr_job(input_path, output_root, opt)
+    else:
+        yield f"Unsupported OCR method: {method}"
+        return
+
+    for message in iterator:
         yield message
 
     yield " OCR Completed, please check pdf and alto files at your output folder"
@@ -348,11 +389,14 @@ def submit_config(
 # Create the main Gradio application interface.
 with gr.Blocks() as demo:
 
-    # Create a fixed header section for the application title
-    # and fixed OCR method.
+    # Create a fixed header section for the application title and method choice.
     with gr.Column(elem_id="fixed-header"):
         gr.Markdown("## CRKN OCR Engine")
-        method_state = gr.State("PP-OCRv6")
+        method_radio = gr.Radio(
+            choices=OCR_METHOD_CHOICES,
+            label="OCR method",
+            value="PP-OCRv6",
+        )
 
     # Display the folder selection section title.
     gr.Markdown("### Folder Selection")
@@ -413,6 +457,7 @@ with gr.Blocks() as demo:
         output_folder,
         output_folder_btn,
         language_dropdown,
+        method_radio,
         generate_text_file,
         pre_process,
         post_process,
@@ -432,6 +477,12 @@ with gr.Blocks() as demo:
         outputs=output_folder
     )
 
+    method_radio.change(
+        fn=processing_control_updates,
+        inputs=[method_radio, pre_process, post_process],
+        outputs=[pre_process, post_process],
+    )
+
 
     def before_run():
         """
@@ -442,12 +493,22 @@ with gr.Blocks() as demo:
             gr.update(interactive=True)
         ]
 
-    def after_run():
+    def after_run(method, pre_value, post_value):
         """
         Re-enable UI components after OCR processing completes.
         """
+        pre_update, post_update = processing_control_updates(
+            method,
+            pre_value,
+            post_value,
+        )
         return [
-            *[gr.update(interactive=True) for _ in ui_components],
+            *[
+                gr.update(interactive=True)
+                for _ in ui_components[:-2]
+            ],
+            pre_update,
+            post_update,
             gr.update(interactive=False)
         ]
 
@@ -468,7 +529,7 @@ with gr.Blocks() as demo:
 ).then(
     fn=submit_config,
     inputs=[
-        method_state,
+        method_radio,
         image_input_folder,
         output_folder,
         language_dropdown,
@@ -479,7 +540,7 @@ with gr.Blocks() as demo:
     outputs=output
     ).then(
     fn=after_run,
-    inputs=None,
+    inputs=[method_radio, pre_process, post_process],
     outputs=[*ui_components, stop_btn]
     )
 

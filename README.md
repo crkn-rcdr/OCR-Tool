@@ -3,7 +3,9 @@
 This repository is an internal OCR application for CRKN staff. It combines:
 
 - `PP-OCRv6` for the main local OCR workflow
-- `PaddleOCR-VL 1.6` for optional post-OCR visual language checks
+- `olmOCR` for standalone visual OCR through a local vLLM Docker service
+- `PaddleOCR-VL 1.6` for standalone visual OCR and optional post-OCR visual
+  language checks
 
 The app can run as:
 
@@ -53,7 +55,7 @@ If you already know which environment you want:
 
 After setup:
 
-1. optionally start `PaddleOCR-VL 1.6` with `docker compose up -d`
+1. optionally start the Docker OCR services with `docker compose up -d`
 2. run `python app.py` or `python launcher.py`
 3. open `http://127.0.0.1:7860`
 
@@ -61,15 +63,21 @@ If you want a scriptable non-Gradio path instead, use [Smoke Test CLI](#smoke-te
 
 ## OCR Method
 
-The app and smoke-test CLI are locked to the current best evaluated path:
+The app and smoke-test CLI expose three OCR method choices:
 
-- `PP-OCRv6` is the best general default when you want the most tunable local
-  OCR path and access to post-OCR VL correction.
-- `PaddleOCR-VL 1.6` for optional post-OCR word checking for suspicious word crops and as the configured Docker/API service version. The configured PaddleOCR-VL service uses `PaddleOCR-VL-1.6-0.9B`. In the app it
-is used by the `post process` checkbox to review suspicious PP-OCRv6 word crops.
+- `PaddleOCR (PP-OCRv6)`: the best general default when you want the most
+  tunable local OCR path and access to post-OCR VL correction.
+- `PaddleVL`: sends each image directly to the PaddleOCR-VL 1.6 API service.
+- `OLM OCR`: sends each image directly to the local olmOCR vLLM service.
+
+`PaddleOCR-VL 1.6` is also used by the `post process` checkbox to review
+suspicious PP-OCRv6 word crops.
+
+The `pre process` and `post process` checkboxes apply to PP-OCRv6 work only.
+They are disabled for standalone PaddleVL and standalone OLM OCR.
 
 The Docker configs and image build files are pinned to `PaddleOCR-VL-1.6` /
-`PaddleOCR-VL-1.6-0.9B`.
+`PaddleOCR-VL-1.6-0.9B` and `alleninstituteforai/olmocr:v0.4.27-with-model`.
 
 ## Setup
 
@@ -81,8 +89,8 @@ The Docker configs and image build files are pinned to `PaddleOCR-VL-1.6` /
 
 Optional components:
 
-- Docker Desktop or Docker Engine for `PaddleOCR-VL 1.6`
-- NVIDIA GPU support for the PaddleOCR-VL stack if you want GPU containers
+- Docker Desktop or Docker Engine for `olmOCR` and `PaddleOCR-VL 1.6`
+- NVIDIA GPU support for the Docker OCR model services
 
 
 ## Windows Setup
@@ -112,9 +120,10 @@ Notes:
 - it includes Paddle OCR dependencies, Gradio, PDF generation, and optional
   libraries used by the app
 
-### 3. Optional: start PaddleOCR-VL 1.6
+### 3. Optional: start Docker OCR services
 
-If you want post-OCR VL checks, start the Docker services:
+If you want standalone OLM OCR, standalone PaddleVL, or post-OCR VL checks,
+start the Docker services:
 
 ```powershell
 docker compose up -d
@@ -122,9 +131,10 @@ docker compose up -d
 
 This uses [compose.yaml](compose.yaml).
 
-The default exposed service URL is:
+The default localhost service URLs are:
 
 ```text
+http://127.0.0.1:8000/v1
 http://127.0.0.1:8080
 ```
 
@@ -161,7 +171,7 @@ http://127.0.0.1:7860
 ### 7. Stop services
 
 - stop the Gradio app with `Ctrl+C`
-- stop PaddleVL with:
+- stop Docker OCR services with:
 
 ```powershell
 docker compose down
@@ -212,7 +222,7 @@ What [setup_wsl.sh](setup_wsl.sh) does:
 source .venv/bin/activate
 ```
 
-### 4. Optional: start PaddleVL
+### 4. Optional: start Docker OCR services
 
 If Docker is available inside WSL:
 
@@ -223,13 +233,12 @@ docker compose up -d
 This is usually easiest when Docker Desktop is installed on Windows with WSL
 integration enabled.
 
-### 5. Optional: connect to post-OCR VL endpoints
+### 5. Optional: connect to Docker OCR endpoints
 
-From WSL, you can reach:
+From WSL, the default Docker services are:
 
-- a generic OpenAI-compatible endpoint on Windows at `http://localhost:11434/v1`
-- a dedicated Chandra endpoint at whatever host/port you configured
-- a service running directly inside WSL, if you prefer
+- OLM OCR: `http://127.0.0.1:8000/v1`
+- PaddleOCR-VL: `http://127.0.0.1:8080`
 
 ### 6. Run the app
 
@@ -273,6 +282,15 @@ Useful runtime environment variables include:
 - `PADDLE_VL_API_URL`
   - default: `http://127.0.0.1:8080`
 
+### OLM OCR
+
+- `OLMOCR_API_URL`
+  - default: `http://127.0.0.1:8000/v1`
+- `OLMOCR_MODEL`
+  - default: `allenai/olmOCR-2-7B-1025-FP8`
+- `OLMOCR_IMAGE_TAG`
+  - default: `v0.4.27-with-model`
+
 ### Gradio server
 
 - `OCR_TOOL_HOST`
@@ -314,6 +332,7 @@ The Gradio app exposes only the production controls:
 - `Select Processing Method`
 - `Image Input Folder`
 - `Output Folder`
+- `OCR method`
 - `Select Language`
 - `Generate TXT instead of PDF/ALTO.`
 - `pre process`

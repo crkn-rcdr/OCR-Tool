@@ -57,6 +57,24 @@ def polygon_to_rect(poly):
     return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
 
 
+def bbox_to_rect(bbox):
+    """Convert a PaddleVL bbox or polygon to a PyMuPDF rectangle."""
+    if hasattr(bbox, "tolist"):
+        bbox = bbox.tolist()
+
+    if (
+        isinstance(bbox, list)
+        and bbox
+        and isinstance(bbox[0], (list, tuple))
+    ):
+        xs = [float(point[0]) for point in bbox]
+        ys = [float(point[1]) for point in bbox]
+        return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+
+    x0, y0, x1, y1 = bbox
+    return fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+
+
 def normalize_text(text):
     """Normalize OCR text by removing line breaks and repeated spaces."""
     if text is None:
@@ -409,6 +427,23 @@ def extract_ocr_data(data):
         texts = ocr_res.get("rec_texts") or []
         polys = ocr_res.get("rec_polys") or []
 
+    elif "result" in data:
+        try:
+            parsing_res_list = data["result"]["layoutParsingResults"][0][
+                "prunedResult"
+            ]["parsing_res_list"]
+        except (KeyError, IndexError, TypeError):
+            parsing_res_list = []
+
+        for block in parsing_res_list:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("block_content") or block.get("text") or block.get("markdown")
+            poly = block.get("block_polygon_points") or block.get("block_bbox")
+            if text and poly:
+                texts.append(text)
+                polys.append(poly)
+
     elif "rec_texts" in data:
         texts = data.get("rec_texts") or []
         polys = data.get("rec_polys") or []
@@ -425,6 +460,7 @@ def extract_ocr_data(data):
 def build_items(texts, polys, method, select):
     """Build OCR items from OCR text and geometry."""
     items = []
+    is_paddlevl = method == "PaddleVL" or select == "PaddleVL"
 
     for text, poly in zip(texts, polys):
         text = normalize_text(text)
@@ -434,6 +470,8 @@ def build_items(texts, polys, method, select):
 
         if method == "PP-OCRv6":
             rect = polygon_to_rect(poly)
+        elif is_paddlevl:
+            rect = bbox_to_rect(poly)
         else:
             continue
 

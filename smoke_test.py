@@ -5,6 +5,8 @@ from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OCR_VERSION,
+    DEFAULT_OLMOCR_API_URL,
+    DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
@@ -27,6 +29,7 @@ from services.ocr_defaults import (
 )
 from services.tile_ocr import tile_grid_for_strategy
 
+OCR_METHOD_CHOICES = ["PP-OCRv6", "PaddleVL", "OLMOCR"]
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT = (
     REPO_ROOT
@@ -43,9 +46,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--method",
-        choices=["PP-OCRv6"],
+        choices=OCR_METHOD_CHOICES,
         default="PP-OCRv6",
-        help="OCR method to test. Locked to PP-OCRv6 for current runs.",
+        help="OCR method to test.",
     )
     parser.add_argument(
         "--input",
@@ -235,11 +238,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PADDLE_VL_API_URL,
         help="PaddleVL service URL for post-OCR word checks.",
     )
+    parser.add_argument(
+        "--olmocr-url",
+        default=DEFAULT_OLMOCR_API_URL,
+        help="OpenAI-compatible olmOCR API URL.",
+    )
+    parser.add_argument(
+        "--olmocr-model",
+        default=DEFAULT_OLMOCR_MODEL,
+        help="olmOCR model name served by the OpenAI-compatible endpoint.",
+    )
     return parser.parse_args()
 
 
 def build_options(args: argparse.Namespace) -> dict:
     tile_rows, tile_cols = tile_grid_for_strategy(args.tile_strategy)
+
+    process_enabled = args.method == "PP-OCRv6"
 
     opt = {
         "method": args.method,
@@ -248,10 +263,10 @@ def build_options(args: argparse.Namespace) -> dict:
         "use_doc_unwarping": args.use_doc_unwarping,
         "generate_text_file": args.generate_text_file,
         "preprocessing_steps": list(DEFAULT_PREPROCESSING_STEPS)
-        if args.crop_black_border
+        if args.crop_black_border and process_enabled
         else [],
-        "ignore_black_border": args.crop_black_border,
-        "tile_source_images": args.tile_source_images,
+        "ignore_black_border": args.crop_black_border and process_enabled,
+        "tile_source_images": args.tile_source_images and process_enabled,
         "tile_strategy": args.tile_strategy,
         "tile_rows": tile_rows,
         "tile_cols": tile_cols,
@@ -262,6 +277,10 @@ def build_options(args: argparse.Namespace) -> dict:
             min(args.tile_doclayout_threshold, 1.0),
         ),
         "tile_doclayout_recovery": not args.disable_doclayout_recovery,
+        "use_layout_detection": args.method == "PaddleVL",
+        "olmocr_url": args.olmocr_url,
+        "olmocr_model": args.olmocr_model,
+        "olmocr_max_tokens": 8192,
     }
 
     opt.update(
@@ -276,7 +295,7 @@ def build_options(args: argparse.Namespace) -> dict:
             "text_det_unclip_ratio": max(0.1, args.text_det_unclip_ratio),
             "text_rec_score_thresh": max(0.0, min(args.text_rec_score_thresh, 1.0)),
             "text_recognition_batch_size": max(1, args.text_recognition_batch_size),
-            "post_ocr_vl_enabled": args.post_ocr_vl_check,
+            "post_ocr_vl_enabled": args.post_ocr_vl_check and process_enabled,
             "post_ocr_vl_candidate_mode": args.post_ocr_vl_candidate_mode,
             "post_ocr_vl_max_words": max(0, args.post_ocr_vl_max_words),
             "post_ocr_vl_padding_px": max(0, args.post_ocr_vl_padding_px),
@@ -307,9 +326,20 @@ def main() -> int:
 
     opt = build_options(args)
 
-    from services.ocr_pp import run_ocr_job
+    if args.method == "PP-OCRv6":
+        from services.ocr_pp import run_ocr_job
 
-    iterator = run_ocr_job(input_path, output_path, opt)
+        iterator = run_ocr_job(input_path, output_path, opt)
+    elif args.method == "PaddleVL":
+        from services.ocr_vl import run_paddlevl_job
+
+        iterator = run_paddlevl_job(input_path, output_path, opt)
+    elif args.method == "OLMOCR":
+        from services.ocr_olm import run_olmocr_job
+
+        iterator = run_olmocr_job(input_path, output_path, opt)
+    else:
+        raise ValueError(f"Unsupported OCR method: {args.method}")
 
     for message in iterator:
         print(message, flush=True)

@@ -1812,7 +1812,22 @@ def extract_paddlevl_text(data: Any) -> str:
     if isinstance(rec_texts, list):
         return " ".join(str(item) for item in rec_texts if item)
 
-    return ""
+    try:
+        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
+            "parsing_res_list"
+        ]
+    except (KeyError, IndexError, TypeError):
+        parsing_res_list = []
+
+    texts = []
+    for block in parsing_res_list:
+        if not isinstance(block, dict):
+            continue
+        text = block.get("block_content") or block.get("text") or block.get("markdown")
+        if text:
+            texts.append(str(text))
+
+    return " ".join(texts)
 
 
 def choose_correction(

@@ -1,4 +1,5 @@
 param(
+    [switch]$KeepDockerServices,
     [switch]$KeepPaddleVl
 )
 
@@ -41,10 +42,10 @@ foreach ($item in $processes) {
     Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-if (-not $KeepPaddleVl) {
+if (-not $KeepDockerServices -and -not $KeepPaddleVl) {
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -ne $docker) {
-        Write-Status "Stopping PaddleOCR-VL Docker services..."
+        Write-Status "Stopping OCR Docker services..."
         Push-Location $projectRoot
         try {
             & docker compose stop

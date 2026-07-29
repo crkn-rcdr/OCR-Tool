@@ -1,9 +1,37 @@
 services:
+  olmocr-vllm-server:
+    image: alleninstituteforai/olmocr:${OLMOCR_IMAGE_TAG:-v0.4.27-with-model}
+    container_name: crkn-ocr-olmocr
+    ports:
+      - 127.0.0.1:8000:8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    shm_size: 16g
+    restart: unless-stopped
+    command:
+      - -lc
+      - >
+        vllm serve ${OLMOCR_MODEL:-allenai/olmOCR-2-7B-1025-FP8}
+        --host 0.0.0.0
+        --port 8000
+        --max-model-len 16384
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=3)\" || exit 1"]
+      start_period: 300s
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
   paddleocr-vl-api:
     image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
     container_name: paddleocr-vl-api
     ports:
-      - 8080:8080
+      - 127.0.0.1:8080:8080
     depends_on:
       paddleocr-vlm-server:
         condition: service_healthy

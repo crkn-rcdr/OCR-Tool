@@ -8,6 +8,8 @@ from services.ocr_defaults import (
     DEFAULT_DOCLAYOUT_PADDING_PX,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OCR_VERSION,
+    DEFAULT_OLMOCR_API_URL,
+    DEFAULT_OLMOCR_MODEL,
     DEFAULT_PREPROCESSING_PRESET,
     DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
@@ -64,6 +66,9 @@ OPTION_LABELS = {
     "post_ocr_vl_apply_corrections": "Apply post-OCR VL corrections",
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
+    "olmocr_url": "OLM OCR API URL",
+    "olmocr_model": "OLM OCR model",
+    "olmocr_max_tokens": "OLM OCR max tokens",
 }
 
 OPTION_ORDER = [
@@ -101,6 +106,9 @@ OPTION_ORDER = [
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
     "post_ocr_vl_paddlevl_url",
+    "olmocr_url",
+    "olmocr_model",
+    "olmocr_max_tokens",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -191,6 +199,9 @@ def option_applies_to_strategy(key, opt):
 
     if key in POST_OCR_VL_DETAIL_KEYS:
         return method in PADDLE_OCR_METHODS and bool(opt.get("post_ocr_vl_enabled"))
+
+    if key in {"olmocr_url", "olmocr_model", "olmocr_max_tokens"}:
+        return method == "OLMOCR"
 
     if key == "tile_source_images":
         return True
@@ -316,6 +327,12 @@ def models_for_run(opt, select=None):
         models.append(f"Text detection: PaddleOCR {ocr_version} detection model")
         models.append(f"Text recognition: {ocr_version} recognition model")
         models.append("Word boxes: enabled")
+    elif effective_method == "PaddleVL":
+        models.append("OCR pipeline: PaddleOCR-VL 1.6 API service")
+    elif effective_method == "OLMOCR":
+        models.append("OCR pipeline: olmOCR vLLM API service")
+        models.append(f"OLM OCR model: {opt.get('olmocr_model') or DEFAULT_OLMOCR_MODEL}")
+        models.append(f"OLM OCR API URL: {opt.get('olmocr_url') or DEFAULT_OLMOCR_API_URL}")
     elif method:
         models.append(f"Primary pipeline: {method}")
 
