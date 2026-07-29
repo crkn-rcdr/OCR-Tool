@@ -31,9 +31,13 @@ This folder packages the OCR app for low-tech users on a shared Windows PC.
 
 3. Right-click `Install For All Users.cmd` and choose **Run as administrator**.
 
-4. Confirm Docker Desktop is installed once on the workstation. Each Windows
-   user who needs to start or stop the OCR Docker services must be in the local
-   `docker-users` group.
+4. Confirm Docker Desktop is installed once on the workstation. Individual OCR
+   users do **not** need to install Docker Desktop again under their own
+   accounts. They only need permission to use the shared Docker Desktop
+   install.
+
+   Each Windows user who needs to start or stop the OCR Docker services must
+   be in the local `docker-users` group.
 
    Run these commands on the OCR workstation in **Windows PowerShell as
    Administrator**:
