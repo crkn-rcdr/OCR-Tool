@@ -33,14 +33,29 @@ This folder packages the OCR app for low-tech users on a shared Windows PC.
 
 4. Confirm Docker Desktop is installed once on the workstation. Each Windows
    user who needs to start or stop the OCR Docker services must be in the local
-   `docker-users` group. For example:
+   `docker-users` group.
+
+   Run these commands on the OCR workstation in **Windows PowerShell as
+   Administrator**:
 
    ```powershell
    Add-LocalGroupMember -Group "docker-users" -Member "CRKN\JLoitzenbauer"
    ```
 
-   The user must sign out and back in before Docker group membership takes
-   effect.
+   Add any other OCR users the same way, for example:
+
+   ```powershell
+   Add-LocalGroupMember -Group "docker-users" -Member "CRKN\blapierre"
+   ```
+
+   To confirm membership:
+
+   ```powershell
+   Get-LocalGroupMember -Group "docker-users"
+   ```
+
+   Each added user must sign out of Windows and sign back in before Docker
+   group membership takes effect.
 
 The installer creates:
 
