@@ -29,6 +29,54 @@ function Test-HttpReady {
     }
 }
 
+function Test-DockerEngineReady {
+    param([string]$DockerPath)
+    try {
+        & $DockerPath info *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Start-DockerDesktopIfNeeded {
+    param(
+        [string]$DockerPath,
+        [string]$LogFile
+    )
+
+    if (Test-DockerEngineReady -DockerPath $DockerPath) {
+        return $true
+    }
+
+    $desktopExe = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path -LiteralPath $desktopExe) {
+        Write-Status "Docker engine is not running. Starting Docker Desktop..."
+        Start-Process `
+            -FilePath $desktopExe `
+            -WindowStyle Hidden
+    } else {
+        Write-Status "Docker Desktop was not found at $desktopExe."
+        Add-Content -Path $LogFile -Value "Docker Desktop executable missing: $desktopExe"
+        return $false
+    }
+
+    $deadline = (Get-Date).AddMinutes(5)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-DockerEngineReady -DockerPath $DockerPath) {
+            Write-Status "Docker engine is ready."
+            return $true
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    Write-Status "Docker engine did not become ready in time. Docker OCR services may be unavailable."
+    Write-Status "Confirm this Windows user is in the local docker-users group, then sign out and back in."
+    Add-Content -Path $LogFile -Value "Docker engine did not become ready within 5 minutes."
+    Add-Content -Path $LogFile -Value "Check docker-users membership for the current Windows user and sign out/in after changes."
+    return $false
+}
+
 function Resolve-RepoPython {
     param([string]$ProjectRoot)
     $candidates = @(
@@ -73,6 +121,10 @@ function Start-DockerServices {
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -eq $docker) {
         Write-Status "Docker was not found. The app will start, but PaddleVL/OLM OCR services will be unavailable."
+        return
+    }
+
+    if (-not (Start-DockerDesktopIfNeeded -DockerPath $docker.Source -LogFile $LogFile)) {
         return
     }
 
@@ -132,14 +184,14 @@ $url = "http://127.0.0.1:$Port"
 Write-Status "Project: $projectRoot"
 Write-Status "URL: $url"
 
+if (-not $SkipDockerServices) {
+    Start-DockerServices -ProjectRoot $projectRoot -LogFile $startLog
+}
+
 if (Test-HttpReady -Url $url -TimeoutSeconds 2) {
     Write-Status "OCR Tool is already running. Opening browser..."
     Start-Process $url
     exit 0
-}
-
-if (-not $SkipDockerServices) {
-    Start-DockerServices -ProjectRoot $projectRoot -LogFile $startLog
 }
 
 $python = Resolve-RepoPython -ProjectRoot $projectRoot
