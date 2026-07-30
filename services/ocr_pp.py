@@ -1,3 +1,7 @@
+"""Run local Paddle OCR jobs, including tiling, normalization, and outputs."""
+
+import copy
+import gc
 import json
 import threading
 from pathlib import Path
@@ -7,8 +11,25 @@ import time
 
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
-from services.ocr_logger import OCRLoggerManger
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
+from services.image_preprocessing import preprocess_image_for_ocr
+from services.tile_ocr import (
+    DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_TILE_OVERLAP_PX,
+    DEFAULT_TILE_STRATEGY,
+    offset_nested_geometry,
+    tile_grid_for_strategy,
+    run_tiled_local_ocr,
+    supports_tiled_ocr,
+)
+from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
+from services.punctuation_cleanup import clean_ocr_json_text_in_place
+from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
+from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
 # Thread synchronization lock used to ensure that
 # only one OCR job can run at the same time.
@@ -27,6 +48,63 @@ RUN_LOCK = threading.Lock()
 # Global flag to signal stopping the OCR process
 STOP_FLAG = False
 
+GPU_RECOVERY_ERROR_MARKERS = (
+    "cudnn_status_not_supported",
+    "cudnn error(3000)",
+    "cuda error(2)",
+    "cudaerrormemoryallocation",
+    "out of memory",
+)
+
+
+def describe_tiling(opt):
+    """Return a readable description of the active tiling strategy."""
+    strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
+    rows, cols = tile_grid_for_strategy(strategy)
+    grid_label = f"{rows}x{cols}"
+
+    if strategy == "doclayout_v3":
+        padding_value = opt.get("tile_doclayout_padding_px")
+        padding = int(
+            DEFAULT_DOCLAYOUT_PADDING_PX
+            if padding_value is None
+            else padding_value
+        )
+        threshold = float(opt.get("tile_doclayout_threshold", DEFAULT_DOCLAYOUT_THRESHOLD))
+        padding_label = f", {padding}px padding" if padding > 0 else ""
+        return f"PP-DocLayoutV3 tiled OCR{padding_label}, threshold {threshold:g}"
+
+    if strategy in {"grid_doclayout_v3", "grid_3x2_doclayout_v3"}:
+        padding_value = opt.get("tile_doclayout_padding_px")
+        padding = int(
+            DEFAULT_DOCLAYOUT_PADDING_PX
+            if padding_value is None
+            else padding_value
+        )
+        overlap_value = opt.get("tile_overlap_px")
+        overlap = int(
+            DEFAULT_TILE_OVERLAP_PX
+            if overlap_value is None
+            else overlap_value
+        )
+        threshold = float(opt.get("tile_doclayout_threshold", DEFAULT_DOCLAYOUT_THRESHOLD))
+        overlap_label = f", {overlap}px band overlap" if overlap > 0 else ""
+        padding_label = f", {padding}px layout padding" if padding > 0 else ""
+        return (
+            f"{grid_label} + PP-DocLayoutV3 tiled OCR"
+            f"{overlap_label}{padding_label}, threshold {threshold:g}"
+        )
+
+    overlap_value = opt.get("tile_overlap_px")
+    overlap = int(
+        DEFAULT_TILE_OVERLAP_PX
+        if overlap_value is None
+        else overlap_value
+    )
+    overlap_label = f", {overlap}px overlap" if overlap > 0 else ""
+    return f"{grid_label} tiled OCR{overlap_label}"
+
+
 def stop_ocr():
     """
     Stop the currently running OCR job.
@@ -36,7 +114,118 @@ def stop_ocr():
     """
     global STOP_FLAG
     STOP_FLAG = True
-   
+
+
+def is_recoverable_gpu_ocr_error(exc: Exception, opt: dict) -> bool:
+    """Return whether an OCR exception should trigger a safer retry path."""
+    device = str(opt.get("device") or "").strip().lower()
+    if device.startswith("cpu"):
+        return False
+
+    message = str(exc).lower()
+    return any(marker in message for marker in GPU_RECOVERY_ERROR_MARKERS)
+
+
+def release_paddle_gpu_memory() -> None:
+    """Best-effort cleanup after a failed GPU OCR attempt."""
+    gc.collect()
+
+    try:
+        import paddle
+
+        if paddle.device.is_compiled_with_cuda():
+            paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
+    """Build safer retry configurations for PaddleOCR GPU/CPU recovery."""
+    if opt.get("method") not in PADDLE_OCR_METHODS:
+        return []
+
+    base = copy.deepcopy(opt)
+    safe_side_limit = DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+    base_limit = int(base.get("text_det_limit_side_len") or safe_side_limit)
+    base_max_side = int(base.get("text_det_max_side_limit") or safe_side_limit)
+    base_rec_batch = int(base.get("text_recognition_batch_size") or 1)
+
+    attempts: list[tuple[dict, str]] = []
+
+    reduced_gpu = copy.deepcopy(base)
+    reduced_gpu["device"] = "gpu"
+    reduced_gpu["text_det_limit_side_len"] = min(base_limit, safe_side_limit)
+    reduced_gpu["text_det_max_side_limit"] = min(base_max_side, safe_side_limit)
+    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, 8)
+    if reduced_gpu != base:
+        attempts.append(
+            (
+                reduced_gpu,
+                "completed after retrying on GPU with reduced detector limits",
+            )
+        )
+
+    cpu_fallback = copy.deepcopy(reduced_gpu)
+    cpu_fallback["device"] = "cpu"
+    cpu_fallback["text_recognition_batch_size"] = min(
+        int(cpu_fallback.get("text_recognition_batch_size") or 1),
+        4,
+    )
+    attempts.append(
+        (
+            cpu_fallback,
+            "completed using CPU fallback after GPU memory/cuDNN failure",
+        )
+    )
+
+    return attempts
+
+
+def cleanup_partial_ocr_json_outputs(out_dir: Path, stem: str) -> None:
+    """Remove partial OCR JSON outputs before a retry attempt."""
+    for candidate in out_dir.glob(f"{stem}*.json"):
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
+
+def save_local_ocr_results_with_recovery(
+    image_path: Path,
+    out_dir: Path,
+    opt: dict,
+) -> str | None:
+    """Run local OCR and retry with safer settings on recoverable GPU failures."""
+    cleanup_partial_ocr_json_outputs(out_dir, image_path.stem)
+
+    attempt_queue: list[tuple[dict, str | None]] = [(opt, None)]
+    attempt_queue.extend(build_safe_ppocr_retry_options(opt))
+    allow_retries = True
+    last_exc: Exception | None = None
+
+    for attempt_opt, success_note in attempt_queue:
+        cleanup_partial_ocr_json_outputs(out_dir, image_path.stem)
+        try:
+            output = engine.infer(str(image_path), attempt_opt)
+            for res in output:
+                res.save_to_json(save_path=str(out_dir))
+            return success_note
+        except Exception as exc:
+            last_exc = exc
+            if allow_retries and is_recoverable_gpu_ocr_error(exc, attempt_opt):
+                allow_retries = False
+                release_paddle_gpu_memory()
+                continue
+            if success_note is not None:
+                release_paddle_gpu_memory()
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+
+    raise RuntimeError(f"OCR did not produce output for image: {image_path.name}")
+
 
 def run_ocr_job(input_path, output_root, opt,select=None):
     """
@@ -60,7 +249,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             OCR configuration options.
 
         select (str, optional):
-            OCR engine name (e.g., PaddleVL or PP-StructureV3).
+            Optional effective OCR engine label for delegated callers.
 
     Yields:
         str:
@@ -69,8 +258,17 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
     method = opt.get("method")
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
+    log_run_configuration(
+        summary_logger,
+        opt,
+        select=select,
+        input_path=input_path,
+        output_root=output_root,
+        stage="OCR",
+    )
     generate_text_file = opt.get("generate_text_file", False)
     lang = opt.get("lang", "None")
+    tile_source_images = opt.get("tile_source_images", False)
    
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
@@ -102,17 +300,22 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                output = engine.infer(str(input_path), opt)
-
-                for res in output:
-                    res.save_to_json(save_path=str(out_dir))
-
-                json_file = out_dir / f"{input_path.stem}_res.json"
-                final_json = out_dir / f"{input_path.stem}.json"  
-                json_file.rename(final_json)  
+                final_json, recovery_note = run_ocr_for_image(
+                    image_path=input_path,
+                    out_dir=out_dir,
+                    opt=opt,
+                    select=select,
+                )
 
                 success_count += 1
-                messages.append(f"{input_path.name} created and saved in {out_dir}")
+                if recovery_note:
+                    messages.append(f"{input_path.name} {recovery_note}")
+                if tile_source_images and supports_tiled_ocr(method, select):
+                    messages.append(
+                        f"{input_path.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                    )
+                else:
+                    messages.append(f"{input_path.name} created and saved in {out_dir}")
 
                 if generate_text_file:
                     txt_path = generate_txt_file(final_json)
@@ -121,7 +324,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                 else:
                     # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
-                    generate_pdf_and_alto(final_json, input_path, method, lang,select)
+                    generate_pdf_and_alto(
+                        final_json,
+                        input_path,
+                        method,
+                        lang,
+                        select,
+                        run_options=opt,
+                    )
                     yield "\n".join(messages)
 
             except Exception as e:
@@ -163,18 +373,24 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         return
 
                     try:
-                        output = engine.infer(str(img), opt)
-
-                        for res in output:
-                            res.save_to_json(save_path=str(out_dir))
-
-                        json_file = out_dir / f"{img.stem}_res.json"
-                        json_file.rename(out_dir / f"{img.stem}.json")
+                        _, recovery_note = run_ocr_for_image(
+                            image_path=img,
+                            out_dir=out_dir,
+                            opt=opt,
+                            select=select,
+                        )
 
                         success_count += 1
                         folder_success += 1
 
-                        messages.append(f"{img.name} created and saved in {out_dir}")
+                        if recovery_note:
+                            messages.append(f"{img.name} {recovery_note}")
+                        if tile_source_images and supports_tiled_ocr(method, select):
+                            messages.append(
+                                f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                            )
+                        else:
+                            messages.append(f"{img.name} created and saved in {out_dir}")
                         yield "\n".join(messages)
 
                     except Exception as e:
@@ -199,7 +415,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 messages.append(f"Text file created: {txt_path}")
                                 yield "\n".join(messages)
                         else:
-                            generate_pdf_and_alto(out_dir, folder, method, lang,select)
+                            generate_pdf_and_alto(
+                                out_dir,
+                                folder,
+                                method,
+                                lang,
+                                select,
+                                run_options=opt,
+                            )
                             messages.append(f"PDF/ALTO generated for folder: {folder.name}")
                             yield "\n".join(messages)
 
@@ -242,3 +465,119 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
     finally:
         RUN_LOCK.release()
+
+
+def run_ocr_for_image(image_path, out_dir, opt, select=None):
+    """
+    Run OCR for a single image and save the final JSON output.
+    """
+    final_json = out_dir / f"{image_path.stem}.json"
+    ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
+        image_path=image_path,
+        out_dir=out_dir,
+        opt=opt,
+    )
+
+    if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
+        merged_json = run_tiled_local_ocr(ocr_image_path, opt, select=select)
+        normalize_ocr_word_boxes_in_payload(merged_json)
+        annotate_preprocessing_payload(merged_json, preprocess_metadata)
+        final_json.write_text(
+            json.dumps(merged_json, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
+        maybe_apply_output_text_cleanup(final_json, opt)
+        return final_json, None
+
+    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, opt)
+
+    json_file = out_dir / f"{ocr_image_path.stem}_res.json"
+    if not json_file.exists():
+        candidates = sorted(out_dir.glob(f"{ocr_image_path.stem}*.json"))
+        if not candidates:
+            raise FileNotFoundError(
+                f"No OCR JSON output was produced for image: {ocr_image_path.name}"
+            )
+        json_file = candidates[0]
+
+    json_file.rename(final_json)
+    normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
+    maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
+    maybe_apply_output_text_cleanup(final_json, opt)
+
+    return final_json, recovery_note
+
+
+def maybe_apply_post_ocr_vl_check(
+    json_path: Path,
+    out_dir: Path,
+    opt: dict,
+    select: str | None = None,
+) -> None:
+    """Run the optional post-OCR VL audit when the current method supports it."""
+    if not opt.get("post_ocr_vl_enabled", False):
+        return
+    if not supports_post_ocr_vl(opt.get("method"), select):
+        return
+    apply_post_ocr_vl_check(json_path, out_dir, opt)
+
+
+def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    """Apply conservative punctuation cleanup to a saved OCR JSON payload."""
+    if not opt.get("clean_punctuation_issues", False):
+        return
+    clean_ocr_json_text_in_place(json_path)
+
+
+def normalize_saved_ocr_json(
+    json_path: Path,
+    preprocess_metadata: dict | None = None,
+) -> None:
+    """Normalize a saved OCR JSON file in place after local inference."""
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    changed = normalize_ocr_word_boxes_in_payload(payload)
+    changed = annotate_preprocessing_payload(payload, preprocess_metadata) or changed
+
+    if changed:
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
+def annotate_preprocessing_payload(
+    payload: dict,
+    preprocess_metadata: dict | None,
+) -> bool:
+    """Attach preprocessing metadata to an OCR payload when available."""
+    if not preprocess_metadata:
+        return False
+
+    metadata = dict(preprocess_metadata)
+
+    offset_x = int(metadata.get("coordinate_offset_x") or 0)
+    offset_y = int(metadata.get("coordinate_offset_y") or 0)
+    if offset_x or offset_y:
+        offset_payload = offset_nested_geometry(payload, offset_x, offset_y)
+        payload.clear()
+        payload.update(offset_payload)
+
+    payload["source_preprocessing"] = metadata
+    payload["original_input_path"] = metadata.get("original_input_path")
+    output_input_path = (
+        metadata.get("original_input_path")
+        if metadata.get("use_original_input_for_outputs")
+        else metadata.get("ocr_input_path")
+    )
+    payload["input_path"] = output_input_path
+
+    overall_ocr_res = payload.get("overall_ocr_res")
+    if isinstance(overall_ocr_res, dict):
+        overall_ocr_res["input_path"] = output_input_path
+
+    return True

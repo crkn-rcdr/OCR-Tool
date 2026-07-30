@@ -1,5 +1,8 @@
+"""Run PaddleOCR-VL API jobs and convert responses into repo output formats."""
+
 import json
 import base64
+import os
 import threading
 from pathlib import Path
 import time
@@ -8,8 +11,9 @@ import requests
 
 from services.constants import IMAGE_EXTENSIONS
 from services.pdf_generation import main as generate_pdf_and_alto
-from services.ocr_logger import OCRLoggerManger
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
+from services.punctuation_cleanup import clean_ocr_json_text_in_place
 
 import services.ocr_pp as ocr_pp
 
@@ -28,7 +32,113 @@ import services.ocr_pp as ocr_pp
 # until the current task finishes.
 RUN_LOCK = threading.Lock()
 
-BASE_URL = "http://127.0.0.1:8080"
+BASE_URL = os.getenv("PADDLE_VL_API_URL", "http://127.0.0.1:8080").rstrip("/")
+
+PADDLEX_OPTION_KEYS = {
+    "use_doc_orientation_classify": "useDocOrientationClassify",
+    "use_doc_unwarping": "useDocUnwarping",
+    "use_layout_detection": "useLayoutDetection",
+    "use_chart_recognition": "useChartRecognition",
+    "use_seal_recognition": "useSealRecognition",
+    "use_ocr_for_image_block": "useOcrForImageBlock",
+    "layout_threshold": "layoutThreshold",
+    "layout_nms": "layoutNms",
+    "layout_unclip_ratio": "layoutUnclipRatio",
+    "layout_merge_bboxes_mode": "layoutMergeBboxesMode",
+    "layout_shape_mode": "layoutShapeMode",
+    "prompt_label": "promptLabel",
+    "format_block_content": "formatBlockContent",
+    "repetition_penalty": "repetitionPenalty",
+    "temperature": "temperature",
+    "top_p": "topP",
+    "min_pixels": "minPixels",
+    "max_pixels": "maxPixels",
+    "max_new_tokens": "maxNewTokens",
+    "merge_layout_blocks": "mergeLayoutBlocks",
+    "markdown_ignore_labels": "markdownIgnoreLabels",
+    "vlm_extra_args": "vlmExtraArgs",
+    "prettify_markdown": "prettifyMarkdown",
+    "show_formula_number": "showFormulaNumber",
+    "restructure_pages": "restructurePages",
+    "merge_tables": "mergeTables",
+    "relevel_titles": "relevelTitles",
+    "visualize": "visualize",
+    "log_id": "logId",
+}
+
+ALLOWED_PADDLEX_KEYS = {
+    "useDocOrientationClassify",
+    "useDocUnwarping",
+    "useLayoutDetection",
+    "useChartRecognition",
+    "useSealRecognition",
+    "useOcrForImageBlock",
+    "layoutThreshold",
+    "layoutNms",
+    "layoutUnclipRatio",
+    "layoutMergeBboxesMode",
+    "layoutShapeMode",
+    "promptLabel",
+    "formatBlockContent",
+    "repetitionPenalty",
+    "temperature",
+    "topP",
+    "minPixels",
+    "maxPixels",
+    "maxNewTokens",
+    "mergeLayoutBlocks",
+    "markdownIgnoreLabels",
+    "vlmExtraArgs",
+    "prettifyMarkdown",
+    "showFormulaNumber",
+    "restructurePages",
+    "mergeTables",
+    "relevelTitles",
+    "visualize",
+    "logId",
+    "outputFormats",
+}
+
+
+def _build_paddlevl_payload(opt: dict) -> dict:
+    """Map repo option names into the PaddleX request payload format."""
+    payload = {}
+
+    for key, value in opt.items():
+        if key in {"method", "lang", "generate_text_file"} or value is None:
+            continue
+
+        mapped_key = PADDLEX_OPTION_KEYS.get(key)
+        if mapped_key is None and key in ALLOWED_PADDLEX_KEYS:
+            mapped_key = key
+
+        if mapped_key is None:
+            continue
+
+        payload[mapped_key] = value
+
+    return payload
+
+
+def _request_layout_parsing(payload: dict) -> dict:
+    """Call the PaddleOCR-VL layout API and return the parsed JSON response."""
+    try:
+        response = requests.post(
+            BASE_URL + "/layout-parsing",
+            json=payload,
+            timeout=(10, 600),
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Could not reach the PaddleOCR-VL service at {BASE_URL}. "
+            "Start it with `docker compose up -d` and wait for the API "
+            "healthcheck to pass."
+        ) from exc
+
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
+
+    return response.json()
 
 def run_paddlevl_job(input_path, output_root, opt,select=None):
     """
@@ -52,15 +162,29 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
             OCR progress and status messages.
     """
     ocr_pp.STOP_FLAG = False
-    payload = {}
-    generate_text_file = opt.get("generate_text_file", False)
-   
-    for key,value in opt.items():
-        if key != "method" and value is not None:
-            payload[key] = value
-
-    method = opt.get("method")
+    run_opt = dict(opt)
+    run_opt.update(
+        {
+            "clean_punctuation_issues": False,
+            "post_ocr_vl_enabled": False,
+            "preprocessing_steps": [],
+            "ignore_black_border": False,
+            "tile_source_images": False,
+        }
+    )
+    base_payload = _build_paddlevl_payload(run_opt)
+    generate_text_file = run_opt.get("generate_text_file", False)
+    lang = run_opt.get("lang")
+    method = run_opt.get("method") or select or "PaddleVL"
     summary_logger, error_logger, summary_log_path, error_log_path = OCRLoggerManger.setup(method)
+    log_run_configuration(
+        summary_logger,
+        run_opt,
+        select=select,
+        input_path=input_path,
+        output_root=output_root,
+        stage="PaddleVL OCR",
+    )
     
     success_count = 0
     failure_count = 0
@@ -88,20 +212,19 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                 with open(input_path, "rb") as f:
                     image_data = base64.b64encode(f.read()).decode("ascii")
 
-                    payload.update({
+                    payload = {
+                        **base_payload,
                         "file": image_data,
-                        "fileType": 1
-                    })
-                    
-                    response = requests.post(BASE_URL + "/layout-parsing", json=payload) 
-                    if response.status_code != 200:
-                        raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
+                        "fileType": 1,
+                    }
 
-                    data = response.json()
+                    data = _request_layout_parsing(payload)
                     json_path = out_dir / f"{input_path.stem}.json"  
 
                     with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
+
+                    maybe_apply_output_text_cleanup(json_path, run_opt)
 
                     success_count += 1
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
@@ -112,7 +235,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         messages.append(f"Text file created: {txt_path}")
                         yield "\n".join(messages)
                     else:
-                        generate_pdf_and_alto(json_path, input_path, method, select)
+                        generate_pdf_and_alto(
+                            json_path,
+                            input_path,
+                            method,
+                            lang,
+                            select,
+                            run_options=run_opt,
+                        )
                         yield "\n".join(messages)
            
             except Exception as e: 
@@ -143,20 +273,19 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                     with open(img, "rb") as f:
                         image_data = base64.b64encode(f.read()).decode("ascii")
 
-                        payload.update({
+                        payload = {
+                            **base_payload,
                             "file": image_data,
-                            "fileType": 1
-                        })
-                     
-                        response = requests.post(BASE_URL + "/layout-parsing", json=payload) 
-                        if response.status_code != 200:
-                            raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
+                            "fileType": 1,
+                        }
 
-                        data = response.json()
+                        data = _request_layout_parsing(payload)
                         json_path = out_dir / f"{img.stem}.json"  
 
                         with open(json_path, "w", encoding="utf-8") as f:
                             json.dump(data, f, ensure_ascii=False, indent=2)
+
+                        maybe_apply_output_text_cleanup(json_path, run_opt)
 
                         success_count += 1
                         messages.append(f"{img.name} created and saved in {out_dir}")
@@ -167,7 +296,14 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                             messages.append(f"Text file created: {txt_path}")
                             yield "\n".join(messages)
                         else:
-                            generate_pdf_and_alto(json_path, img, method, select)
+                            generate_pdf_and_alto(
+                                json_path,
+                                img,
+                                method,
+                                lang,
+                                select,
+                                run_options=run_opt,
+                            )
                             yield "\n".join(messages)
 
                 except Exception as e: 
@@ -208,3 +344,10 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
     finally:
         RUN_LOCK.release()
+
+
+def maybe_apply_output_text_cleanup(json_path: Path, opt: dict) -> None:
+    """Apply optional punctuation cleanup to a saved PaddleVL JSON payload."""
+    if not opt.get("clean_punctuation_issues", False):
+        return
+    clean_ocr_json_text_in_place(json_path)

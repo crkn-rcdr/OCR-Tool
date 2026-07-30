@@ -1,4 +1,8 @@
+"""Generate searchable PDFs from normalized OCR JSON and matching source images."""
+
+import copy
 import json
+import math
 import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -9,15 +13,15 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image
 
-from services.alto_generation import generate_alto
-from services.ocr_logger import OCRLoggerManger
+from services.alto_generation import build_ordered_blocks, generate_alto, line_to_text
+from services.ocr_logger import OCRLoggerManger, log_run_configuration
 
 BASE_DIR = Path(__file__).resolve().parent
 
 LATIN_FONT_PATH = BASE_DIR / "fonts" / "NotoSans-Regular.ttf"
 CJK_FONT_PATH = BASE_DIR / "fonts" / "NotoSansSC-Regular.ttf"
 
-LATIN_FONT_ALIAS = "LATIN"
+LATIN_FONT_ALIAS = "helv"
 CJK_FONT_ALIAS = "CJK"
 
 
@@ -39,6 +43,14 @@ def polygon_to_rect(poly):
     if hasattr(poly, "tolist"):
         poly = poly.tolist()
 
+    if (
+        isinstance(poly, list)
+        and len(poly) == 4
+        and all(isinstance(value, (int, float)) for value in poly)
+    ):
+        x0, y0, x1, y1 = poly
+        return fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
 
@@ -46,40 +58,21 @@ def polygon_to_rect(poly):
 
 
 def bbox_to_rect(bbox):
-    """Convert bbox or polygon to fitz.Rect.
-
-    Supports:
-    - [x0, y0, x1, y1]
-    - [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
-    """
+    """Convert a PaddleVL bbox or polygon to a PyMuPDF rectangle."""
     if hasattr(bbox, "tolist"):
         bbox = bbox.tolist()
 
-    # Polygon format.
     if (
         isinstance(bbox, list)
-        and len(bbox) > 0
+        and bbox
         and isinstance(bbox[0], (list, tuple))
     ):
-        xs = [float(p[0]) for p in bbox]
-        ys = [float(p[1]) for p in bbox]
+        xs = [float(point[0]) for point in bbox]
+        ys = [float(point[1]) for point in bbox]
+        return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
 
-        return fitz.Rect(
-            min(xs),
-            min(ys),
-            max(xs),
-            max(ys),
-        )
-
-    # Standard bbox format.
     x0, y0, x1, y1 = bbox
-
-    return fitz.Rect(
-        float(x0),
-        float(y0),
-        float(x1),
-        float(y1),
-    )
+    return fitz.Rect(float(x0), float(y0), float(x1), float(y1))
 
 
 def normalize_text(text):
@@ -92,18 +85,6 @@ def normalize_text(text):
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
-
-def normalize_text_keep_newlines(text):
-    """Normalize text but keep paragraph line breaks."""
-    if text is None:
-        return ""
-
-    text = str(text)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n\s*\n+", "\n", text)
-
-    return text.strip()
 
 def contains_cjk(text):
     """Return True if text contains Chinese, Japanese, or Korean characters."""
@@ -166,15 +147,273 @@ def collect_json_files(output_dir, recursive=True):
 
 
 def find_image_for_json(json_path, input_dir):
-    """Find the source JPG image that corresponds to an OCR JSON file."""
-    image_name = json_path.stem.replace("_res", "") + ".jpg"
+    """Find the source image that corresponds to an OCR JSON file.
+
+    Tries the following, in order:
+    1. If the JSON contains `input_path` or `fileName` and that path exists, use it.
+    2. If the JSON contains `fileName`, search for that filename under `input_dir`.
+    3. Fallback: search for the JSON stem with common image extensions under `input_dir`.
+    If `input_dir` is a file, it's returned when its name matches a candidate.
+    """
+    json_path = Path(json_path)
+    input_dir = Path(input_dir)
+
+    # Try to read hints from the JSON itself.
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        data = remap_payload_to_original_image(data)
+    except Exception:
+        data = {}
+
+    # Prefer an explicit input path recorded in the JSON.
+    input_path_candidates = [
+        data.get("original_input_path"),
+        (data.get("source_preprocessing") or {}).get("original_input_path")
+        if isinstance(data.get("source_preprocessing"), dict)
+        else None,
+        data.get("input_path"),
+        data.get("fileName"),
+    ]
+    for input_path_field in input_path_candidates:
+        if not input_path_field:
+            continue
+        candidate = Path(input_path_field)
+
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        # Try relative to the JSON file's directory.
+        relative_candidate = (json_path.parent / input_path_field)
+        if relative_candidate.exists():
+            return relative_candidate
+
+        # Search under the provided input_dir for a matching filename.
+        if input_dir.is_dir():
+            for match in input_dir.rglob(Path(input_path_field).name):
+                return match
+
+        if input_dir.is_file() and input_dir.name == Path(input_path_field).name:
+            return input_dir
+
+    # Fallback: search by common image extensions using the JSON stem.
+    base_name = json_path.stem.replace("_res", "")
+    exts = [".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"]
+    candidates = [base_name + ext for ext in exts]
 
     if input_dir.is_file():
-        return input_dir if input_dir.name == image_name else None
+        for cand in candidates:
+            if input_dir.name.lower() == cand.lower():
+                return input_dir
+        return None
 
-    matches = list(input_dir.rglob(image_name))
+    for cand in candidates:
+        matches = list(input_dir.rglob(cand))
+        if matches:
+            return matches[0]
 
-    return matches[0] if matches else None
+    return None
+
+
+GEOMETRY_KEYS = {
+    "bbox",
+    "box",
+    "boxes",
+    "polygon",
+    "polygons",
+    "poly",
+    "polys",
+    "points",
+    "coordinate",
+    "coordinates",
+    "dt_polys",
+    "rec_polys",
+    "rec_boxes",
+    "text_word_boxes",
+    "block_bbox",
+    "block_polygon_points",
+    "crop_box",
+}
+GEOMETRY_SUFFIXES = ("_bbox", "_box", "_boxes", "_poly", "_polys", "_points")
+GEOMETRY_SKIP_KEYS = {"source_preprocessing", "tile_processing", "post_ocr_vl_check"}
+
+
+def should_transform_key(key):
+    if not key:
+        return False
+    if key in GEOMETRY_KEYS:
+        return True
+    return key.endswith(GEOMETRY_SUFFIXES)
+
+
+def looks_like_bbox(value):
+    return (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(isinstance(item, (int, float)) for item in value)
+    )
+
+
+def looks_like_point_sequence(value):
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(
+            isinstance(point, list)
+            and len(point) == 2
+            and all(isinstance(item, (int, float)) for item in point)
+            for point in value
+        )
+    )
+
+
+def rotate_point(x, y, angle_degrees, center_x, center_y):
+    theta = math.radians(angle_degrees)
+    cos_theta = math.cos(theta)
+    sin_theta = math.sin(theta)
+    dx = float(x) - center_x
+    dy = float(y) - center_y
+    return [
+        center_x + (dx * cos_theta) - (dy * sin_theta),
+        center_y + (dx * sin_theta) + (dy * cos_theta),
+    ]
+
+
+def offset_geometry_value(value, offset_x, offset_y):
+    if looks_like_bbox(value):
+        return [
+            value[0] + offset_x,
+            value[1] + offset_y,
+            value[2] + offset_x,
+            value[3] + offset_y,
+        ]
+
+    if looks_like_point_sequence(value):
+        return [[point[0] + offset_x, point[1] + offset_y] for point in value]
+
+    if isinstance(value, dict):
+        return offset_nested_geometry(value, offset_x, offset_y)
+
+    if isinstance(value, list):
+        return [offset_geometry_value(item, offset_x, offset_y) for item in value]
+
+    return value
+
+
+def offset_nested_geometry(value, offset_x, offset_y, key=None):
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if child_key in GEOMETRY_SKIP_KEYS:
+                updated[child_key] = copy.deepcopy(child_value)
+            elif should_transform_key(child_key):
+                updated[child_key] = offset_geometry_value(
+                    child_value, offset_x, offset_y
+                )
+            else:
+                updated[child_key] = offset_nested_geometry(
+                    child_value, offset_x, offset_y, key=child_key
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_transform_key(key):
+            return offset_geometry_value(value, offset_x, offset_y)
+        return [
+            offset_nested_geometry(item, offset_x, offset_y, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def rotate_geometry_value(value, angle_degrees, width, height):
+    center_x = float(width) / 2.0
+    center_y = float(height) / 2.0
+
+    if looks_like_bbox(value):
+        x0, y0, x1, y1 = [float(v) for v in value]
+        rotated = [
+            rotate_point(x0, y0, angle_degrees, center_x, center_y),
+            rotate_point(x1, y0, angle_degrees, center_x, center_y),
+            rotate_point(x1, y1, angle_degrees, center_x, center_y),
+            rotate_point(x0, y1, angle_degrees, center_x, center_y),
+        ]
+        xs = [point[0] for point in rotated]
+        ys = [point[1] for point in rotated]
+        return [min(xs), min(ys), max(xs), max(ys)]
+
+    if looks_like_point_sequence(value):
+        return [
+            rotate_point(point[0], point[1], angle_degrees, center_x, center_y)
+            for point in value
+        ]
+
+    if isinstance(value, dict):
+        return rotate_nested_geometry(value, angle_degrees, width, height)
+
+    if isinstance(value, list):
+        return [rotate_geometry_value(item, angle_degrees, width, height) for item in value]
+
+    return value
+
+
+def rotate_nested_geometry(value, angle_degrees, width, height, key=None):
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if child_key in GEOMETRY_SKIP_KEYS:
+                updated[child_key] = copy.deepcopy(child_value)
+            elif should_transform_key(child_key):
+                updated[child_key] = rotate_geometry_value(
+                    child_value, angle_degrees, width, height
+                )
+            else:
+                updated[child_key] = rotate_nested_geometry(
+                    child_value, angle_degrees, width, height, key=child_key
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_transform_key(key):
+            return rotate_geometry_value(value, angle_degrees, width, height)
+        return [
+            rotate_nested_geometry(item, angle_degrees, width, height, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def remap_payload_to_original_image(data):
+    metadata = data.get("source_preprocessing")
+    if not isinstance(metadata, dict):
+        return data
+
+    remapped = copy.deepcopy(data)
+    width = int(metadata.get("width") or 0)
+    height = int(metadata.get("height") or 0)
+    angle = float(metadata.get("deskew_angle_degrees") or 0.0)
+    if angle and width > 0 and height > 0:
+        remapped = rotate_nested_geometry(remapped, -angle, width, height)
+
+    offset_x = int(metadata.get("coordinate_offset_x") or 0)
+    offset_y = int(metadata.get("coordinate_offset_y") or 0)
+    if offset_x or offset_y:
+        remapped = offset_nested_geometry(remapped, offset_x, offset_y)
+
+    original_input_path = (
+        metadata.get("original_input_path")
+        or remapped.get("original_input_path")
+        or remapped.get("input_path")
+    )
+    if original_input_path:
+        remapped["input_path"] = str(original_input_path)
+        remapped["original_input_path"] = str(original_input_path)
+        overall_ocr_res = remapped.get("overall_ocr_res")
+        if isinstance(overall_ocr_res, dict):
+            overall_ocr_res["input_path"] = str(original_input_path)
+
+    return remapped
 
 
 def extract_ocr_data(data):
@@ -189,19 +428,21 @@ def extract_ocr_data(data):
         polys = ocr_res.get("rec_polys") or []
 
     elif "result" in data:
-        parsing_res_list = data["result"]["layoutParsingResults"][0][
-            "prunedResult"
-        ]["parsing_res_list"]
+        try:
+            parsing_res_list = data["result"]["layoutParsingResults"][0][
+                "prunedResult"
+            ]["parsing_res_list"]
+        except (KeyError, IndexError, TypeError):
+            parsing_res_list = []
 
         for block in parsing_res_list:
-            text = block.get("block_content")
-
-            # Prefer polygon points when PaddleVL provides them. They preserve
-            # irregular or non-rectangular layout regions better than bbox.
+            if not isinstance(block, dict):
+                continue
+            text = block.get("block_content") or block.get("text") or block.get("markdown")
             poly = block.get("block_polygon_points") or block.get("block_bbox")
-
-            texts.append(text)
-            polys.append(poly)
+            if text and poly:
+                texts.append(text)
+                polys.append(poly)
 
     elif "rec_texts" in data:
         texts = data.get("rec_texts") or []
@@ -219,19 +460,15 @@ def extract_ocr_data(data):
 def build_items(texts, polys, method, select):
     """Build OCR items from OCR text and geometry."""
     items = []
-
     is_paddlevl = method == "PaddleVL" or select == "PaddleVL"
 
     for text, poly in zip(texts, polys):
-        if is_paddlevl:
-            text = normalize_text_keep_newlines(text)
-        else:
-            text = normalize_text(text)
+        text = normalize_text(text)
 
         if not text:
             continue
 
-        if method in ["PP-StructureV3", "PP-OCRv5"] or select == "PP-StructureV3":
+        if method == "PP-OCRv6":
             rect = polygon_to_rect(poly)
         elif is_paddlevl:
             rect = bbox_to_rect(poly)
@@ -413,27 +650,7 @@ def make_cjk_blocks_from_items(line_items):
 
 
 def build_text_blocks(items, method=None, select=None):
-    """Build text blocks for PDF writing.
-
-    PaddleVL returns paragraph-level layout blocks instead of
-    line-level OCR boxes. Therefore, PaddleVL content should
-    be written as paragraph text.
-    """
-    if method == "PaddleVL" or select == "PaddleVL":
-        blocks = []
-
-        for item in items:
-            blocks.append(
-                {
-                    "mode": "paragraph",
-                    "text": item.text,
-                    "rect": item.rect,
-                    "font_alias": choose_font_alias(item.text),
-                }
-            )
-
-        return blocks
-
+    """Build text blocks for PDF writing."""
     ordered_items = sort_items_reading_order(items)
     lines = group_items_into_lines(ordered_items)
 
@@ -451,6 +668,49 @@ def build_text_blocks(items, method=None, select=None):
                 blocks.append(merged)
 
     return blocks
+
+
+def pad_line_rect(rect):
+    """Add a small tolerance around an OCR line rectangle for PDF text fitting."""
+    rect = fitz.Rect(rect)
+    pad_x = max(1.0, rect.height * 0.08)
+    pad_y = max(0.5, rect.height * 0.12)
+
+    return fitz.Rect(
+        rect.x0 - pad_x,
+        rect.y0 - pad_y,
+        rect.x1 + pad_x,
+        rect.y1 + pad_y,
+    )
+
+
+def build_text_blocks_from_ordered_lines(data, page_width):
+    """Build PDF text blocks without merging separate newspaper columns."""
+    pdf_blocks = []
+
+    for ordered_block in build_ordered_blocks(data, page_width=page_width):
+        for line in ordered_block.get("lines") or []:
+            text = line_to_text(line)
+            if not text:
+                continue
+
+            rect = polygon_to_rect(line["box"])
+            if rect.is_empty or rect.width <= 0 or rect.height <= 0:
+                continue
+
+            mode = "cjk_chars" if is_mostly_cjk(text) else "latin_line"
+            font_alias = choose_font_alias(text)
+
+            pdf_blocks.append(
+                {
+                    "mode": mode,
+                    "text": text,
+                    "rect": pad_line_rect(rect),
+                    "font_alias": font_alias,
+                }
+            )
+
+    return pdf_blocks
 
 
 def fit_textbox(
@@ -521,163 +781,6 @@ def fit_textbox(
     )
 
     return True
-
-def wrap_text_to_width(text, font_obj, fontsize, max_width):
-    """Wrap text into lines based on actual font width."""
-    lines = []
-
-    for paragraph in text.split("\n"):
-        paragraph = paragraph.strip()
-
-        if not paragraph:
-            continue
-
-        # CJK text usually has no spaces, so wrap by character.
-        if contains_cjk(paragraph):
-            current_line = ""
-
-            for char in paragraph:
-                test_line = current_line + char
-                width = font_obj.text_length(test_line, fontsize=fontsize)
-
-                if width <= max_width or not current_line:
-                    current_line = test_line
-                else:
-                    lines.append(current_line)
-                    current_line = char
-
-            if current_line:
-                lines.append(current_line)
-
-            continue
-
-        words = paragraph.split()
-        current_line = ""
-
-        for word in words:
-            test_line = word if not current_line else f"{current_line} {word}"
-            width = font_obj.text_length(test_line, fontsize=fontsize)
-
-            if width <= max_width or not current_line:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = word
-
-        if current_line:
-            lines.append(current_line)
-
-    return lines
-
-
-def fit_paragraph_textbox(
-    page,
-    rect,
-    text,
-    fontname,
-    font_obj,
-    min_fontsize=1.0,
-    max_fontsize=16.0,
-):
-    """Write all PaddleVL paragraph text without dropping content.
-
-    PaddleVL provides paragraph-level boxes instead of OCR line boxes.
-    This function splits text into estimated virtual lines and writes
-    every line as invisible searchable text.
-    """
-    text = normalize_text_keep_newlines(text)
-
-    if not text:
-        return False
-
-    rect = fitz.Rect(rect)
-
-    if rect.width <= 1 or rect.height <= 1:
-        return False
-
-    pad_x = max(0.5, rect.width * 0.005)
-    pad_y = max(0.5, rect.height * 0.025)
-
-    write_rect = fitz.Rect(
-        rect.x0 + pad_x,
-        rect.y0 + pad_y,
-        rect.x1 - pad_x,
-        rect.y1 - pad_y,
-    )
-
-    if write_rect.width <= 1 or write_rect.height <= 1:
-        return False
-
-    fontsize = min(max_fontsize, max(min_fontsize, rect.height * 0.065))
-
-    lines = []
-
-    for _ in range(40):
-        lines = wrap_text_to_width(
-            text=text,
-            font_obj=font_obj,
-            fontsize=fontsize,
-            max_width=write_rect.width,
-        )
-
-        if not lines:
-            return False
-
-        line_height = fontsize * 1.08
-        total_height = len(lines) * line_height
-
-        if total_height <= write_rect.height:
-            break
-
-        fontsize *= 0.9
-
-        if fontsize <= min_fontsize:
-            fontsize = min_fontsize
-
-            lines = wrap_text_to_width(
-                text=text,
-                font_obj=font_obj,
-                fontsize=fontsize,
-                max_width=write_rect.width,
-            )
-
-            break
-
-    if not lines:
-        return False
-
-    # Compress vertically instead of dropping text.
-    if len(lines) > 1:
-        line_height = min(
-            fontsize * 1.08,
-            write_rect.height / len(lines),
-        )
-    else:
-        line_height = fontsize * 1.08
-
-    fontsize = min(fontsize, max(0.5, line_height * 0.95))
-
-    y = write_rect.y0 + fontsize
-    written_count = 0
-
-    for line in lines:
-        if y > write_rect.y1:
-            y = write_rect.y1
-
-        page.insert_text(
-            point=fitz.Point(write_rect.x0, y),
-            text=line,
-            fontname=fontname,
-            fontsize=fontsize,
-            render_mode=3,
-            overlay=True,
-            
-        )
-
-        written_count += 1
-        y += line_height
-
-    return written_count == len(lines)
 
 def measure_char_weights(text, font_obj, fontsize):
     """Measure approximate visual width for each character."""
@@ -901,15 +1004,6 @@ def write_block(page, block, font_objects):
             font_obj=font_obj,
         )
 
-    if mode == "paragraph":
-        return fit_paragraph_textbox(
-            page=page,
-            rect=rect,
-            text=text,
-            fontname=font_alias,
-            font_obj=font_obj,
-        )
-
     return False
 
 
@@ -942,22 +1036,25 @@ def build_pdf(json_path, input_dir, method, lang, select):
         result["image_used"] = str(image_path)
 
         data = json.loads(json_path.read_text(encoding="utf-8"))
-        texts, polys = extract_ocr_data(data)
-        items = build_items(texts, polys, method, select)
-        blocks = build_text_blocks(items, method, select)
 
         with Image.open(image_path) as img:
             width, height = img.size
+
+        blocks = build_text_blocks_from_ordered_lines(data, page_width=width)
+
+        if not blocks:
+            texts, polys = extract_ocr_data(data)
+            items = build_items(texts, polys, method, select)
+            blocks = build_text_blocks(items, method, select)
 
         doc = fitz.open()
         page = doc.new_page(width=width, height=height)
         page.insert_image(page.rect, filename=str(image_path))
 
-        page.insert_font(fontname=LATIN_FONT_ALIAS, fontfile=str(LATIN_FONT_PATH))
         page.insert_font(fontname=CJK_FONT_ALIAS, fontfile=str(CJK_FONT_PATH))
 
         font_objects = {
-            LATIN_FONT_ALIAS: fitz.Font(fontfile=str(LATIN_FONT_PATH)),
+            LATIN_FONT_ALIAS: fitz.Font(LATIN_FONT_ALIAS),
             CJK_FONT_ALIAS: fitz.Font(fontfile=str(CJK_FONT_PATH)),
         }
 
@@ -1010,6 +1107,7 @@ def build_pdf(json_path, input_dir, method, lang, select):
             output_dir=json_path.parent,
             lang=lang,
             method=method,
+            data_payload=data,
         )
 
         output_xml = json_path.parent / f"{json_path.stem}.xml"
@@ -1026,7 +1124,16 @@ def build_pdf(json_path, input_dir, method, lang, select):
     return result
 
 
-def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recursive=True):
+def main(
+    output_dir,
+    input_dir,
+    method,
+    lang,
+    select=None,
+    log_dir="logs",
+    recursive=True,
+    run_options=None,
+):
     """
     Generate searchable PDF and ALTO XML files
     from OCR JSON results.
@@ -1056,6 +1163,18 @@ def main(output_dir, input_dir, method, lang, select=None,log_dir="logs", recurs
 
     summary_logger, error_logger, summary_log_path, error_log_path = (
         OCRLoggerManger.setup(method)
+    )
+    pdf_options = dict(run_options or {})
+    pdf_options.setdefault("method", method)
+    if lang is not None:
+        pdf_options.setdefault("lang", lang)
+    log_run_configuration(
+        summary_logger,
+        pdf_options,
+        select=select,
+        input_path=input_dir,
+        output_root=output_dir,
+        stage="PDF/ALTO",
     )
 
     output_dir = Path(output_dir)

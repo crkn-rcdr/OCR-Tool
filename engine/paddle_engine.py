@@ -1,6 +1,34 @@
-from paddleocr import PPStructureV3
 import threading
+from .paddlex_compat import apply_headless_opencv_patch
+from services.ocr_defaults import (
+    DEFAULT_OCR_VERSION,
+    DEFAULT_TEXT_DET_BOX_THRESH,
+    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+    DEFAULT_TEXT_DET_LIMIT_TYPE,
+    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
+    DEFAULT_TEXT_DET_THRESH,
+    DEFAULT_TEXT_DET_UNCLIP_RATIO,
+    DEFAULT_TEXT_REC_SCORE_THRESH,
+    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+)
+
+apply_headless_opencv_patch()
 from paddleocr import PaddleOCR  
+
+PADDLE_OCR_METHODS = {"PP-OCRv6"}
+
+
+def option_or_default(opt: dict, key: str, default):
+    value = opt.get(key)
+    return default if value is None else value
+
+
+def normalize_text_det_limit_type(value):
+    value = str(value or DEFAULT_TEXT_DET_LIMIT_TYPE).strip().lower()
+    if value not in {"max", "min"}:
+        return DEFAULT_TEXT_DET_LIMIT_TYPE
+    return value
+
 
 class PaddleEngine:
     """
@@ -29,6 +57,8 @@ class PaddleEngine:
        
         return {
             "method": opt.get("method"),
+            "ocr_version": DEFAULT_OCR_VERSION,
+            "device": opt.get("device"),
             "use_doc_orientation_classify": opt.get(
                 "use_doc_orientation_classify", False
             ),
@@ -39,7 +69,54 @@ class PaddleEngine:
                 "use_textline_orientation", False
             ),
             "lang": opt.get("lang"),
-            "text_det_thresh": opt.get("text_det_thresh"),
+            "text_det_thresh": option_or_default(
+                opt,
+                "text_det_thresh",
+                DEFAULT_TEXT_DET_THRESH,
+            ),
+            "text_det_limit_side_len": int(
+                option_or_default(
+                    opt,
+                    "text_det_limit_side_len",
+                    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
+                )
+            ),
+            "text_det_limit_type": normalize_text_det_limit_type(
+                option_or_default(
+                    opt,
+                    "text_det_limit_type",
+                    DEFAULT_TEXT_DET_LIMIT_TYPE,
+                )
+            ),
+            "text_det_max_side_limit": int(
+                option_or_default(
+                    opt,
+                    "text_det_max_side_limit",
+                    DEFAULT_TEXT_DET_MAX_SIDE_LIMIT,
+                )
+            ),
+            "text_det_box_thresh": option_or_default(
+                opt,
+                "text_det_box_thresh",
+                DEFAULT_TEXT_DET_BOX_THRESH,
+            ),
+            "text_det_unclip_ratio": option_or_default(
+                opt,
+                "text_det_unclip_ratio",
+                DEFAULT_TEXT_DET_UNCLIP_RATIO,
+            ),
+            "text_rec_score_thresh": option_or_default(
+                opt,
+                "text_rec_score_thresh",
+                DEFAULT_TEXT_REC_SCORE_THRESH,
+            ),
+            "text_recognition_batch_size": int(
+                option_or_default(
+                    opt,
+                    "text_recognition_batch_size",
+                    DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
+                )
+            ),
         }
 
     def single_instance_engine(self,opt:dict):
@@ -64,22 +141,51 @@ class PaddleEngine:
             "use_doc_unwarping": params["use_doc_unwarping"],
             "use_textline_orientation": params["use_textline_orientation"],
             "text_det_thresh": params["text_det_thresh"],
+            "text_det_limit_side_len": params["text_det_limit_side_len"],
+            "text_det_limit_type": params["text_det_limit_type"],
+            "text_det_box_thresh": params["text_det_box_thresh"],
+            "text_det_unclip_ratio": params["text_det_unclip_ratio"],
+            "text_rec_score_thresh": params["text_rec_score_thresh"],
+            "text_recognition_batch_size": params["text_recognition_batch_size"],
         }
 
+        if params["device"] is not None:
+            kwargs["device"] = params["device"]
         if params["lang"] is not None:
             kwargs["lang"] = params["lang"]
-        print("[DEBUG] init kwargs:", kwargs, flush=True)
         
-        if method == "PP-OCRv5":
-            kwargs["return_word_box"] = True
-            self.pipeline = PaddleOCR(**kwargs)
-        elif method in ["PP-StructureV3","Auto Routing"]:
-            
-            self.pipeline = PPStructureV3(**kwargs)
+        if method not in PADDLE_OCR_METHODS:
+            raise ValueError(f"Unsupported OCR method: {method}")
+
+        kwargs["ocr_version"] = params["ocr_version"]
+        kwargs["return_word_box"] = True
+        self.pipeline = PaddleOCR(**kwargs)
 
         self._init_params = params
+        self.method = method
         return True
         
     def infer(self,image_path:str,opt:dict):
         self.single_instance_engine(opt)
-        return self.pipeline.predict(image_path)
+        params = self._create_params(opt)
+        predict_kwargs = {
+            "use_doc_orientation_classify": params["use_doc_orientation_classify"],
+            "use_doc_unwarping": params["use_doc_unwarping"],
+            "use_textline_orientation": params["use_textline_orientation"],
+            "text_det_limit_side_len": params["text_det_limit_side_len"],
+            "text_det_limit_type": params["text_det_limit_type"],
+            "text_det_thresh": params["text_det_thresh"],
+            "text_det_box_thresh": params["text_det_box_thresh"],
+            "text_det_unclip_ratio": params["text_det_unclip_ratio"],
+            "text_rec_score_thresh": params["text_rec_score_thresh"],
+        }
+
+        if self.method in PADDLE_OCR_METHODS and hasattr(self.pipeline, "paddlex_pipeline"):
+            return self.pipeline.paddlex_pipeline.predict(
+                image_path,
+                **predict_kwargs,
+                text_det_max_side_limit=params["text_det_max_side_limit"],
+                return_word_box=True,
+            )
+
+        return self.pipeline.predict(image_path, **predict_kwargs)

@@ -1,9 +1,37 @@
 services:
+  olmocr-vllm-server:
+    image: alleninstituteforai/olmocr:${OLMOCR_IMAGE_TAG:-v0.4.27-with-model}
+    container_name: crkn-ocr-olmocr
+    ports:
+      - 127.0.0.1:8000:8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    shm_size: 16g
+    restart: unless-stopped
+    command:
+      - -lc
+      - >
+        vllm serve ${OLMOCR_MODEL:-allenai/olmOCR-2-7B-1025-FP8}
+        --host 0.0.0.0
+        --port 8000
+        --max-model-len 16384
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=3)\" || exit 1"]
+      start_period: 300s
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
   paddleocr-vl-api:
-    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX}
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
     container_name: paddleocr-vl-api
     ports:
-      - 8080:8080
+      - 127.0.0.1:8080:8080
     depends_on:
       paddleocr-vlm-server:
         condition: service_healthy
@@ -18,14 +46,17 @@ services:
     # TODO: Allow using a regular user
     user: root
     restart: unless-stopped
+    volumes:
+      - ./pipeline_config_vllm.yaml:/home/paddleocr/pipeline_config_vllm.yaml:ro
+      - ./pipeline_config_fastdeploy.yaml:/home/paddleocr/pipeline_config_fastdeploy.yaml:ro
     environment:
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
-    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${VLM_BACKEND}.yaml"
+    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${VLM_BACKEND:-vllm}.yaml"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
 
   paddleocr-vlm-server:
-    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND}-server:${VLM_IMAGE_TAG_SUFFIX}
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
     container_name: paddleocr-vlm-server
     deploy:
       resources:

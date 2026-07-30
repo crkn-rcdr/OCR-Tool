@@ -1,11 +1,43 @@
+"""Generate plain-text outputs from normalized OCR JSON payloads."""
+
 from pathlib import Path
 import json
+
+from services.alto_generation import ordered_text_lines_from_data
+from services.punctuation_cleanup import clean_ocr_line_list
+
+
+def extract_fallback_texts(data):
+    """Extract best-effort text lines from supported OCR JSON layouts."""
+    if "overall_ocr_res" in data:
+        ocr_res = data["overall_ocr_res"]
+        return ocr_res["rec_texts"]
+
+    if "rec_texts" in data:
+        return data["rec_texts"]
+
+    if "result" in data:
+        try:
+            parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"][
+                "parsing_res_list"
+            ]
+        except (KeyError, IndexError, TypeError):
+            return []
+
+        return [
+            block.get("block_content") or block.get("text") or block.get("markdown")
+            for block in parsing_res_list
+            if isinstance(block, dict)
+        ]
+
+    return []
+
+
 def generate_txt_file(json_path:Path):
     """
     Generate a TXT file from OCR JSON results.
 
-    Supports multiple OCR JSON formats and extracts
-    recognized text content into a plain text file.
+    Extracts recognized OCR text content into a plain text file.
 
     Args:
         json_path (Path):
@@ -17,20 +49,15 @@ def generate_txt_file(json_path:Path):
     """
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
-    if "overall_ocr_res" in data:
-        ocr_res = data["overall_ocr_res"]
-        texts = ocr_res["rec_texts"]
-    elif "rec_texts" in data:
-        texts = data["rec_texts"]
 
-    elif "result" in data:
-        parsing_res_list = data["result"]["layoutParsingResults"][0]["prunedResult"]["parsing_res_list"]
-        texts = []
+    if "overall_ocr_res" in data or "rec_texts" in data:
+        texts = ordered_text_lines_from_data(data)
+        if not texts:
+            texts = extract_fallback_texts(data)
+    else:
+        texts = extract_fallback_texts(data)
 
-        for block in parsing_res_list:
-            text = block.get("block_content")
-            texts.append(text)
+    texts = clean_ocr_line_list(texts)
 
     txt_path = json_path.with_suffix(".txt")
 
