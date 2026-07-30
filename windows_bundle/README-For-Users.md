@@ -20,7 +20,24 @@ Select the model to run the OCR using this guide:
 
 <img width="1616" height="144" alt="image" src="https://github.com/user-attachments/assets/2e08359b-93f5-4eab-adb0-4de3dcb6cbcc" />
 
-*table go here*
+| OCR method | Use this when | What it may do better than PaddleOCR v6 | Best document types | Notes |
+| --- | --- | --- | --- | --- |
+| **PaddleOCR (PP-OCRv6)** | Use this for most newspaper pages and normal production OCR. | This is the recommended baseline because it gives structured OCR output, word boxes, searchable PDF, ALTO, and supports the tested **pre process** and **post process** options. | Printed text: most clean or moderately noisy newspaper scans, especially when you need reliable PDF/ALTO geometry. | Recommended default. Not recommended for handwriting. |
+| **PaddleVL** | Use this when you want to test PaddleOCR-VL directly on the whole image. | It may recover more words from visually complex printed pages where regular OCR misses text, especially when layout and image context matter. | Printed text with complicated layout, mixed text blocks, tables, captions, ads, or page areas where standard OCR misses words. | Uses Docker. **pre process** and **post process** are disabled for this method. Limited for handwriting. |
+| **OLM OCR** | Use this when you want to test OLM OCR directly on the whole image. | It may produce more natural reading-order text and can sometimes handle damaged, messy, handwritten, or irregular documents better than regular OCR. | Rough printed scans, mixed layouts, unusual typography, some handwriting, and documents where readable text matters more than exact word-box geometry. | Uses Docker. **pre process** and **post process** are disabled for this method. For handwriting, review output carefully. |
+
+Quick comparison:
+
+| If the page looks like this | Try first | Why |
+| --- | --- | --- |
+| Normal newspaper page, good scan, standard columns | **PaddleOCR (PP-OCRv6)** | Best default and best output structure. |
+| Newspaper page with many small blocks, ads, captions, tables, or layout-heavy regions | **PaddleVL** | Often better at using visual layout context. |
+| Very messy scan, unusual typography, damaged text, or text that needs natural reading order more than exact boxes | **OLM OCR** | Often better as a whole-page visual reader. |
+| Mostly handwritten material | **OLM OCR** | More likely to handle handwriting than the Paddle options, but results should be checked carefully. |
+| Mostly printed material | **PaddleOCR (PP-OCRv6)** | Best default for printed OCR and structured outputs. |
+| You need the safest searchable PDF and ALTO output | **PaddleOCR (PP-OCRv6)** | It has the strongest geometry/word-box support. |
+| PaddleOCR v6 missed many words | **PaddleVL**, then **OLM OCR** | PaddleVL may recover layout text; OLM OCR may recover more readable page text. |
+| PaddleVL output is fragmented or awkward to read | **OLM OCR** | OLM OCR may produce smoother reading-order text. |
 
 ### Step 5
 Choose an input image/folder and an output folder. If your input folder contains many folders of images, it will queue those folders up.
@@ -40,13 +57,16 @@ Choose the primary language, if known.
 <img width="1526" height="590" alt="image" src="https://github.com/user-attachments/assets/d096d410-8168-4780-bf5e-8d96c5ba38d0" />
 
 ### Step 7
-Turn **pre process** and **post process** on or off, use the gui9de below to determine if they are needed.
+Turn **pre process** and **post process** on or off, use the guide below to determine if they are needed.
 
 <img width="1917" height="1056" alt="Screenshot 2026-07-30 083005" src="https://github.com/user-attachments/assets/014b7803-0d1e-41d4-ae0e-fc3d60efc15e" />
 
 Guide:
 
-*table go here*
+| Setting | What it does | Use it when | Leave it off when |
+| --- | --- | --- | --- |
+| **pre process** | Crops the black scan border and lightly evens the page background before OCR. | Use for most PP-OCRv6 newspaper scans, especially pages with dark borders or uneven background. | Leave off only when you want OCR on the exact original image without cleanup. |
+| **post process** | Cleans punctuation artifacts and asks PaddleVL to review suspicious PP-OCRv6 word crops. | Use for most PP-OCRv6 production runs when Docker/PaddleVL is available. | Leave off when you have really clean modern scans or need to process things quickly, since it will slow down the process due to running Paddle-VL spell-checks on all suspicious words. |
 
 ### Step 8
 Click **Run**. 
