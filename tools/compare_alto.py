@@ -659,9 +659,9 @@ def generate_interactive_html(
   .panel:active {{ cursor: grabbing; }}
   .panel-header {{ position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }}
   
-  .canvas-stage {{ position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 100%; height: 100%; }}
-  .page-image {{ width: 100%; height: auto; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }}
-  .overlay-svg {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: auto; }}
+  .canvas-stage {{ position: absolute; top: 0; left: 0; transform-origin: 0 0; width: {result.pipeline_page.width}px; height: {result.pipeline_page.height}px; }}
+  .page-image {{ position: absolute; top: 0; left: 0; width: {result.pipeline_page.width}px; height: {result.pipeline_page.height}px; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }}
+  .overlay-svg {{ position: absolute; top: 0; left: 0; width: {result.pipeline_page.width}px; height: {result.pipeline_page.height}px; pointer-events: auto; }}
   
   rect.agree {{ fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }}
   rect.discrepancy {{ fill: rgba(245, 158, 11, 0.35); stroke: #f59e0b; stroke-width: 2; cursor: pointer; }}
@@ -943,21 +943,35 @@ def generate_interactive_html(
   attachPanZoom(panelLeft);
   attachPanZoom(panelRight);
 
-  document.getElementById("btnResetView").onclick = () => {{
-    scale = 1.0;
-    panX = 0;
-    panY = 0;
+  function fitToView() {{
+    const panelW = panelLeft.clientWidth || 800;
+    const panelH = panelLeft.clientHeight || 900;
+    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    panX = (panelW - pageWidth * scale) / 2;
+    panY = 10;
     updateTransform();
+  }}
+
+  // Initial fit on load
+  fitToView();
+  window.addEventListener("resize", fitToView);
+
+  document.getElementById("btnResetView").onclick = () => {{
+    fitToView();
     document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
     document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
   }};
 
   function zoomToNormBox(box) {{
-    scale = 3.8;
-    const stageW = panelLeft.clientWidth;
-    const stageH = panelLeft.clientHeight;
-    panX = (stageW / 2) - ((box[0] + box[2] / 2) * stageW * scale);
-    panY = (stageH / 2) - ((box[1] + box[3] / 2) * stageH * scale);
+    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
+    scale = 3.5;
+    const panelW = panelLeft.clientWidth;
+    const panelH = panelLeft.clientHeight;
+    const boxCenterX = (box[0] + (box[2] / 2.0)) * pageWidth;
+    const boxCenterY = (box[1] + (box[3] / 2.0)) * pageHeight;
+
+    panX = (panelW / 2.0) - (boxCenterX * scale);
+    panY = (panelH / 2.0) - (boxCenterY * scale);
     updateTransform();
   }}
 
