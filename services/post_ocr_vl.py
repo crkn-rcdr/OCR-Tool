@@ -15,8 +15,10 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from requests.adapters import HTTPAdapter
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 from PIL import Image
 from spellchecker import SpellChecker
@@ -25,7 +27,9 @@ from services.ocr_defaults import (
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_CONCURRENCY,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -370,8 +374,20 @@ def apply_post_ocr_vl_check(
     metadata["line_text_fallback_candidate_count"] = sum(
         1 for candidate in candidates if candidate.source == "line_text"
     )
+    batch_size = parse_int(
+        opt.get("post_ocr_vl_batch_size"),
+        DEFAULT_POST_OCR_VL_BATCH_SIZE,
+        minimum=1,
+    )
+    concurrency = parse_int(
+        opt.get("post_ocr_vl_concurrency"),
+        DEFAULT_POST_OCR_VL_CONCURRENCY,
+        minimum=1,
+    )
+    metadata["batch_size"] = batch_size
+    metadata["concurrency"] = concurrency
     metadata["line_grouping_active"] = False
-    candidate_batches = group_candidate_batches(candidates)
+    candidate_batches = group_candidate_batches(candidates, batch_size=batch_size)
     metadata["vl_request_count"] = len(candidate_batches)
     metadata["line_group_count"] = sum(
         1 for batch in candidate_batches if should_process_batch_as_line(batch)
@@ -421,151 +437,58 @@ def apply_post_ocr_vl_check(
     saved_tile_count = 0
     processed_count = 0
 
-    with Image.open(image_path) as image:
-        image = image.convert("RGB")
+    with requests.Session() as session:
+        adapter = HTTPAdapter(
+            pool_connections=max(concurrency, 10),
+            pool_maxsize=max(concurrency * 2, 20),
+            max_retries=1,
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
-        for request_index, batch in enumerate(candidate_batches, start=1):
-            if should_process_batch_as_line(batch):
-                processed_count, applied_count, saved_tile_count = process_line_batch(
-                    image=image,
-                    ocr_payload=ocr_payload,
-                    batch=batch,
-                    opt=opt,
-                    metadata=metadata,
-                    progress_path=progress_path,
-                    source_json=str(json_path),
-                    image_path=str(image_path),
-                    tile_dir=tile_dir,
-                    suspicious_word_count=suspicious_word_count,
-                    request_index=request_index,
-                    processed_count=processed_count,
-                    applied_count=applied_count,
-                    saved_tile_count=saved_tile_count,
-                )
-                continue
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            with Image.open(image_path) as image:
+                image = image.convert("RGB")
 
-            candidate = batch[0]
-            position = processed_count + 1
-            record = candidate_record(candidate)
-            write_post_ocr_vl_progress(
-                progress_path,
-                metadata,
-                status="running",
-                source_json=str(json_path),
-                image_path=str(image_path),
-                suspicious_word_count=suspicious_word_count,
-                qualified_word_count=metadata["qualified_count"],
-                total_words_to_check=metadata["candidate_count"],
-                current_position=position,
-                current_word=candidate.text,
-                current_line_index=candidate.line_index,
-                current_word_index=candidate.word_index,
-                current_line_score=candidate.line_score,
-                current_weirdness=candidate.weirdness,
-                last_completed_position=position - 1,
-                current_vl_request=request_index,
-                total_vl_requests=metadata["vl_request_count"],
-                applied_count=applied_count,
-                saved_tile_count=saved_tile_count,
-            )
+                for request_index, batch in enumerate(candidate_batches, start=1):
+                    if should_process_batch_as_line(batch):
+                        processed_count, applied_count, saved_tile_count = process_line_batch(
+                            image=image,
+                            ocr_payload=ocr_payload,
+                            batch=batch,
+                            opt=opt,
+                            metadata=metadata,
+                            progress_path=progress_path,
+                            source_json=str(json_path),
+                            image_path=str(image_path),
+                            tile_dir=tile_dir,
+                            suspicious_word_count=suspicious_word_count,
+                            request_index=request_index,
+                            processed_count=processed_count,
+                            applied_count=applied_count,
+                            saved_tile_count=saved_tile_count,
+                        )
+                        continue
 
-            try:
-                tile, crop_box = crop_word_tile(
-                    image,
-                    candidate.box,
-                    padding_px=metadata["padding_px"],
-                )
-            except Exception as exc:
-                record["error"] = f"Unable to crop word tile: {exc}"
-                metadata["corrections"].append(record)
-                write_post_ocr_vl_progress(
-                    progress_path,
-                    metadata,
-                    status="running",
-                    source_json=str(json_path),
-                    image_path=str(image_path),
-                    suspicious_word_count=suspicious_word_count,
-                    qualified_word_count=metadata["qualified_count"],
-                    total_words_to_check=metadata["candidate_count"],
-                    current_position=position,
-                    current_word=candidate.text,
-                    current_line_index=candidate.line_index,
-                    current_word_index=candidate.word_index,
-                    last_completed_position=position,
-                    current_vl_request=request_index,
-                    total_vl_requests=metadata["vl_request_count"],
-                    applied_count=applied_count,
-                    saved_tile_count=saved_tile_count,
-                    last_error=record["error"],
-                )
-                processed_count += 1
-                continue
-
-            record["crop_box"] = crop_box
-            record["crop_type"] = "word"
-            tile_path = None
-
-            if metadata["save_tiles"]:
-                tile_path = tile_dir / (
-                    f"{candidate.line_index:04d}_{candidate.word_index:03d}_"
-                    f"{safe_filename(candidate.text)}.png"
-                )
-                tile.save(tile_path)
-                record["tile_path"] = str(tile_path)
-                saved_tile_count += 1
-
-            results = []
-            for backend in backend_order:
-                try:
-                    text = run_backend_check(
-                        backend,
-                        tile,
-                        candidate.text,
-                        opt,
+                    processed_count, applied_count, saved_tile_count = process_word_batch(
+                        image=image,
+                        ocr_payload=ocr_payload,
+                        batch=batch,
+                        opt=opt,
+                        metadata=metadata,
+                        progress_path=progress_path,
+                        source_json=str(json_path),
+                        image_path=str(image_path),
+                        tile_dir=tile_dir,
+                        suspicious_word_count=suspicious_word_count,
+                        request_index=request_index,
+                        total_requests=len(candidate_batches),
+                        processed_count=processed_count,
+                        applied_count=applied_count,
+                        saved_tile_count=saved_tile_count,
+                        session=session,
+                        executor=executor if concurrency > 1 else None,
                     )
-                    results.append({"backend": backend, "text": text})
-                except Exception as exc:
-                    results.append({"backend": backend, "error": str(exc)})
-
-            record["backend_results"] = results
-            selected_text, reason = choose_correction(candidate.text, results)
-            record["selected_text"] = selected_text
-            record["reason"] = reason
-
-            if (
-                metadata["apply_corrections"]
-                and selected_text
-                and reason == "accepted"
-            ):
-                apply_candidate_correction(ocr_payload, candidate, selected_text)
-                record["applied"] = True
-                applied_count += 1
-            else:
-                record["applied"] = False
-
-            metadata["corrections"].append(record)
-            processed_count += 1
-            write_post_ocr_vl_progress(
-                progress_path,
-                metadata,
-                status="running",
-                source_json=str(json_path),
-                image_path=str(image_path),
-                suspicious_word_count=suspicious_word_count,
-                qualified_word_count=metadata["qualified_count"],
-                total_words_to_check=metadata["candidate_count"],
-                current_position=position,
-                current_word=candidate.text,
-                current_line_index=candidate.line_index,
-                current_word_index=candidate.word_index,
-                selected_text=record["selected_text"],
-                correction_reason=record["reason"],
-                last_completed_position=position,
-                current_vl_request=request_index,
-                total_vl_requests=metadata["vl_request_count"],
-                applied_count=applied_count,
-                saved_tile_count=saved_tile_count,
-            )
 
     metadata["applied_count"] = applied_count
     metadata["saved_tile_count"] = saved_tile_count
@@ -817,9 +740,33 @@ def line_text_tokens(text: str) -> list[LineTextToken]:
     ]
 
 
-def group_candidate_batches(candidates: list[WordCandidate]) -> list[list[WordCandidate]]:
+def group_candidate_batches(
+    candidates: list[WordCandidate],
+    batch_size: int = 1,
+) -> list[list[WordCandidate]]:
     """Group suspicious candidates into word or line batches for VL requests."""
-    return [[candidate] for candidate in candidates]
+    if batch_size <= 1:
+        return [[candidate] for candidate in candidates]
+
+    batches: list[list[WordCandidate]] = []
+    current_word_batch: list[WordCandidate] = []
+
+    for candidate in candidates:
+        if candidate.source == "line_text":
+            if current_word_batch:
+                batches.append(current_word_batch)
+                current_word_batch = []
+            batches.append([candidate])
+        else:
+            current_word_batch.append(candidate)
+            if len(current_word_batch) >= batch_size:
+                batches.append(current_word_batch)
+                current_word_batch = []
+
+    if current_word_batch:
+        batches.append(current_word_batch)
+
+    return batches
 
 
 def should_process_batch_as_line(batch: list[WordCandidate]) -> bool:
@@ -1076,6 +1023,161 @@ def process_single_line_text_batch(
         applied_count=applied_count,
         saved_tile_count=saved_tile_count,
     )
+    return processed_count, applied_count, saved_tile_count
+
+
+def process_word_batch(
+    image: Image.Image,
+    ocr_payload: dict[str, Any],
+    batch: list[WordCandidate],
+    opt: dict,
+    metadata: dict[str, Any],
+    progress_path: Path,
+    source_json: str,
+    image_path: str,
+    tile_dir: Path | None,
+    suspicious_word_count: int,
+    request_index: int,
+    total_requests: int,
+    processed_count: int,
+    applied_count: int,
+    saved_tile_count: int,
+    session: requests.Session | None = None,
+    executor: ThreadPoolExecutor | None = None,
+) -> tuple[int, int, int]:
+    """Process a batch of word candidates using concurrent VLM verification."""
+    backend_order = [DEFAULT_POST_OCR_VL_BACKEND]
+    start_position = processed_count + 1
+    current_word = ", ".join(candidate.text for candidate in batch)[:160]
+
+    write_post_ocr_vl_progress(
+        progress_path,
+        metadata,
+        status="running",
+        source_json=source_json,
+        image_path=image_path,
+        suspicious_word_count=suspicious_word_count,
+        qualified_word_count=metadata["qualified_count"],
+        total_words_to_check=metadata["candidate_count"],
+        current_position=start_position,
+        current_word=current_word,
+        current_line_index=batch[0].line_index,
+        current_word_index=[candidate.word_index for candidate in batch],
+        current_line_score=batch[0].line_score,
+        current_weirdness=max(candidate.weirdness for candidate in batch),
+        last_completed_position=processed_count,
+        current_vl_request=request_index,
+        total_vl_requests=total_requests,
+        applied_count=applied_count,
+        saved_tile_count=saved_tile_count,
+    )
+
+    crop_tasks: list[tuple[WordCandidate, dict[str, Any], Image.Image]] = []
+    crop_failed: list[tuple[WordCandidate, dict[str, Any]]] = []
+
+    for candidate in batch:
+        record = candidate_record(candidate)
+        record["crop_type"] = "word"
+        try:
+            tile, crop_box = crop_word_tile(
+                image,
+                candidate.box,
+                padding_px=metadata["padding_px"],
+            )
+            record["crop_box"] = crop_box
+
+            if metadata["save_tiles"] and tile_dir is not None:
+                tile_path = tile_dir / (
+                    f"{candidate.line_index:04d}_{candidate.word_index:03d}_"
+                    f"{safe_filename(candidate.text)}.png"
+                )
+                tile.save(tile_path)
+                record["tile_path"] = str(tile_path)
+                saved_tile_count += 1
+
+            crop_tasks.append((candidate, record, tile))
+        except Exception as exc:
+            record["error"] = f"Unable to crop word tile: {exc}"
+            crop_failed.append((candidate, record))
+
+    verified_results: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
+
+    if crop_tasks:
+        def _check_one(item: tuple[WordCandidate, dict[str, Any], Image.Image]):
+            cand, rec, tile_obj = item
+            results = []
+            for backend in backend_order:
+                try:
+                    text = run_backend_check(
+                        backend,
+                        tile_obj,
+                        cand.text,
+                        opt,
+                        session=session,
+                    )
+                    results.append({"backend": backend, "text": text})
+                except Exception as exc:
+                    results.append({"backend": backend, "error": str(exc)})
+            return cand, rec, results
+
+        if executor is not None and len(crop_tasks) > 1:
+            verified_results = list(executor.map(_check_one, crop_tasks))
+        else:
+            verified_results = [_check_one(item) for item in crop_tasks]
+
+    all_outcomes: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
+    for cand, rec in crop_failed:
+        all_outcomes.append((cand, rec, [{"backend": "paddlevl", "error": rec.get("error")}]))
+    all_outcomes.extend(verified_results)
+
+    cand_index_map = {id(c): idx for idx, c in enumerate(batch)}
+    all_outcomes.sort(key=lambda item: cand_index_map.get(id(item[0]), 0))
+
+    last_record = None
+    for candidate, record, results in all_outcomes:
+        record["backend_results"] = results
+        selected_text, reason = choose_correction(candidate.text, results)
+        record["selected_text"] = selected_text
+        record["reason"] = reason
+
+        if (
+            metadata["apply_corrections"]
+            and selected_text
+            and reason == "accepted"
+        ):
+            apply_candidate_correction(ocr_payload, candidate, selected_text)
+            record["applied"] = True
+            applied_count += 1
+        else:
+            record["applied"] = False
+
+        metadata["corrections"].append(record)
+        processed_count += 1
+        last_record = record
+
+    if last_record is not None:
+        write_post_ocr_vl_progress(
+            progress_path,
+            metadata,
+            status="running",
+            source_json=source_json,
+            image_path=image_path,
+            suspicious_word_count=suspicious_word_count,
+            qualified_word_count=metadata["qualified_count"],
+            total_words_to_check=metadata["candidate_count"],
+            current_position=processed_count,
+            current_word=batch[-1].text,
+            current_line_index=batch[-1].line_index,
+            current_word_index=batch[-1].word_index,
+            selected_text=last_record.get("selected_text"),
+            correction_reason=last_record.get("reason"),
+            last_completed_position=processed_count,
+            current_vl_request=request_index,
+            total_vl_requests=total_requests,
+            applied_count=applied_count,
+            saved_tile_count=saved_tile_count,
+        )
+
     return processed_count, applied_count, saved_tile_count
 
 
@@ -1762,14 +1864,20 @@ def run_backend_check(
     tile: Image.Image,
     original_text: str,
     opt: dict,
+    session: requests.Session | None = None,
 ) -> str:
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
     if backend == "paddlevl":
-        return request_paddlevl_word(tile, original_text, opt)
+        return request_paddlevl_word(tile, original_text, opt, session=session)
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
-def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> str:
+def request_paddlevl_word(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+) -> str:
     """Request a word-level correction from the PaddleOCR-VL backend."""
     base_url = str(
         opt.get("post_ocr_vl_paddlevl_url") or DEFAULT_PADDLE_VL_API_URL
@@ -1782,7 +1890,8 @@ def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> s
         "useLayoutDetection": False,
         "maxNewTokens": 32,
     }
-    response = requests.post(
+    client = session if session is not None else requests
+    response = client.post(
         f"{base_url}/layout-parsing",
         json=payload,
         timeout=(10, 120),
@@ -1998,6 +2107,8 @@ def write_post_ocr_vl_progress(
         "max_words_enabled": metadata.get("max_words_enabled"),
         "max_words": metadata.get("max_words"),
         "save_tiles": metadata.get("save_tiles"),
+        "concurrency": metadata.get("concurrency"),
+        "batch_size": metadata.get("batch_size"),
         "group_line_candidates": metadata.get("group_line_candidates"),
         "line_grouping_active": metadata.get("line_grouping_active"),
         "vl_request_count": metadata.get("vl_request_count"),

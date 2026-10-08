@@ -21,7 +21,9 @@ from services.ocr_defaults import (
     DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_CONCURRENCY,
     DEFAULT_POST_OCR_VL_ENABLED,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
@@ -278,6 +280,8 @@ def build_post_ocr_vl_options(post_process_enabled):
         ),
         "post_ocr_vl_save_tiles": bool(DEFAULT_POST_OCR_VL_SAVE_TILES),
         "post_ocr_vl_paddlevl_url": DEFAULT_PADDLE_VL_API_URL,
+        "post_ocr_vl_concurrency": int(DEFAULT_POST_OCR_VL_CONCURRENCY),
+        "post_ocr_vl_batch_size": int(DEFAULT_POST_OCR_VL_BATCH_SIZE),
     }
 
 

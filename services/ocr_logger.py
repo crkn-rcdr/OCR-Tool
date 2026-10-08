@@ -65,6 +65,8 @@ OPTION_LABELS = {
     "post_ocr_vl_low_confidence_threshold": "Post-OCR VL low confidence threshold",
     "post_ocr_vl_apply_corrections": "Apply post-OCR VL corrections",
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
+    "post_ocr_vl_concurrency": "Post-OCR VL concurrency",
+    "post_ocr_vl_batch_size": "Post-OCR VL batch size",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
     "olmocr_url": "OLM OCR API URL",
     "olmocr_model": "OLM OCR model",
@@ -105,6 +107,8 @@ OPTION_ORDER = [
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
+    "post_ocr_vl_concurrency",
+    "post_ocr_vl_batch_size",
     "post_ocr_vl_paddlevl_url",
     "olmocr_url",
     "olmocr_model",
@@ -138,6 +142,8 @@ POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
+    "post_ocr_vl_concurrency",
+    "post_ocr_vl_batch_size",
     "post_ocr_vl_paddlevl_url",
 }
 
