@@ -647,9 +647,10 @@ def generate_interactive_html(
   .badge.warning {{ background: #d97706; color: #fff; }}
   .badge.info {{ background: #0284c7; color: #fff; }}
   
-  .controls {{ background: #212529; border-bottom: 1px solid #30363d; padding: 8px 20px; display: flex; gap: 15px; align-items: center; font-size: 0.85rem; }}
+  .controls {{ background: #212529; border-bottom: 1px solid #30363d; padding: 8px 20px; display: flex; gap: 16px; align-items: center; font-size: 0.85rem; flex-wrap: wrap; }}
   .controls label {{ display: flex; align-items: center; gap: 5px; cursor: pointer; }}
-  .controls select, .controls input {{ background: #2d333b; color: #fff; border: 1px solid #444c56; padding: 4px 8px; border-radius: 4px; }}
+  .controls select, .controls input[type="range"] {{ vertical-align: middle; }}
+  .slider-group {{ display: flex; align-items: center; gap: 6px; }}
   
   .main-container {{ display: flex; flex: 1; overflow: hidden; position: relative; }}
   .viewers-container {{ display: flex; flex: 1; overflow: hidden; position: relative; }}
@@ -659,7 +660,7 @@ def generate_interactive_html(
   .panel-header {{ position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }}
   
   .canvas-stage {{ position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 100%; height: 100%; }}
-  .page-image {{ width: 100%; height: auto; display: block; user-select: none; pointer-events: none; }}
+  .page-image {{ width: 100%; height: auto; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }}
   .overlay-svg {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: auto; }}
   
   rect.agree {{ fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }}
@@ -668,11 +669,25 @@ def generate_interactive_html(
   rect.b-only {{ fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }}
   rect:hover {{ fill-opacity: 0.7; stroke-width: 2.5; }}
   
+  /* Selected / Highlighted active word */
+  rect.highlighted {{
+    stroke: #00ffff !important;
+    stroke-width: 6 !important;
+    fill: rgba(0, 255, 255, 0.6) !important;
+    filter: drop-shadow(0 0 10px #00ffff);
+    vector-effect: non-scaling-stroke;
+  }}
+  
   .sidebar {{ width: 340px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }}
   .sidebar-header {{ padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.9rem; background: #24292e; display: flex; justify-content: space-between; }}
   .sidebar-list {{ flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }}
-  .card {{ background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; }}
+  .card {{ background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s ease; }}
   .card:hover {{ border-color: #60a5fa; background: #2d3542; }}
+  .card.active {{
+    border-color: #00ffff !important;
+    background: #1e3a4f !important;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+  }}
   .card-row {{ display: flex; justify-content: space-between; margin-bottom: 4px; }}
   .card-diff {{ font-weight: bold; color: #f59e0b; }}
   .card-label {{ color: #9ca3af; font-size: 0.75rem; }}
@@ -695,16 +710,27 @@ def generate_interactive_html(
 </header>
 
 <div class="controls">
-  <label><input type="checkbox" id="chkAgree" checked> Concordant Words (Green)</label>
-  <label><input type="checkbox" id="chkDiff" checked> Discrepant Words (Orange)</label>
-  <label><input type="checkbox" id="chkOnly" checked> Engine-Only Words (Blue/Red)</label>
-  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;">Reset Zoom & Pan</button>
+  <label><input type="checkbox" id="chkAgree" checked> Concordant (Green)</label>
+  <label><input type="checkbox" id="chkDiff" checked> Discrepancies (Orange)</label>
+  <label><input type="checkbox" id="chkOnly" checked> Engine-Only (Blue/Red)</label>
+  
+  <span style="border-left: 1px solid #444c56; height: 18px; margin: 0 4px;"></span>
+  
+  <label><input type="checkbox" id="chkBgImage" checked> Background Image</label>
+  <div class="slider-group">
+    <span style="color:#9ca3af;font-size:0.8rem;">Opacity:</span>
+    <input type="range" id="rngOpacity" min="0" max="100" value="85" style="width: 90px; cursor: pointer;">
+    <span id="lblOpacity" style="font-size:0.8rem; width: 32px;">85%</span>
+  </div>
+  
+  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;">Reset View</button>
   <span style="flex:1;"></span>
   <div class="legend">
     <div class="legend-item"><div class="legend-color" style="background:#28a745;"></div> Agreed</div>
     <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Discrepancy</div>
     <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Pipeline Only</div>
     <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> ABBYY Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ffff;"></div> Selected</div>
   </div>
 </div>
 
@@ -714,7 +740,7 @@ def generate_interactive_html(
     <div class="panel" id="panelLeft">
       <div class="panel-header">Pipeline (PaddleOCR + VLM) - {result.pipeline_total_words} words</div>
       <div class="canvas-stage" id="stageLeft">
-        {"<img class='page-image' src='" + bg_image_rel_path + "'>" if bg_image_rel_path else "<div style='width:100%;height:100%;background:#1e232a;'></div>"}
+        {"<img class='page-image' id='imgLeft' src='" + bg_image_rel_path + "' style='opacity:0.85;'>" if bg_image_rel_path else "<div style='width:100%;height:100%;background:#1e232a;'></div>"}
         <svg class="overlay-svg" id="svgLeft" viewBox="0 0 {result.pipeline_page.width} {result.pipeline_page.height}"></svg>
       </div>
     </div>
@@ -723,7 +749,7 @@ def generate_interactive_html(
     <div class="panel" id="panelRight">
       <div class="panel-header">Benchmark (ABBYY FineReader) - {result.benchmark_total_words} words</div>
       <div class="canvas-stage" id="stageRight">
-        {"<img class='page-image' src='" + bg_image_rel_path + "'>" if bg_image_rel_path else "<div style='width:100%;height:100%;background:#1e232a;'></div>"}
+        {"<img class='page-image' id='imgRight' src='" + bg_image_rel_path + "' style='opacity:0.85;'>" if bg_image_rel_path else "<div style='width:100%;height:100%;background:#1e232a;'></div>"}
         <svg class="overlay-svg" id="svgRight" viewBox="0 0 {result.benchmark_page.width} {result.benchmark_page.height}"></svg>
       </div>
     </div>
@@ -733,7 +759,7 @@ def generate_interactive_html(
   <div class="sidebar">
     <div class="sidebar-header">
       <span>Word Discrepancies ({len(result.discrepancies)})</span>
-      <span style="font-size:0.75rem;color:#9ca3af;">Click card to zoom</span>
+      <span style="font-size:0.75rem;color:#9ca3af;">Click card to highlight</span>
     </div>
     <div class="sidebar-list" id="sidebarList"></div>
   </div>
@@ -746,10 +772,11 @@ def generate_interactive_html(
   const pageWidth = {result.pipeline_page.width};
   const pageHeight = {result.pipeline_page.height};
 
-  // SVGs
+  // SVGs & Sidebar
   const svgLeft = document.getElementById("svgLeft");
   const svgRight = document.getElementById("svgRight");
   const sidebarList = document.getElementById("sidebarList");
+  const cards = [];
 
   // Populate SVGs and Sidebar
   matchedData.forEach((m, idx) => {{
@@ -763,8 +790,10 @@ def generate_interactive_html(
     rectL.setAttribute("width", m.p_box[2] * pageWidth);
     rectL.setAttribute("height", m.p_box[3] * pageHeight);
     rectL.setAttribute("class", cls);
+    rectL.id = "p-rect-" + idx;
     rectL.dataset.idx = idx;
     rectL.innerHTML = `<title>Pipeline: "${{m.p_text}}" | ABBYY: "${{m.b_text}}" (IoU: ${{m.iou}})</title>`;
+    rectL.onclick = (e) => {{ e.stopPropagation(); selectWord(idx); }};
     svgLeft.appendChild(rectL);
 
     // Right SVG
@@ -774,14 +803,17 @@ def generate_interactive_html(
     rectR.setAttribute("width", m.b_box[2] * pageWidth);
     rectR.setAttribute("height", m.b_box[3] * pageHeight);
     rectR.setAttribute("class", cls);
+    rectR.id = "b-rect-" + idx;
     rectR.dataset.idx = idx;
     rectR.innerHTML = `<title>ABBYY: "${{m.b_text}}" | Pipeline: "${{m.p_text}}" (IoU: ${{m.iou}})</title>`;
+    rectR.onclick = (e) => {{ e.stopPropagation(); selectWord(idx); }};
     svgRight.appendChild(rectR);
 
     // Sidebar items for discrepancies
     if (!isAgree) {{
       const card = document.createElement("div");
       card.className = "card";
+      card.id = "card-" + idx;
       card.innerHTML = `
         <div class="card-row">
           <span class="card-diff">P: ${{escapeHtml(m.p_text)}}</span>
@@ -792,13 +824,14 @@ def generate_interactive_html(
           <span class="card-label">Sim: ${{Math.round(m.sim * 100)}}%</span>
         </div>
       `;
-      card.onclick = () => zoomToNormBox(m.p_box);
+      card.onclick = () => selectWord(idx);
       sidebarList.appendChild(card);
+      cards.push({{ idx: idx, el: card }});
     }}
   }});
 
   // Pipeline-only boxes
-  pOnlyData.forEach(p => {{
+  pOnlyData.forEach((p, pIdx) => {{
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     rect.setAttribute("x", p.box[0] * pageWidth);
     rect.setAttribute("y", p.box[1] * pageHeight);
@@ -810,7 +843,7 @@ def generate_interactive_html(
   }});
 
   // Benchmark-only boxes
-  bOnlyData.forEach(b => {{
+  bOnlyData.forEach((b, bIdx) => {{
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     rect.setAttribute("x", b.box[0] * pageWidth);
     rect.setAttribute("y", b.box[1] * pageHeight);
@@ -823,6 +856,35 @@ def generate_interactive_html(
 
   function escapeHtml(str) {{
     return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }}
+
+  // Active word selection and highlighting
+  let activeIdx = null;
+
+  function selectWord(idx) {{
+    // Clear previously highlighted elements
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+
+    activeIdx = idx;
+    const m = matchedData[idx];
+    if (!m) return;
+
+    // Highlight rects on both left and right canvases
+    const rL = document.getElementById("p-rect-" + idx);
+    const rR = document.getElementById("b-rect-" + idx);
+    if (rL) rL.classList.add("highlighted");
+    if (rR) rR.classList.add("highlighted");
+
+    // Highlight and scroll into view sidebar card if present
+    const cardEl = document.getElementById("card-" + idx);
+    if (cardEl) {{
+      cardEl.classList.add("active");
+      cardEl.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+    }}
+
+    // Zoom and center into the box
+    zoomToNormBox(m.p_box);
   }}
 
   // Synchronized Pan & Zoom
@@ -886,14 +948,16 @@ def generate_interactive_html(
     panX = 0;
     panY = 0;
     updateTransform();
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
   }};
 
   function zoomToNormBox(box) {{
-    scale = 3.5;
+    scale = 3.8;
     const stageW = panelLeft.clientWidth;
     const stageH = panelLeft.clientHeight;
-    panX = (stageW / 2) - (box[0] * stageW * scale);
-    panY = (stageH / 2) - (box[1] * stageH * scale);
+    panX = (stageW / 2) - ((box[0] + box[2] / 2) * stageW * scale);
+    panY = (stageH / 2) - ((box[1] + box[3] / 2) * stageH * scale);
     updateTransform();
   }}
 
@@ -907,6 +971,25 @@ def generate_interactive_html(
   document.getElementById("chkOnly").onchange = (e) => {{
     document.querySelectorAll(".p-only, .b-only").forEach(r => r.style.display = e.target.checked ? "" : "none");
   }};
+
+  // Background Image Toggle & Opacity Slider
+  const chkBgImage = document.getElementById("chkBgImage");
+  const rngOpacity = document.getElementById("rngOpacity");
+  const lblOpacity = document.getElementById("lblOpacity");
+
+  function updateBgImageStyle() {{
+    const show = chkBgImage.checked;
+    const op = rngOpacity.value / 100.0;
+    lblOpacity.textContent = rngOpacity.value + "%";
+
+    document.querySelectorAll(".page-image").forEach(img => {{
+      img.style.display = show ? "block" : "none";
+      img.style.opacity = op;
+    }});
+  }}
+
+  chkBgImage.onchange = updateBgImageStyle;
+  rngOpacity.oninput = updateBgImageStyle;
 </script>
 </body>
 </html>
@@ -937,17 +1020,24 @@ def find_file_pairs(pipeline_dir: Path, benchmark_dir: Path) -> List[Tuple[str, 
             elif p.suffix.lower() == ".pdf":
                 benchmark_pdfs[p.stem] = p
 
+    seen_stems = set()
+    # Prioritize ALTO XML files first
     for p in pipeline_dir.rglob("*"):
         if not p.is_file():
             continue
         stem = p.stem
-        # Check XML match
-        if p.suffix.lower() == ".xml":
-            if stem in benchmark_xmls:
-                pairs.append((stem, p, benchmark_xmls[stem]))
-        elif p.suffix.lower() == ".pdf":
-            if stem in benchmark_pdfs and not any(pair[0] == stem for pair in pairs):
-                pairs.append((stem, p, benchmark_pdfs[stem]))
+        if p.suffix.lower() == ".xml" and stem in benchmark_xmls and stem not in seen_stems:
+            pairs.append((stem, p, benchmark_xmls[stem]))
+            seen_stems.add(stem)
+
+    # Fallback to PDFs if XML not found for that stem
+    for p in pipeline_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        stem = p.stem
+        if p.suffix.lower() == ".pdf" and stem in benchmark_pdfs and stem not in seen_stems:
+            pairs.append((stem, p, benchmark_pdfs[stem]))
+            seen_stems.add(stem)
 
     return sorted(pairs, key=lambda x: x[0])
 
@@ -1073,6 +1163,8 @@ def main() -> int:
                     img_rel_path = dest_img.name
                 except Exception:
                     img_rel_path = None
+            else:
+                img_rel_path = dest_img.name
 
         if args.render_image:
             out_img = out_dir / f"{stem}_diff.jpg"
