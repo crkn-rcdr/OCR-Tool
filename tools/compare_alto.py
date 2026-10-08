@@ -669,12 +669,12 @@ def generate_interactive_html(
   rect.b-only {{ fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }}
   rect:hover {{ fill-opacity: 0.7; stroke-width: 2.5; }}
   
-  /* Selected / Highlighted active word */
+  /* Selected / Highlighted active word - transparent interior to read underlying text clearly */
   rect.highlighted {{
     stroke: #00ffff !important;
-    stroke-width: 6 !important;
-    fill: rgba(0, 255, 255, 0.6) !important;
-    filter: drop-shadow(0 0 10px #00ffff);
+    stroke-width: 4 !important;
+    fill: rgba(0, 255, 255, 0.12) !important;
+    filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.9));
     vector-effect: non-scaling-stroke;
   }}
   
