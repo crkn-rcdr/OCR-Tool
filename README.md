@@ -526,10 +526,73 @@ services/
   constants.py             Shared file-extension/constants
   email_notify.py          Optional email log sender
   fonts/                   Fonts used for PDF generation
+tools/
+  batch_runner.py          Headless CLI batch runner with resume support
+  evaluate_ocr.py          CER/WER benchmark tool against Ground Truth
 utils/                     Shared utilities
 logs/                      Run logs
 output/                    Typical output folder
 ```
+
+## Headless Batch Runner
+
+For large unattended runs (e.g. overnight processing of entire microfilm reels,
+directories of monographs, or multi-year newspaper collections), use
+`tools/batch_runner.py` without launching Gradio:
+
+```bash
+python tools/batch_runner.py \
+  --input "input/Source Files/oocihm.lac_reel_h1198" \
+  --output "output/lac_reel_h1198" \
+  --method PP-OCRv6 \
+  --resume
+```
+
+Key features:
+
+- `--resume` / `-r`: automatically skips pages that already have complete output
+  in the target destination folder.
+- `--format`: choice between `pdf_alto` (searchable PDF + ALTO XML, default) or
+  `txt`.
+- `--pre-process` / `--no-pre-process`: toggle black-border crop and background
+  flattening.
+- `--post-process` / `--no-post-process`: toggle post-OCR VLM verification.
+- `--concurrency` & `--batch-size`: control concurrent worker threads and candidate
+  chunking sent to the VLM service.
+- Live progress bar with throughput tracking (pages/min and ETA) via `tqdm`.
+- Writes a complete run manifest and error telemetry file to
+  `batch_run_summary.json` at the output root.
+
+## Accuracy Evaluation (CER / WER)
+
+To benchmark OCR and VLM post-processing quality against Ground Truth transcripts
+or ALTO XML references across sample Canadian collections, use
+`tools/evaluate_ocr.py`:
+
+```bash
+python tools/evaluate_ocr.py \
+  --ref "testdata/ground_truth" \
+  --hyp "output/test_run" \
+  --norm standard \
+  --output-csv "output/evaluation_summary.csv"
+```
+
+Features:
+
+- Computes **Character Error Rate (CER)**, **Word Error Rate (WER)**, Accuracy,
+  and **Bag-of-Words F1**.
+- Normalization modes (`--norm`):
+  - `standard`: historical Canadian typography normalization (reconnects line-break
+    hyphens, normalizes archaic long-s `ſ` -> `s`, ligatures `æ`, `œ`, `ﬀ`, typographic
+    quotes and dashes) plus casefolding.
+  - `raw`: exact verbatim comparison.
+  - `alpha`: alphanumeric token comparison.
+- Input flexibility: reference and hypothesis paths can be files or directories,
+  supporting `.txt`, `.xml` (ALTO), `.json`, and `.pdf` files.
+- **VLM Impact Analysis**: automatically reads `.post_ocr_vl.csv` sidecars if present,
+  reconstructs pre-VLM text, and calculates $\Delta\text{CER}$ and $\Delta\text{WER}$
+  to quantify whether VLM verification yielded positive accuracy improvements.
+- Exports results to Markdown summary tables, `--output-csv`, and `--output-json`.
 
 ## Troubleshooting
 
