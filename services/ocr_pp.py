@@ -348,7 +348,12 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
         elif input_path.is_dir():
             input_base = input_path
-            output_base = output_root / input_path.name
+            out_root_norm = output_root.name.lower().replace("-", " ").replace("_", " ")
+            in_path_norm = input_path.name.lower().replace("-", " ").replace("_", " ")
+            if out_root_norm == in_path_norm or out_root_norm.startswith(in_path_norm):
+                output_base = output_root
+            else:
+                output_base = output_root / input_path.name
 
             # Group by the subfolder where the images are located.
             folders = {}
