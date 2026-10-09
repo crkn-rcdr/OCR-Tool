@@ -49,7 +49,7 @@ from services.ocr_defaults import (
 )
 
 DEFAULT_INPUT_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
-DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle Copy")
+DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle OCR then Dots")
 
 
 def parse_args():
@@ -101,6 +101,7 @@ def build_pipeline_options():
         "text_rec_score_thresh": float(DEFAULT_TEXT_REC_SCORE_THRESH),
         "text_recognition_batch_size": int(DEFAULT_TEXT_RECOGNITION_BATCH_SIZE),
         "post_ocr_vl_enabled": bool(DEFAULT_POST_OCR_VL_ENABLED),
+        "post_ocr_vl_backend": "dots_ocr",
         "post_ocr_vl_candidate_mode": DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
         "post_ocr_vl_max_words_enabled": False,
         "post_ocr_vl_max_words": 0,
@@ -132,7 +133,7 @@ def main():
     print(f" • Output Root: {output_root}")
     print(f" • Hardware:    NVIDIA RTX 5090 (32GB VRAM)")
     print(f" • Local OCR:   PP-OCRv6 (batch_size=64, limit=9984)")
-    print(f" • Post-OCR VL: Active (vLLM / PaddleVL, concurrency=16, batch=32)")
+    print(f" • Post-OCR VL: Active (Dots OCR / vLLM, concurrency=16, batch=32)")
     print(f" • Preprocess:  Black-border cropping + Background flattening")
     print(f" • Overlap:     CPU prefetch + async multithreaded PDF/ALTO generation")
     print(f" • QA Dashboard: Auto-updating at c:\\CRKN Projects\\paddle_pipeline\\compare\\index.html")
