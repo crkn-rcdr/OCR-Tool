@@ -40,6 +40,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_REC_SCORE_THRESH,
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
+    DEFAULT_TILE_SOURCE_IMAGES,
 )
 from services.tile_ocr import tile_grid_for_strategy
 
@@ -328,7 +329,9 @@ def submit_config(
     output_root = Path(output_folder)
     tile_strategy = BEST_TILE_STRATEGY
     tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy)
-    tile_source_images = method in PADDLE_OCR_METHODS
+    tile_source_images = (
+        bool(DEFAULT_TILE_SOURCE_IMAGES) if method in PADDLE_OCR_METHODS else False
+    )
     
     opt = {
         "method": method,
