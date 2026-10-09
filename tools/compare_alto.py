@@ -1768,6 +1768,219 @@ DEFAULT_BENCHMARK_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
 DEFAULT_OUTPUT_DIR = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
 
 
+def compare_directory_batch(
+    pipeline_dir: Path = DEFAULT_PIPELINE_DIR,
+    benchmark_dir: Path = DEFAULT_BENCHMARK_DIR,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    subfolder: Optional[Path] = None,
+    collection_name: Optional[str] = None,
+    render_html: bool = True,
+    render_image: bool = False,
+    min_iou: float = 0.25,
+) -> int:
+    """Compare pipeline outputs against benchmark outputs, merging results into master dashboard."""
+    pipeline_dir = Path(pipeline_dir)
+    benchmark_dir = Path(benchmark_dir)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if subfolder is not None:
+        sub_p = Path(subfolder)
+        if sub_p.is_absolute():
+            try:
+                rel_d = sub_p.relative_to(pipeline_dir)
+            except ValueError:
+                rel_d = sub_p
+        else:
+            rel_d = sub_p
+
+        p_scan = pipeline_dir / rel_d if (pipeline_dir / rel_d).exists() else pipeline_dir
+        b_scan = benchmark_dir / rel_d if (benchmark_dir / rel_d).exists() else benchmark_dir
+    else:
+        p_scan = pipeline_dir
+        b_scan = benchmark_dir
+        rel_d = None
+
+    pairs = find_file_pairs(p_scan, b_scan)
+    if not pairs:
+        print(f"[CRKN Comparison] No matching file pairs found between:\n  Pipeline: {p_scan}\n  Benchmark: {b_scan}")
+        return 0
+
+    print(f"[CRKN Comparison] Found {len(pairs)} matching file pairs to compare between:\n  Pipeline: {p_scan}\n  Benchmark: {b_scan}")
+
+    items_to_compare: List[Tuple[str, Any, Any, Optional[Path], Path]] = []
+    for stem, p_file, b_file in pairs:
+        cand_img = None
+        for cand_ext in [".jpg", ".png", ".tif"]:
+            b_img = b_file.with_suffix(cand_ext)
+            if b_img.exists():
+                cand_img = b_img
+                break
+            p_img = p_file.with_suffix(cand_ext)
+            if p_img.exists():
+                cand_img = p_img
+                break
+
+        if collection_name is not None:
+            item_rel = Path(collection_name)
+        else:
+            try:
+                item_rel = p_file.parent.relative_to(pipeline_dir)
+            except ValueError:
+                item_rel = rel_d if rel_d is not None else Path("")
+
+            if item_rel == Path("") and rel_d is not None:
+                item_rel = rel_d
+
+        items_to_compare.append((stem, p_file, b_file, cand_img, item_rel))
+
+    def natural_sort_key(s: str):
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+    items_by_coll: Dict[Path, List[Tuple[str, Any, Any, Optional[Path], Path]]] = defaultdict(list)
+    for itm in items_to_compare:
+        r_dir = itm[4] if len(itm) == 5 else Path("")
+        items_by_coll[r_dir].append((itm[0], itm[1], itm[2], itm[3], r_dir))
+
+    for col_path in items_by_coll:
+        items_by_coll[col_path].sort(key=lambda x: natural_sort_key(x[0]))
+
+    new_records = []
+    all_results: List[PageComparisonResult] = []
+
+    for r_dir, coll_items in sorted(items_by_coll.items(), key=lambda x: str(x[0])):
+        target_out_dir = out_dir / r_dir if r_dir != Path("") else out_dir
+        target_out_dir.mkdir(parents=True, exist_ok=True)
+        rel_index_path = os.path.relpath(out_dir, target_out_dir).replace("\\", "/") + "/index.html"
+
+        for idx, (stem, p_file, b_file, img_file, _) in enumerate(coll_items):
+            prev_stem = coll_items[idx - 1][0] if idx > 0 else None
+            next_stem = coll_items[idx + 1][0] if idx < len(coll_items) - 1 else None
+
+            prev_url = f"{prev_stem}_comparison.html" if prev_stem else None
+            next_url = f"{next_stem}_comparison.html" if next_stem else None
+
+            print(f"\n--- Comparing: {stem} ({r_dir}) ---")
+            if p_file.suffix.lower() == ".xml":
+                p_pages = parse_alto_xml(p_file, "PaddleOCR")
+                b_pages = parse_alto_xml(b_file, "ABBYY")
+            else:
+                p_pages = parse_pdf_text_layer(p_file, "PaddleOCR")
+                b_pages = parse_pdf_text_layer(b_file, "ABBYY")
+
+            if not p_pages or not b_pages:
+                print(f"[WARN] Empty pages for {stem}, skipping.")
+                continue
+
+            res = compare_pages(p_pages[0], b_pages[0], stem, min_iou=min_iou)
+            all_results.append(res)
+
+            print(f"  • Pipeline Total Words: {res.pipeline_total_words}")
+            print(f"  • Benchmark Total Words: {res.benchmark_total_words}")
+            print(f"  • Spatially Aligned Words: {len(res.matched_pairs)} ({res.spatial_match_rate_pipeline}% of pipeline)")
+            print(f"  • Text Concordance (Cleaned): {res.clean_text_concordance_rate}% ({res.text_concordance_rate}% exact)")
+            print(f"  • Paddle QA Win Rate: {res.lexical_win_rate_pct}% ({res.paddle_lexical_wins} P wins vs {res.abbyy_lexical_wins} B wins)")
+            print(f"  • Mean Word Levenshtein Sim: {res.mean_char_similarity:.3f}")
+            print(f"  • Mean Bounding Box IoU: {res.mean_iou:.3f}")
+            print(f"  • Mean Positional Drift (dX, dY): ({res.mean_dx:+.4f}, {res.mean_dy:+.4f})")
+            print(f"  • Discrepancies: {len(res.discrepancies)}")
+
+            rel_html_path = str((r_dir / f"{stem}_comparison.html") if r_dir != Path("") else f"{stem}_comparison.html").replace("\\", "/")
+
+            new_records.append({
+                "item_name": stem,
+                "collection": str(r_dir).replace("\\", "/"),
+                "html_path": rel_html_path,
+                "pipeline_words": res.pipeline_total_words,
+                "benchmark_words": res.benchmark_total_words,
+                "matched_boxes": len(res.matched_pairs),
+                "spatial_match_rate_pct": res.spatial_match_rate_pipeline,
+                "text_concordance_exact_pct": res.text_concordance_rate,
+                "text_concordance_clean_pct": res.clean_text_concordance_rate,
+                "mean_char_similarity": res.mean_char_similarity,
+                "mean_iou": res.mean_iou,
+                "mean_dx": res.mean_dx,
+                "mean_dy": res.mean_dy,
+                "discrepancies_count": len(res.discrepancies),
+                "paddle_lexical_wins": res.paddle_lexical_wins,
+                "abbyy_lexical_wins": res.abbyy_lexical_wins,
+                "both_valid_count": res.both_valid_count,
+                "neither_valid_count": res.neither_valid_count,
+                "lexical_win_rate_pct": res.lexical_win_rate_pct,
+                "paddle_valid_words": res.paddle_valid_words,
+                "abbyy_valid_words": res.abbyy_valid_words
+            })
+
+            img_rel_path = None
+            if img_file and img_file.exists():
+                dest_img = target_out_dir / f"{stem}.jpg"
+                if not dest_img.exists():
+                    try:
+                        import shutil
+                        shutil.copyfile(img_file, dest_img)
+                        img_rel_path = dest_img.name
+                    except Exception:
+                        img_rel_path = None
+                else:
+                    img_rel_path = dest_img.name
+
+            if render_image:
+                out_img = target_out_dir / f"{stem}_diff.jpg"
+                render_comparison_image(res, img_file, out_img)
+                print(f"  • Rendered Annotated Diff Image: {out_img}")
+
+            if render_html:
+                out_html = target_out_dir / f"{stem}_comparison.html"
+                generate_interactive_html(
+                    result=res,
+                    bg_image_rel_path=img_rel_path,
+                    output_html_path=out_html,
+                    rel_index_path=rel_index_path,
+                    prev_page_url=prev_url,
+                    next_page_url=next_url,
+                    collection_name=str(r_dir).replace("\\", "/")
+                )
+                print(f"  • Rendered Interactive HTML Viewer: {out_html}")
+
+    json_path = out_dir / "comparison_summary.json"
+    existing_map = {}
+    if json_path.exists():
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                for rec in json.load(f):
+                    if isinstance(rec, dict) and "item_name" in rec:
+                        existing_map[rec["item_name"]] = rec
+        except Exception as e:
+            print(f"[WARN] Failed to load existing comparison_summary.json: {e}")
+
+    for rec in new_records:
+        existing_map[rec["item_name"]] = rec
+
+    merged_records = sorted(
+        existing_map.values(),
+        key=lambda r: (r.get("collection", ""), natural_sort_key(r.get("item_name", "")))
+    )
+
+    csv_path = out_dir / "comparison_summary.csv"
+    if merged_records:
+        keys = list(merged_records[0].keys())
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+            writer.writerows(merged_records)
+        print(f"\n[CRKN Comparison] Saved consolidated CSV summary to: {csv_path}")
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(merged_records, f, indent=2)
+    print(f"[CRKN Comparison] Saved consolidated JSON summary to: {json_path}")
+
+    master_index_path = out_dir / "index.html"
+    generate_master_dashboard(merged_records, master_index_path)
+    print(f"[CRKN Comparison] Generated Master AI Dashboard at: {master_index_path}")
+
+    return len(new_records)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Compare ALTO XML / PDF text overlays and bounding boxes between PaddleOCR Pipeline and ABBYY FineReader."
@@ -1822,187 +2035,46 @@ def main() -> int:
         print(f"[CRKN Comparison] Successfully rebuilt Master AI Dashboard at: {idx_path}")
         return 0
 
-    items_to_compare: List[Tuple[str, Any, Any, Optional[Path], Path]] = []
-
     # Single-file mode
-    if args.pipeline_alto and args.benchmark_alto:
-        items_to_compare.append((
-            args.pipeline_alto.stem,
-            args.pipeline_alto,
-            args.benchmark_alto,
-            args.image
-        ))
-    elif args.pipeline_pdf and args.benchmark_pdf:
-        items_to_compare.append((
-            args.pipeline_pdf.stem,
-            args.pipeline_pdf,
-            args.benchmark_pdf,
-            args.image
-        ))
-    elif args.pipeline_dir.exists() and args.benchmark_dir.exists():
-        pairs = find_file_pairs(args.pipeline_dir, args.benchmark_dir)
-        if not pairs:
-            print(f"[ERROR] No matching file pairs found between {args.pipeline_dir} and {args.benchmark_dir}", file=sys.stderr)
+    if (args.pipeline_alto and args.benchmark_alto) or (args.pipeline_pdf and args.benchmark_pdf):
+        p_file = args.pipeline_alto if args.pipeline_alto else args.pipeline_pdf
+        b_file = args.benchmark_alto if args.benchmark_alto else args.benchmark_pdf
+        stem = p_file.stem
+
+        if p_file.suffix.lower() == ".xml":
+            p_pages = parse_alto_xml(p_file, "PaddleOCR")
+            b_pages = parse_alto_xml(b_file, "ABBYY")
+        else:
+            p_pages = parse_pdf_text_layer(p_file, "PaddleOCR")
+            b_pages = parse_pdf_text_layer(b_file, "ABBYY")
+
+        if not p_pages or not b_pages:
+            print(f"[ERROR] Could not parse page for {stem}", file=sys.stderr)
             return 1
-        print(f"[CRKN Comparison] Found {len(pairs)} matching file pairs to compare between:\n  Pipeline: {args.pipeline_dir}\n  Benchmark: {args.benchmark_dir}")
-        for stem, p_file, b_file in pairs:
-            # Look for an image with the same stem in benchmark or pipeline dir
-            cand_img = None
-            for cand_ext in [".jpg", ".png", ".tif"]:
-                b_img = b_file.with_suffix(cand_ext)
-                if b_img.exists():
-                    cand_img = b_img
-                    break
-                p_img = p_file.with_suffix(cand_ext)
-                if p_img.exists():
-                    cand_img = p_img
-                    break
 
-            # Calculate relative path to maintain collection structure (e.g. Annuals/oocihm.72118)
-            try:
-                rel_dir = p_file.parent.relative_to(args.pipeline_dir)
-            except ValueError:
-                rel_dir = Path("")
+        res = compare_pages(p_pages[0], b_pages[0], stem, min_iou=args.min_iou)
+        print(f"Results for {stem}: Concordance {res.clean_text_concordance_rate}%, Paddle QA Win {res.lexical_win_rate_pct}%")
 
-            items_to_compare.append((stem, p_file, b_file, cand_img, rel_dir))
-    else:
-        parser.print_help()
-        return 1
+        if args.render_html:
+            out_html = out_dir / f"{stem}_comparison.html"
+            generate_interactive_html(res, None, out_html)
+            print(f"Generated HTML: {out_html}")
+        return 0
 
-    # Natural sorting helper for sequential pages
-    def natural_sort_key(s: str):
-        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+    # Directory batch mode
+    if args.pipeline_dir.exists() and args.benchmark_dir.exists():
+        count = compare_directory_batch(
+            pipeline_dir=args.pipeline_dir,
+            benchmark_dir=args.benchmark_dir,
+            output_dir=out_dir,
+            render_html=args.render_html,
+            render_image=args.render_image,
+            min_iou=args.min_iou,
+        )
+        return 0 if count >= 0 else 1
 
-    # Group items by collection to compute accurate Prev / Next navigation links
-    items_by_coll: Dict[Path, List[Tuple[str, Any, Any, Optional[Path], Path]]] = defaultdict(list)
-    for itm in items_to_compare:
-        rel_d = itm[4] if len(itm) == 5 else Path("")
-        items_by_coll[rel_d].append((itm[0], itm[1], itm[2], itm[3], rel_d))
-
-    # Sort each collection naturally
-    for col_path in items_by_coll:
-        items_by_coll[col_path].sort(key=lambda x: natural_sort_key(x[0]))
-
-    summary_records = []
-    all_results: List[PageComparisonResult] = []
-
-    for rel_dir, coll_items in sorted(items_by_coll.items(), key=lambda x: str(x[0])):
-        target_out_dir = out_dir / rel_dir if rel_dir != Path("") else out_dir
-        target_out_dir.mkdir(parents=True, exist_ok=True)
-        rel_index_path = os.path.relpath(out_dir, target_out_dir).replace("\\", "/") + "/index.html"
-
-        for idx, (stem, p_file, b_file, img_file, _) in enumerate(coll_items):
-            prev_stem = coll_items[idx - 1][0] if idx > 0 else None
-            next_stem = coll_items[idx + 1][0] if idx < len(coll_items) - 1 else None
-
-            prev_url = f"{prev_stem}_comparison.html" if prev_stem else None
-            next_url = f"{next_stem}_comparison.html" if next_stem else None
-
-            print(f"\n--- Comparing: {stem} ({rel_dir}) ---")
-            if p_file.suffix.lower() == ".xml":
-                p_pages = parse_alto_xml(p_file, "PaddleOCR")
-                b_pages = parse_alto_xml(b_file, "ABBYY")
-            else:
-                p_pages = parse_pdf_text_layer(p_file, "PaddleOCR")
-                b_pages = parse_pdf_text_layer(b_file, "ABBYY")
-
-            if not p_pages or not b_pages:
-                print(f"[WARN] Empty pages for {stem}, skipping.")
-                continue
-
-            res = compare_pages(p_pages[0], b_pages[0], stem, min_iou=args.min_iou)
-            all_results.append(res)
-
-            print(f"  • Pipeline Total Words: {res.pipeline_total_words}")
-            print(f"  • Benchmark Total Words: {res.benchmark_total_words}")
-            print(f"  • Spatially Aligned Words: {len(res.matched_pairs)} ({res.spatial_match_rate_pipeline}% of pipeline)")
-            print(f"  • Text Concordance (Cleaned): {res.clean_text_concordance_rate}% ({res.text_concordance_rate}% exact)")
-            print(f"  • Paddle QA Win Rate: {res.lexical_win_rate_pct}% ({res.paddle_lexical_wins} P wins vs {res.abbyy_lexical_wins} B wins)")
-            print(f"  • Mean Word Levenshtein Sim: {res.mean_char_similarity:.3f}")
-            print(f"  • Mean Bounding Box IoU: {res.mean_iou:.3f}")
-            print(f"  • Mean Positional Drift (dX, dY): ({res.mean_dx:+.4f}, {res.mean_dy:+.4f})")
-            print(f"  • Discrepancies: {len(res.discrepancies)}")
-
-            rel_html_path = str((rel_dir / f"{stem}_comparison.html") if rel_dir != Path("") else f"{stem}_comparison.html").replace("\\", "/")
-
-            summary_records.append({
-                "item_name": stem,
-                "collection": str(rel_dir).replace("\\", "/"),
-                "html_path": rel_html_path,
-                "pipeline_words": res.pipeline_total_words,
-                "benchmark_words": res.benchmark_total_words,
-                "matched_boxes": len(res.matched_pairs),
-                "spatial_match_rate_pct": res.spatial_match_rate_pipeline,
-                "text_concordance_exact_pct": res.text_concordance_rate,
-                "text_concordance_clean_pct": res.clean_text_concordance_rate,
-                "mean_char_similarity": res.mean_char_similarity,
-                "mean_iou": res.mean_iou,
-                "mean_dx": res.mean_dx,
-                "mean_dy": res.mean_dy,
-                "discrepancies_count": len(res.discrepancies),
-                "paddle_lexical_wins": res.paddle_lexical_wins,
-                "abbyy_lexical_wins": res.abbyy_lexical_wins,
-                "both_valid_count": res.both_valid_count,
-                "neither_valid_count": res.neither_valid_count,
-                "lexical_win_rate_pct": res.lexical_win_rate_pct,
-                "paddle_valid_words": res.paddle_valid_words,
-                "abbyy_valid_words": res.abbyy_valid_words
-            })
-
-            # Visual Renderings
-            img_rel_path = None
-            if img_file and img_file.exists():
-                dest_img = target_out_dir / f"{stem}.jpg"
-                if not dest_img.exists():
-                    try:
-                        import shutil
-                        shutil.copyfile(img_file, dest_img)
-                        img_rel_path = dest_img.name
-                    except Exception:
-                        img_rel_path = None
-                else:
-                    img_rel_path = dest_img.name
-
-            if args.render_image:
-                out_img = target_out_dir / f"{stem}_diff.jpg"
-                render_comparison_image(res, img_file, out_img)
-                print(f"  • Rendered Annotated Diff Image: {out_img}")
-
-            if args.render_html:
-                out_html = target_out_dir / f"{stem}_comparison.html"
-                generate_interactive_html(
-                    result=res,
-                    bg_image_rel_path=img_rel_path,
-                    output_html_path=out_html,
-                    rel_index_path=rel_index_path,
-                    prev_page_url=prev_url,
-                    next_page_url=next_url,
-                    collection_name=str(rel_dir).replace("\\", "/")
-                )
-                print(f"  • Rendered Interactive HTML Viewer: {out_html}")
-
-    # Output CSV summary
-    csv_path = out_dir / "comparison_summary.csv"
-    if summary_records:
-        keys = list(summary_records[0].keys())
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(summary_records)
-        print(f"\n[CRKN Comparison] Saved consolidated CSV summary to: {csv_path}")
-
-    # Output JSON summary
-    json_path = out_dir / "comparison_summary.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(summary_records, f, indent=2)
-    print(f"[CRKN Comparison] Saved consolidated JSON summary to: {json_path}")
-
-    # Output Master AI Summary Dashboard (index.html)
-    master_index_path = out_dir / "index.html"
-    generate_master_dashboard(summary_records, master_index_path)
-    print(f"[CRKN Comparison] Generated Master AI Dashboard at: {master_index_path}")
-
-    return 0
+    parser.print_help()
+    return 1
 
 
 if __name__ == "__main__":

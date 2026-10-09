@@ -370,15 +370,29 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                     for text in re.split(r"(\d+)", str(s))
                 ]
 
+            COLLECTION_PRIORITY = {"newspapers": 0, "annuals": 1, "heritage": 2}
+
+            def folder_sort_key(folder_path):
+                path_str = str(folder_path).lower().replace("\\", "/")
+                priority = 99
+                for name, p in COLLECTION_PRIORITY.items():
+                    if f"/{name}/" in path_str or path_str.endswith(f"/{name}") or f"\\{name}\\" in str(folder_path).lower():
+                        priority = p
+                        break
+                return (priority, natural_sort_key(folder_path))
+
             sorted_folders = sorted(
-                folders.items(), key=lambda item: natural_sort_key(item[0])
+                folders.items(), key=lambda item: folder_sort_key(item[0])
             )
 
             # OCR for each subfolder with overlapping prefetch & background PDF/ALTO generation
             for folder, images in sorted_folders:
                 images = sorted(images, key=lambda p: natural_sort_key(p.name))
                 rel_folder = folder.relative_to(input_base)
-                out_dir = output_base / rel_folder
+                if folder.parent.name.lower() in {"newspapers", "annuals", "heritage"}:
+                    out_dir = output_root / folder.parent.name / folder.name
+                else:
+                    out_dir = output_base / rel_folder
                 out_dir.mkdir(parents=True, exist_ok=True)
 
                 folder_success = 0
@@ -530,6 +544,33 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                             messages.append(
                                 f"PDF/ALTO completed for folder: {folder.name} (PDF: {folder_pdf_success}/{folder_success}, ALTO: {folder_alto_success}/{folder_success})"
                             )
+
+                            # Auto-compare against benchmark if benchmark ALTO/PDF files exist in input folder
+                            benchmark_has_eval_files = any(
+                                f.suffix.lower() in {".xml", ".pdf"} for f in folder.glob("*") if f.is_file()
+                            )
+                            if benchmark_has_eval_files and folder_alto_success > 0:
+                                try:
+                                    from tools.compare_alto import compare_directory_batch
+                                    compare_root = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
+                                    if folder.parent.name.lower() in {"newspapers", "annuals", "heritage"}:
+                                        coll_name = f"{folder.parent.name}/{folder.name}"
+                                    else:
+                                        coll_name = str(rel_folder).replace("\\", "/")
+                                    compared_pages = compare_directory_batch(
+                                        pipeline_dir=out_dir,
+                                        benchmark_dir=folder,
+                                        output_dir=compare_root,
+                                        collection_name=coll_name,
+                                        render_html=True,
+                                        render_image=False,
+                                    )
+                                    if compared_pages > 0:
+                                        messages.append(
+                                            f"Auto-comparison updated for {folder.name} ({compared_pages} pages -> compare/index.html)"
+                                        )
+                                except Exception as exc:
+                                    error_logger.warning(f"Auto-comparison error for {folder.name}: {exc}")
                         yield "\n".join(messages)
 
         else:
