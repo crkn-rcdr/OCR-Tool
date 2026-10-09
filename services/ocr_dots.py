@@ -31,6 +31,40 @@ def completion_url(server_url: str) -> str:
     return f"{server_url}/chat/completions"
 
 
+_OPENAI_MODEL_CACHE: dict[str, str] = {}
+
+
+def resolve_openai_model(
+    base_url: str,
+    requested_model: str,
+    headers: dict | None = None,
+) -> str:
+    """Resolve the active model on an OpenAI-compatible server if requested model is unavailable."""
+    clean_base = base_url.rstrip("/")
+    if clean_base.endswith("/chat/completions"):
+        clean_base = clean_base[:-len("/chat/completions")]
+
+    if clean_base in _OPENAI_MODEL_CACHE:
+        return _OPENAI_MODEL_CACHE[clean_base]
+
+    try:
+        models_url = f"{clean_base}/models"
+        resp = requests.get(models_url, headers=headers or {}, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            available = [m.get("id") for m in data.get("data", []) if m.get("id")]
+            if requested_model in available:
+                _OPENAI_MODEL_CACHE[clean_base] = requested_model
+                return requested_model
+            if available:
+                chosen = available[0]
+                _OPENAI_MODEL_CACHE[clean_base] = chosen
+                return chosen
+    except Exception:
+        pass
+    return requested_model
+
+
 def image_to_base64(image_path: Path) -> str:
     """Read an image file as a base64 data payload."""
     return base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
@@ -150,6 +184,13 @@ def request_dotsocr_page(image_path: Path, opt: dict) -> str:
     api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+
+    model = resolve_openai_model(
+        url,
+        str(opt.get("dotsocr_model") or DEFAULT_DOTSOCR_MODEL),
+        headers=headers,
+    )
+    payload["model"] = model
 
     try:
         response = requests.post(

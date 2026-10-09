@@ -2040,6 +2040,42 @@ def run_backend_check(
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
+_OPENAI_MODEL_CACHE: dict[str, str] = {}
+
+
+def resolve_openai_model(
+    base_url: str,
+    requested_model: str,
+    headers: dict | None = None,
+    session: requests.Session | None = None,
+) -> str:
+    """Resolve the active model on an OpenAI-compatible server if requested model is unavailable."""
+    clean_base = base_url.rstrip("/")
+    if clean_base.endswith("/chat/completions"):
+        clean_base = clean_base[:-len("/chat/completions")]
+
+    if clean_base in _OPENAI_MODEL_CACHE:
+        return _OPENAI_MODEL_CACHE[clean_base]
+
+    try:
+        models_url = f"{clean_base}/models"
+        client = session if session is not None else requests
+        resp = client.get(models_url, headers=headers or {}, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            available = [m.get("id") for m in data.get("data", []) if m.get("id")]
+            if requested_model in available:
+                _OPENAI_MODEL_CACHE[clean_base] = requested_model
+                return requested_model
+            if available:
+                chosen = available[0]
+                _OPENAI_MODEL_CACHE[clean_base] = chosen
+                return chosen
+    except Exception:
+        pass
+    return requested_model
+
+
 def request_dotsocr_word(
     tile: Image.Image,
     original_text: str,
@@ -2057,11 +2093,18 @@ def request_dotsocr_word(
     else:
         url = f"{raw_url}/chat/completions"
 
-    model = str(
+    headers = {"Content-Type": "application/json"}
+    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    requested_model = str(
         opt.get("post_ocr_vl_dotsocr_model")
         or opt.get("dotsocr_model")
         or DEFAULT_POST_OCR_VL_DOTSOCR_MODEL
     )
+    model = resolve_openai_model(url, requested_model, headers=headers, session=session)
+
     b64_img = image_to_base64(tile)
     prompt = (
         "Read the text in this image crop accurately. "
@@ -2086,8 +2129,6 @@ def request_dotsocr_word(
         "temperature": 0.0,
         "max_tokens": 32,
     }
-    headers = {"Content-Type": "application/json"}
-    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
