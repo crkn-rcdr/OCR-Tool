@@ -1056,6 +1056,11 @@ def find_file_pairs(pipeline_dir: Path, benchmark_dir: Path) -> List[Tuple[str, 
     return sorted(pairs, key=lambda x: x[0])
 
 
+DEFAULT_PIPELINE_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle Copy")
+DEFAULT_BENCHMARK_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
+DEFAULT_OUTPUT_DIR = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Compare ALTO XML / PDF text overlays and bounding boxes between PaddleOCR Pipeline and ABBYY FineReader."
@@ -1067,12 +1072,27 @@ def main() -> int:
     parser.add_argument("--benchmark-pdf", type=Path, help="Path to benchmark PDF file")
     parser.add_argument("--image", type=Path, help="Path to reference page image (JPG/PNG) for visual rendering")
 
-    # Directory mode
-    parser.add_argument("--pipeline-dir", type=Path, help="Directory containing pipeline outputs")
-    parser.add_argument("--benchmark-dir", type=Path, help="Directory containing benchmark outputs")
+    # Directory mode (defaults to standard CRKN evaluation folders)
+    parser.add_argument(
+        "--pipeline-dir",
+        type=Path,
+        default=DEFAULT_PIPELINE_DIR,
+        help=f"Directory containing pipeline outputs (default: {DEFAULT_PIPELINE_DIR})"
+    )
+    parser.add_argument(
+        "--benchmark-dir",
+        type=Path,
+        default=DEFAULT_BENCHMARK_DIR,
+        help=f"Directory containing benchmark outputs (default: {DEFAULT_BENCHMARK_DIR})"
+    )
 
     # Output options
-    parser.add_argument("--output-dir", type=Path, default=Path("alto_comparison_report"), help="Output directory for reports")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Output directory for comparison results and reports (default: {DEFAULT_OUTPUT_DIR})"
+    )
     parser.add_argument("--render-html", action="store_true", help="Generate interactive side-by-side HTML viewer")
     parser.add_argument("--render-image", action="store_true", help="Render annotated side-by-side PNG diffs")
     parser.add_argument("--min-iou", type=float, default=0.25, help="Minimum IoU threshold to consider boxes aligned (default: 0.25)")
@@ -1099,12 +1119,12 @@ def main() -> int:
             args.benchmark_pdf,
             args.image
         ))
-    elif args.pipeline_dir and args.benchmark_dir:
+    elif args.pipeline_dir.exists() and args.benchmark_dir.exists():
         pairs = find_file_pairs(args.pipeline_dir, args.benchmark_dir)
         if not pairs:
             print(f"[ERROR] No matching file pairs found between {args.pipeline_dir} and {args.benchmark_dir}", file=sys.stderr)
             return 1
-        print(f"[CRKN Comparison] Found {len(pairs)} matching file pairs to compare.")
+        print(f"[CRKN Comparison] Found {len(pairs)} matching file pairs to compare between:\n  Pipeline: {args.pipeline_dir}\n  Benchmark: {args.benchmark_dir}")
         for stem, p_file, b_file in pairs:
             # Look for an image with the same stem in benchmark or pipeline dir
             cand_img = None
@@ -1117,7 +1137,14 @@ def main() -> int:
                 if p_img.exists():
                     cand_img = p_img
                     break
-            items_to_compare.append((stem, p_file, b_file, cand_img))
+
+            # Calculate relative path to maintain collection structure (e.g. Annuals/oocihm.72118)
+            try:
+                rel_dir = p_file.parent.relative_to(args.pipeline_dir)
+            except ValueError:
+                rel_dir = Path("")
+
+            items_to_compare.append((stem, p_file, b_file, cand_img, rel_dir))
     else:
         parser.print_help()
         return 1
@@ -1125,8 +1152,17 @@ def main() -> int:
     summary_records = []
     all_results: List[PageComparisonResult] = []
 
-    for stem, p_file, b_file, img_file in items_to_compare:
-        print(f"\n--- Comparing: {stem} ---")
+    for item in items_to_compare:
+        if len(item) == 5:
+            stem, p_file, b_file, img_file, rel_dir = item
+        else:
+            stem, p_file, b_file, img_file = item
+            rel_dir = Path("")
+
+        target_out_dir = out_dir / rel_dir if rel_dir != Path("") else out_dir
+        target_out_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n--- Comparing: {stem} ({rel_dir}) ---")
         if p_file.suffix.lower() == ".xml":
             p_pages = parse_alto_xml(p_file, "PaddleOCR")
             b_pages = parse_alto_xml(b_file, "ABBYY")
@@ -1152,6 +1188,7 @@ def main() -> int:
 
         summary_records.append({
             "item_name": stem,
+            "collection": str(rel_dir).replace("\\", "/"),
             "pipeline_words": res.pipeline_total_words,
             "benchmark_words": res.benchmark_total_words,
             "matched_boxes": len(res.matched_pairs),
@@ -1169,7 +1206,7 @@ def main() -> int:
         img_rel_path = None
         if img_file and img_file.exists():
             # Copy or reference image for HTML
-            dest_img = out_dir / f"{stem}.jpg"
+            dest_img = target_out_dir / f"{stem}.jpg"
             if not dest_img.exists():
                 try:
                     import shutil
@@ -1181,12 +1218,12 @@ def main() -> int:
                 img_rel_path = dest_img.name
 
         if args.render_image:
-            out_img = out_dir / f"{stem}_diff.jpg"
+            out_img = target_out_dir / f"{stem}_diff.jpg"
             render_comparison_image(res, img_file, out_img)
             print(f"  • Rendered Annotated Diff Image: {out_img}")
 
         if args.render_html:
-            out_html = out_dir / f"{stem}_comparison.html"
+            out_html = target_out_dir / f"{stem}_comparison.html"
             generate_interactive_html(res, img_rel_path, out_html)
             print(f"  • Rendered Interactive HTML Viewer: {out_html}")
 
@@ -1198,13 +1235,13 @@ def main() -> int:
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
             writer.writerows(summary_records)
-        print(f"\n[CRKN Comparison] Saved CSV summary to: {csv_path}")
+        print(f"\n[CRKN Comparison] Saved consolidated CSV summary to: {csv_path}")
 
     # Output JSON summary
     json_path = out_dir / "comparison_summary.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(summary_records, f, indent=2)
-    print(f"[CRKN Comparison] Saved JSON summary to: {json_path}")
+    print(f"[CRKN Comparison] Saved consolidated JSON summary to: {json_path}")
 
     return 0
 
