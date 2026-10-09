@@ -362,8 +362,21 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 if img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS:
                     folders.setdefault(img.parent, []).append(img)
 
+            import re
+
+            def natural_sort_key(s):
+                return [
+                    int(text) if text.isdigit() else text.lower()
+                    for text in re.split(r"(\d+)", str(s))
+                ]
+
+            sorted_folders = sorted(
+                folders.items(), key=lambda item: natural_sort_key(item[0])
+            )
+
             # OCR for each subfolder with overlapping prefetch & background PDF/ALTO generation
-            for folder, images in folders.items():
+            for folder, images in sorted_folders:
+                images = sorted(images, key=lambda p: natural_sort_key(p.name))
                 rel_folder = folder.relative_to(input_base)
                 out_dir = output_base / rel_folder
                 out_dir.mkdir(parents=True, exist_ok=True)
