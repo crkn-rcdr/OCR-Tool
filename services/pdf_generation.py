@@ -143,6 +143,8 @@ def collect_json_files(output_dir, recursive=True):
     pattern = output_dir.rglob("*.json") if recursive else output_dir.glob("*.json")
 
     for path in pattern:
+        if path.name.endswith(('_progress.json', '.post_ocr_vl_progress.json')):
+            continue
         yield path
 
 

@@ -2202,6 +2202,28 @@ def seam_separator(left_text: str, right_text: str, gap: float, char_w: float) -
     return "" if gap <= max(1.0, char_w * 0.25) else " "
 
 
+def synthesize_word_boxes_for_text(text: str, bbox: list[float]) -> tuple[list[str], list[list[int]]]:
+    """Synthesize word tokens and bounding boxes across a merged line bounding box."""
+    import re
+    tokens = [m.group(0) for m in re.finditer(r"\S+", str(text or ""))]
+    if not tokens:
+        return [], []
+    total_chars = max(1, len(text))
+    x0, y0, x1, y1 = bbox
+    total_w = max(1.0, x1 - x0)
+    char_w = total_w / total_chars
+
+    words = []
+    boxes = []
+    for m in re.finditer(r"\S+", text):
+        w_text = m.group(0)
+        bx0 = round(x0 + m.start() * char_w)
+        bx1 = round(x0 + m.end() * char_w)
+        words.append(w_text)
+        boxes.append([int(bx0), int(round(y0)), int(bx1), int(round(y1))])
+    return words, boxes
+
+
 def finalize_merge_entry(
     original_entry: dict[str, Any],
     changed: bool,
@@ -2226,10 +2248,13 @@ def finalize_merge_entry(
 
     if angle is not None:
         new_entry["angle"] = angle
-    if text_words is not None:
+    if text_words is not None and text_word_boxes is not None and len(text_words) > 0 and len(text_word_boxes) > 0:
         new_entry["text_word"] = text_words
-    if text_word_boxes is not None:
         new_entry["text_word_boxes"] = text_word_boxes
+    else:
+        syn_words, syn_boxes = synthesize_word_boxes_for_text(text, bbox)
+        new_entry["text_word"] = syn_words
+        new_entry["text_word_boxes"] = syn_boxes
 
     return new_entry
 

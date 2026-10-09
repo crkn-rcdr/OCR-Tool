@@ -4,13 +4,14 @@ import copy
 import gc
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from engine import engine
 import traceback
 import time
 
 from services.constants import IMAGE_EXTENSIONS
-from services.pdf_generation import main as generate_pdf_and_alto
+from services.pdf_generation import build_pdf, main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
 from services.image_preprocessing import preprocess_image_for_ocr
@@ -27,7 +28,7 @@ from services.tile_ocr import (
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
-from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_RECOGNITION_BATCH_SIZE
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
@@ -145,7 +146,7 @@ def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
         return []
 
     base = copy.deepcopy(opt)
-    safe_side_limit = DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+    safe_side_limit = SAFE_FALLBACK_TEXT_DET_MAX_SIDE_LIMIT
     base_limit = int(base.get("text_det_limit_side_len") or safe_side_limit)
     base_max_side = int(base.get("text_det_max_side_limit") or safe_side_limit)
     base_rec_batch = int(base.get("text_recognition_batch_size") or 1)
@@ -156,7 +157,7 @@ def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
     reduced_gpu["device"] = "gpu"
     reduced_gpu["text_det_limit_side_len"] = min(base_limit, safe_side_limit)
     reduced_gpu["text_det_max_side_limit"] = min(base_max_side, safe_side_limit)
-    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, 8)
+    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, SAFE_FALLBACK_TEXT_RECOGNITION_BATCH_SIZE)
     if reduced_gpu != base:
         attempts.append(
             (
@@ -356,7 +357,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 if img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS:
                     folders.setdefault(img.parent, []).append(img)
 
-            # OCR for each subfolder
+            # OCR for each subfolder with overlapping prefetch & background PDF/ALTO generation
             for folder, images in folders.items():
                 rel_folder = folder.relative_to(input_base)
                 out_dir = output_base / rel_folder
@@ -364,79 +365,154 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                 folder_success = 0
                 folder_failure = 0
+                folder_pdf_success = 0
+                folder_pdf_fail = 0
+                folder_alto_success = 0
+                folder_alto_fail = 0
 
                 messages.append(f"Start processing folder: {folder}")
                 yield "\n".join(messages)
 
-                for img in images:
-                    if STOP_FLAG:
-                        return
-
-                    try:
-                        _, recovery_note = run_ocr_for_image(
-                            image_path=img,
-                            out_dir=out_dir,
-                            opt=opt,
-                            select=select,
+                # Initialize background workers for this folder:
+                # 1. prefetch_pool: CPU image reading & preprocessing for image i+1 while image i does GPU inference
+                # 2. post_pool: CPU-based PDF & ALTO generation (or TXT generation) overlapping next image's OCR
+                with ThreadPoolExecutor(max_workers=4) as post_pool, ThreadPoolExecutor(max_workers=1) as prefetch_pool:
+                    pending_post = {}
+                    next_prefetch_future = None
+                    if len(images) > 0:
+                        next_prefetch_future = prefetch_pool.submit(
+                            preprocess_image_for_ocr, images[0], out_dir, opt
                         )
 
-                        success_count += 1
-                        folder_success += 1
+                    for img_idx, img in enumerate(images):
+                        if STOP_FLAG:
+                            return
 
-                        if recovery_note:
-                            messages.append(f"{img.name} {recovery_note}")
-                        if tile_source_images and supports_tiled_ocr(method, select):
-                            messages.append(
-                                f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                        # Pipeline: submit prefetch for image i+1 immediately
+                        curr_prefetch = next_prefetch_future
+                        if img_idx + 1 < len(images):
+                            next_prefetch_future = prefetch_pool.submit(
+                                preprocess_image_for_ocr, images[img_idx + 1], out_dir, opt
                             )
                         else:
-                            messages.append(f"{img.name} created and saved in {out_dir}")
-                        yield "\n".join(messages)
+                            next_prefetch_future = None
 
-                    except Exception as e:
-                        error_logger.error(
-                            f"Error ocr processing {img.name}: {str(e)}",
-                            exc_info=True
-                        )
-                        summary_logger.info(f"ERROR: OCR processing failed for {img.name}")
+                        preprocessed_res = None
+                        if curr_prefetch is not None:
+                            try:
+                                preprocessed_res = curr_prefetch.result()
+                            except Exception as exc:
+                                error_logger.warning(
+                                    f"Prefetch warning for {img.name}: {exc}; falling back to sync preprocessing"
+                                )
+                                preprocessed_res = None
 
-                        failure_count += 1
-                        folder_failure += 1
-
-                        messages.append(f"Error processing {img.name}: {str(e)}")
-                        yield "\n".join(messages)
-
-                # Once the OCR process in the current subfolder is complete, immediately generate PDF/ALTO.
-                if folder_success > 0:
-                    try:
-                        if generate_text_file:
-                            for json_file in out_dir.glob("*.json"):
-                                txt_path = generate_txt_file(json_file)
-                                messages.append(f"Text file created: {txt_path}")
-                                yield "\n".join(messages)
-                        else:
-                            generate_pdf_and_alto(
-                                out_dir,
-                                folder,
-                                method,
-                                lang,
-                                select,
-                                run_options=opt,
+                        try:
+                            final_json, recovery_note = run_ocr_for_image(
+                                image_path=img,
+                                out_dir=out_dir,
+                                opt=opt,
+                                select=select,
+                                preprocessed_result=preprocessed_res,
                             )
-                            messages.append(f"PDF/ALTO generated for folder: {folder.name}")
+
+                            success_count += 1
+                            folder_success += 1
+
+                            if recovery_note:
+                                messages.append(f"{img.name} {recovery_note}")
+                            if tile_source_images and supports_tiled_ocr(method, select):
+                                messages.append(
+                                    f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                                )
+                            else:
+                                messages.append(f"{img.name} created and saved in {out_dir}")
+
+                            # Immediately submit background PDF/ALTO or TXT generation
+                            if generate_text_file:
+                                fut = post_pool.submit(generate_txt_file, final_json)
+                                pending_post[fut] = ("txt", img.name, final_json)
+                            else:
+                                fut = post_pool.submit(
+                                    build_pdf,
+                                    final_json,
+                                    folder,
+                                    method,
+                                    lang,
+                                    select,
+                                )
+                                pending_post[fut] = ("pdf", img.name, final_json)
+
+                            # Drain any post-tasks that completed while OCR was running
+                            for done_fut in [f for f in pending_post if f.done()]:
+                                task_type, item_name, _ = pending_post.pop(done_fut)
+                                try:
+                                    res = done_fut.result()
+                                    if task_type == "pdf":
+                                        if res.get("pdf_success"):
+                                            folder_pdf_success += 1
+                                        else:
+                                            folder_pdf_fail += 1
+                                            error_logger.error(f"PDF FAIL for {item_name}: {res.get('pdf_error')}")
+                                        if res.get("alto_success"):
+                                            folder_alto_success += 1
+                                        else:
+                                            folder_alto_fail += 1
+                                            error_logger.error(f"ALTO FAIL for {item_name}: {res.get('alto_error')}")
+                                        messages.append(f"PDF/ALTO generated: {item_name}")
+                                    elif task_type == "txt":
+                                        messages.append(f"Text file created: {Path(res).name}")
+                                except Exception as exc:
+                                    error_logger.error(f"Post-processing error for {item_name}: {exc}")
+
                             yield "\n".join(messages)
 
-                    except Exception as e:
-                        error_logger.error(
-                            f"Error generating PDF/ALTO for folder {folder}: {str(e)}",
-                            exc_info=True
-                        )
-                        messages.append(
-                            f"Error generating PDF/ALTO for folder {folder.name}: {str(e)}"
-                        )
-                        yield "\n".join(messages)
+                        except Exception as e:
+                            error_logger.error(
+                                f"Error ocr processing {img.name}: {str(e)}",
+                                exc_info=True
+                            )
+                            summary_logger.info(f"ERROR: OCR processing failed for {img.name}")
 
-                        summary_logger.info(f"ERROR:{folder.name} failed during PDF/ALTO generation")
+                            failure_count += 1
+                            folder_failure += 1
+
+                            messages.append(f"Error processing {img.name}: {str(e)}")
+                            yield "\n".join(messages)
+
+                    # Drain all remaining post-processing tasks for this folder
+                    for fut in as_completed(list(pending_post.keys())):
+                        task_type, item_name, _ = pending_post.pop(fut)
+                        try:
+                            res = fut.result()
+                            if task_type == "pdf":
+                                if res.get("pdf_success"):
+                                    folder_pdf_success += 1
+                                else:
+                                    folder_pdf_fail += 1
+                                    error_logger.error(f"PDF FAIL for {item_name}: {res.get('pdf_error')}")
+                                if res.get("alto_success"):
+                                    folder_alto_success += 1
+                                else:
+                                    folder_alto_fail += 1
+                                    error_logger.error(f"ALTO FAIL for {item_name}: {res.get('alto_error')}")
+                                messages.append(f"PDF/ALTO generated: {item_name}")
+                            elif task_type == "txt":
+                                messages.append(f"Text file created: {Path(res).name}")
+                        except Exception as exc:
+                            error_logger.error(f"Post-processing error for {item_name}: {exc}")
+
+                    if folder_success > 0:
+                        if generate_text_file:
+                            messages.append(f"Text generation completed for folder: {folder.name}")
+                        else:
+                            summary_logger.info(f"==========PDF AND ALTO SUMMARY FOR FOLDER: {folder.name} ==========")
+                            summary_logger.info(f"PDF success: {folder_pdf_success}, fail: {folder_pdf_fail}")
+                            summary_logger.info(f"ALTO success: {folder_alto_success}, fail: {folder_alto_fail}")
+                            messages.append(
+                                f"PDF/ALTO completed for folder: {folder.name} (PDF: {folder_pdf_success}/{folder_success}, ALTO: {folder_alto_success}/{folder_success})"
+                            )
+                        yield "\n".join(messages)
 
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
@@ -467,16 +543,19 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         RUN_LOCK.release()
 
 
-def run_ocr_for_image(image_path, out_dir, opt, select=None):
+def run_ocr_for_image(image_path, out_dir, opt, select=None, preprocessed_result=None):
     """
     Run OCR for a single image and save the final JSON output.
     """
     final_json = out_dir / f"{image_path.stem}.json"
-    ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
-        image_path=image_path,
-        out_dir=out_dir,
-        opt=opt,
-    )
+    if preprocessed_result is not None:
+        ocr_image_path, preprocess_metadata = preprocessed_result
+    else:
+        ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
+            image_path=image_path,
+            out_dir=out_dir,
+            opt=opt,
+        )
 
     if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
         merged_json = run_tiled_local_ocr(ocr_image_path, opt, select=select)
@@ -501,7 +580,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
             )
         json_file = candidates[0]
 
-    json_file.rename(final_json)
+    json_file.replace(final_json)
     normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
     maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
     maybe_apply_output_text_cleanup(final_json, opt)

@@ -563,11 +563,15 @@ def collect_word_candidates(
         word_profile = build_word_profile(ocr_payload, low_confidence_threshold)
 
     for line_index, words in enumerate(text_word):
-        if not isinstance(words, list):
+        if hasattr(words, "tolist"):
+            words = words.tolist()
+        elif not isinstance(words, (list, tuple)):
             continue
 
         boxes = text_word_boxes[line_index] if line_index < len(text_word_boxes) else []
-        if not isinstance(boxes, list):
+        if hasattr(boxes, "tolist"):
+            boxes = boxes.tolist()
+        elif not isinstance(boxes, (list, tuple)):
             continue
 
         line_score = parse_optional_float(
@@ -601,6 +605,51 @@ def collect_word_candidates(
                 continue
             if mode == "low_confidence" and not low_confidence:
                 continue
+
+            # Smart-Skip: Avoid sending already-clean, high-confidence words to the VLM
+            if mode in {"suspicious", "low_confidence"}:
+                clean_text = text.strip(".,:;!?()[]{}\"'")
+                is_proper_name = (
+                    (clean_text[:1].isupper() and clean_text[1:].islower())
+                    or bool(re.fullmatch(r"(?:Mc|Mac|O')[A-Z][a-z]+", clean_text))
+                )
+                has_severe_anomaly = any(
+                    r in {"odd glyph", "letter/digit mix", "merged word-box text", "repeated letter"}
+                    for r in reasons
+                )
+                # 1. Skip high-confidence proper nouns (Titlecase or Mc/Mac/O') without severe anomalies
+                if (
+                    line_score is not None
+                    and line_score >= 0.92
+                    and is_proper_name
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 2. Skip high-confidence words that are confirmed valid dictionary words
+                if (
+                    line_score is not None
+                    and line_score >= max(0.88, low_confidence_threshold)
+                    and word_profile is not None
+                    and word_profile.spellchecker is not None
+                    and word_profile.spellchecker.issue_for(clean_text) is None
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 3. Skip high-confidence line-break hyphenated words without severe anomalies
+                is_hyphenated_break = (
+                    clean_text.endswith(("-", "–", "—"))
+                    and len(clean_text) >= 3
+                    and is_alpha_word(clean_text.rstrip("-–—"))
+                )
+                if (
+                    line_score is not None
+                    and line_score >= max(0.88, low_confidence_threshold)
+                    and is_hyphenated_break
+                    and not has_severe_anomaly
+                ):
+                    continue
 
             candidates.append(
                 WordCandidate(
@@ -705,24 +754,16 @@ def collect_line_text_fallback_candidates(
 
 def line_has_usable_word_boxes(ocr_payload: dict[str, Any], line_index: int) -> bool:
     """Return whether a line has usable word boxes for word-level VL checks."""
-    text_word = ocr_payload.get("text_word") or []
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
-    if not isinstance(text_word, list) or line_index >= len(text_word):
-        return False
-    if not isinstance(text_word_boxes, list) or line_index >= len(text_word_boxes):
+    if line_index >= len(text_word_boxes):
         return False
 
-    words = text_word[line_index]
     boxes = text_word_boxes[line_index]
-    if not isinstance(words, list) or not isinstance(boxes, list):
+    if boxes is None or len(boxes) == 0:
         return False
 
-    for word_index, word in enumerate(words):
-        if word_index >= len(boxes):
-            continue
-        if not is_word_token(str(word or "")):
-            continue
-        if valid_bbox(geometry_to_bbox(boxes[word_index])):
+    for box in boxes:
+        if valid_bbox(geometry_to_bbox(box)):
             return True
     return False
 
@@ -1675,6 +1716,8 @@ def should_spellcheck_word(
     """Return whether a token should be considered a spellcheck miss."""
     if not is_alpha_word(token):
         return False
+    if raw_text.endswith(("-", "–", "—")):
+        return False
     if not 4 <= len(token) <= 30:
         return False
     if "'" in token:
@@ -2243,9 +2286,11 @@ def clean_vl_text(text: Any, model_name: str = None) -> str:
 
 
 def image_to_base64(image: Image.Image) -> str:
-    """Encode a PIL image as a base64 PNG payload for API requests."""
+    """Encode a PIL image as a base64 JPEG payload for API requests."""
     buffer = BytesIO()
-    image.save(buffer, format="PNG")
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.save(buffer, format="JPEG", quality=95)
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
