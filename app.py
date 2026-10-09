@@ -12,18 +12,24 @@ from pathlib import Path
 from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.ocr_olm import run_olmocr_job
+from services.ocr_dots import run_dotsocr_job
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOTSOCR_API_URL,
+    DEFAULT_DOTSOCR_MODEL,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OCR_VERSION,
     DEFAULT_OLMOCR_API_URL,
     DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BACKEND,
     DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
     DEFAULT_POST_OCR_VL_CONCURRENCY,
+    DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_DOTSOCR_URL,
     DEFAULT_POST_OCR_VL_ENABLED,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
@@ -49,6 +55,7 @@ OCR_METHOD_CHOICES = [
     ("PaddleOCR (PP-OCRv6)", "PP-OCRv6"),
     ("PaddleVL", "PaddleVL"),
     ("OLM OCR", "OLMOCR"),
+    ("Dots OCR (BHL #1)", "DotsOCR"),
 ]
 
 APP_CSS = """
@@ -265,10 +272,12 @@ def build_paddle_options(
     }
 
 
-def build_post_ocr_vl_options(post_process_enabled):
+def build_post_ocr_vl_options(post_process_enabled, arbiter_backend=None):
+    backend = arbiter_backend or DEFAULT_POST_OCR_VL_BACKEND
     return {
         "post_ocr_vl_enabled": bool(post_process_enabled)
         and bool(DEFAULT_POST_OCR_VL_ENABLED),
+        "post_ocr_vl_backend": backend,
         "post_ocr_vl_candidate_mode": DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
         "post_ocr_vl_max_words_enabled": False,
         "post_ocr_vl_max_words": int(DEFAULT_POST_OCR_VL_MAX_WORDS),
@@ -281,6 +290,8 @@ def build_post_ocr_vl_options(post_process_enabled):
         ),
         "post_ocr_vl_save_tiles": bool(DEFAULT_POST_OCR_VL_SAVE_TILES),
         "post_ocr_vl_paddlevl_url": DEFAULT_PADDLE_VL_API_URL,
+        "post_ocr_vl_dotsocr_url": DEFAULT_POST_OCR_VL_DOTSOCR_URL,
+        "post_ocr_vl_dotsocr_model": DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
         "post_ocr_vl_concurrency": int(DEFAULT_POST_OCR_VL_CONCURRENCY),
         "post_ocr_vl_batch_size": int(DEFAULT_POST_OCR_VL_BATCH_SIZE),
     }
@@ -294,9 +305,11 @@ def processing_supported(method):
 def processing_control_updates(method, pre_value=True, post_value=True):
     """Keep pre/post unavailable for standalone VL-style OCR methods."""
     enabled = processing_supported(method)
+    post_enabled = enabled and bool(post_value)
     return [
         gr.update(value=bool(pre_value) if enabled else False, interactive=enabled),
         gr.update(value=bool(post_value) if enabled else False, interactive=enabled),
+        gr.update(interactive=post_enabled),
     ]
 
 
@@ -308,6 +321,7 @@ def submit_config(
     generate_text_file,
     pre_process_enabled,
     post_process_enabled,
+    post_ocr_backend=None,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -358,6 +372,9 @@ def submit_config(
         "olmocr_url": DEFAULT_OLMOCR_API_URL,
         "olmocr_model": DEFAULT_OLMOCR_MODEL,
         "olmocr_max_tokens": 8192,
+        "dotsocr_url": DEFAULT_DOTSOCR_API_URL,
+        "dotsocr_model": DEFAULT_DOTSOCR_MODEL,
+        "dotsocr_max_tokens": 8192,
     }
 
     yield "Preparing OCR models... OCR will start after initialization is complete."
@@ -377,13 +394,15 @@ def submit_config(
         paddle_options.pop("text_det_max_side_limit", None)
 
     opt.update(paddle_options)
-    opt.update(build_post_ocr_vl_options(post_process_enabled))
+    opt.update(build_post_ocr_vl_options(post_process_enabled, post_ocr_backend))
     if method in PADDLE_OCR_METHODS:
         iterator = run_ocr_job(input_path, output_root, opt)
     elif method == "PaddleVL":
         iterator = run_paddlevl_job(input_path, output_root, opt)
     elif method == "OLMOCR":
         iterator = run_olmocr_job(input_path, output_root, opt)
+    elif method == "DotsOCR":
+        iterator = run_dotsocr_job(input_path, output_root, opt)
     else:
         yield f"Unsupported OCR method: {method}"
         return
@@ -447,6 +466,16 @@ with gr.Blocks() as demo:
             value=True,
             info=POST_PROCESS_INFO,
         )
+
+        post_ocr_backend = gr.Dropdown(
+            choices=[
+                ("Dots OCR (BHL #1 - Recommended)", "dots_ocr"),
+                ("PaddleVL", "paddlevl"),
+            ],
+            value=DEFAULT_POST_OCR_VL_BACKEND,
+            label="Post-OCR VLM Arbiter",
+            info="Vision-language model used for word-level arbitration and spellcheck verification.",
+        )
         
     # OCR action buttons.      
     with gr.Row():
@@ -468,6 +497,7 @@ with gr.Blocks() as demo:
         generate_text_file,
         pre_process,
         post_process,
+        post_ocr_backend,
     ]
 
     # Open a folder selection dialog for the input folder.
@@ -487,7 +517,15 @@ with gr.Blocks() as demo:
     method_radio.change(
         fn=processing_control_updates,
         inputs=[method_radio, pre_process, post_process],
-        outputs=[pre_process, post_process],
+        outputs=[pre_process, post_process, post_ocr_backend],
+    )
+
+    post_process.change(
+        fn=lambda post_val, method_val: gr.update(
+            interactive=bool(post_val) and processing_supported(method_val)
+        ),
+        inputs=[post_process, method_radio],
+        outputs=[post_ocr_backend],
     )
 
 
@@ -504,7 +542,7 @@ with gr.Blocks() as demo:
         """
         Re-enable UI components after OCR processing completes.
         """
-        pre_update, post_update = processing_control_updates(
+        pre_update, post_update, backend_update = processing_control_updates(
             method,
             pre_value,
             post_value,
@@ -512,10 +550,11 @@ with gr.Blocks() as demo:
         return [
             *[
                 gr.update(interactive=True)
-                for _ in ui_components[:-2]
+                for _ in ui_components[:-3]
             ],
             pre_update,
             post_update,
+            backend_update,
             gr.update(interactive=False)
         ]
 
@@ -543,6 +582,7 @@ with gr.Blocks() as demo:
         generate_text_file,
         pre_process,
         post_process,
+        post_ocr_backend,
     ],
     outputs=output
     ).then(

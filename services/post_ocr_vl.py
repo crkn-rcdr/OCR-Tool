@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import math
+import os
 import re
 import csv
 from difflib import SequenceMatcher
@@ -30,6 +31,8 @@ from services.ocr_defaults import (
     DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
     DEFAULT_POST_OCR_VL_CONCURRENCY,
+    DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_DOTSOCR_URL,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -285,10 +288,14 @@ def apply_post_ocr_vl_check(
         else 0
     )
 
+    backend_choice = str(
+        opt.get("post_ocr_vl_backend") or DEFAULT_POST_OCR_VL_BACKEND
+    ).strip().lower()
+
     metadata: dict[str, Any] = {
         "enabled": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "backend": DEFAULT_POST_OCR_VL_BACKEND,
+        "backend": backend_choice,
         "candidate_mode": opt.get(
             "post_ocr_vl_candidate_mode",
             DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
@@ -344,9 +351,9 @@ def apply_post_ocr_vl_check(
         word_profile.spellchecker.language if word_profile.spellchecker else None
     )
     metadata["word_profile_training_tokens"] = word_profile.training_token_count
-    backend_order = [DEFAULT_POST_OCR_VL_BACKEND]
+    backend_order = [backend_choice]
 
-    include_line_text_fallback = "paddlevl" in backend_order
+    include_line_text_fallback = True
 
     suspicious_word_count = len(
         collect_word_candidates(
@@ -1041,12 +1048,13 @@ def process_line_batch(
             ocr_payload,
         )
 
-    error = "Grouped line correction is disabled for the PaddleVL-only pipeline."
+    backend_name = str(metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND)
+    error = f"Grouped line correction is disabled for the {backend_name} pipeline."
     for record in records:
         record["crop_box"] = crop_box
         if tile_path is not None:
             record["tile_path"] = str(tile_path)
-        record["backend_results"] = [{"backend": "paddlevl", "error": error}]
+        record["backend_results"] = [{"backend": backend_name, "error": error}]
         record["selected_text"] = None
         record["reason"] = "line_group_disabled"
         record["applied"] = False
@@ -1111,8 +1119,9 @@ def process_single_line_text_batch(
     if tile_path is not None:
         record["tile_path"] = str(tile_path)
 
+    active_backend = metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND
     results = []
-    for backend in [DEFAULT_POST_OCR_VL_BACKEND]:
+    for backend in [active_backend]:
         try:
             raw_text = run_backend_check(
                 backend,
@@ -1198,7 +1207,8 @@ def process_word_batch(
     executor: ThreadPoolExecutor | None = None,
 ) -> tuple[int, int, int]:
     """Process a batch of word candidates using concurrent VLM verification."""
-    backend_order = [DEFAULT_POST_OCR_VL_BACKEND]
+    active_backend = metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND
+    backend_order = [active_backend]
     start_position = processed_count + 1
     current_word = ", ".join(candidate.text for candidate in batch)[:160]
 
@@ -1278,8 +1288,9 @@ def process_word_batch(
             verified_results = [_check_one(item) for item in crop_tasks]
 
     all_outcomes: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
+    fallback_backend = backend_order[0] if backend_order else "dots_ocr"
     for cand, rec in crop_failed:
-        all_outcomes.append((cand, rec, [{"backend": "paddlevl", "error": rec.get("error")}]))
+        all_outcomes.append((cand, rec, [{"backend": fallback_backend, "error": rec.get("error")}]))
     all_outcomes.extend(verified_results)
 
     cand_index_map = {id(c): idx for idx, c in enumerate(batch)}
@@ -2021,9 +2032,94 @@ def run_backend_check(
     session: requests.Session | None = None,
 ) -> str:
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
-    if backend == "paddlevl":
+    norm = str(backend or "").strip().lower()
+    if norm in {"paddlevl", "paddle_vl", "paddleocr_vl"}:
         return request_paddlevl_word(tile, original_text, opt, session=session)
+    if norm in {"dots_ocr", "dotsocr", "dots"}:
+        return request_dotsocr_word(tile, original_text, opt, session=session)
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
+
+
+def request_dotsocr_word(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+) -> str:
+    """Request a word/token correction from the Dots OCR OpenAI-compatible endpoint."""
+    raw_url = str(
+        opt.get("post_ocr_vl_dotsocr_url")
+        or opt.get("dotsocr_url")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_URL
+    ).rstrip("/")
+    if raw_url.endswith("/chat/completions"):
+        url = raw_url
+    else:
+        url = f"{raw_url}/chat/completions"
+
+    model = str(
+        opt.get("post_ocr_vl_dotsocr_model")
+        or opt.get("dotsocr_model")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_MODEL
+    )
+    b64_img = image_to_base64(tile)
+    prompt = (
+        "Read the text in this image crop accurately. "
+        "Return only the word or text without explanations or markdown formatting."
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_img}"
+                        },
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 32,
+    }
+    headers = {"Content-Type": "application/json"}
+    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    client = session if session is not None else requests
+    response = client.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=(10, 60),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+    data = response.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+        raw_text = "\n".join(parts)
+    else:
+        raw_text = str(content or "")
+
+    return clean_vl_text(
+        _extract_best_word_candidate(raw_text, original_text, minimum_score=0.45)
+    )
+
 
 
 def request_paddlevl_word(
