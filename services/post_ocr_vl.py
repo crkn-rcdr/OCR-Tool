@@ -545,6 +545,104 @@ def get_ocr_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def find_hyphen_continuation_words(
+    ocr_payload: dict[str, Any],
+    word_profile: WordProfile | None,
+    low_confidence_threshold: float,
+) -> set[tuple[int, int]]:
+    """Identify line-start word tokens that complete a preceding line's hyphenated break.
+
+    In multi-column newspaper layouts, words split across line breaks with a hyphen
+    (e.g., `lang-` on line A and `uage` on line B) leave the continuation suffix
+    at the start of line B. Because the suffix is not in a dictionary on its own,
+    it triggers false-alarm spellcheck misses. If joining prefix + suffix forms a
+    valid dictionary word and recognition confidence is high, it is safe to skip.
+    """
+    text_word = ocr_payload.get("text_word") or []
+    text_word_boxes = ocr_payload.get("text_word_boxes") or []
+    rec_scores = ocr_payload.get("rec_scores") or []
+
+    if not word_profile or not word_profile.spellchecker:
+        return set()
+
+    line_entries = []
+    for idx, (words, boxes) in enumerate(zip(text_word, text_word_boxes)):
+        if hasattr(words, "tolist"):
+            words = words.tolist()
+        if hasattr(boxes, "tolist"):
+            boxes = boxes.tolist()
+        if not isinstance(words, (list, tuple)) or not isinstance(boxes, (list, tuple)):
+            continue
+        valid_boxes = [geometry_to_bbox(b) for b in boxes if geometry_to_bbox(b)]
+        if not valid_boxes:
+            continue
+        xs = [b[0] for b in valid_boxes] + [b[2] for b in valid_boxes]
+        ys = [b[1] for b in valid_boxes] + [b[3] for b in valid_boxes]
+        line_entries.append({
+            "line_index": idx,
+            "words": [str(w) for w in words if str(w).strip()],
+            "x0": min(xs),
+            "y0": min(ys),
+            "x1": max(xs),
+            "y1": max(ys),
+            "height": max(ys) - min(ys),
+            "width": max(xs) - min(xs),
+            "score": parse_optional_float(rec_scores[idx] if idx < len(rec_scores) else None),
+        })
+
+    continuation_words = set()
+    min_thresh = max(0.88, low_confidence_threshold)
+
+    for entry_a in line_entries:
+        words_a = entry_a["words"]
+        if not words_a:
+            continue
+        last_w = words_a[-1].strip()
+        if not last_w.endswith(("-", "–", "—")) or len(last_w) < 2:
+            continue
+        prefix = last_w.strip(".,:;!?()[]{}\"'").rstrip("-–—")
+        if not prefix.isalpha():
+            continue
+
+        h_a = max(entry_a["height"], 10)
+        w_a = max(entry_a["width"], 50)
+        best_candidate = None
+        min_dist_y = 999999
+
+        for entry_b in line_entries:
+            if entry_b["line_index"] == entry_a["line_index"]:
+                continue
+            dy = entry_b["y0"] - entry_a["y1"]
+            if dy < -h_a * 0.3 or dy > h_a * 3.0:
+                continue
+            dx_left = abs(entry_b["x0"] - entry_a["x0"])
+            if dx_left > max(150, w_a * 0.35):
+                continue
+            if dy < min_dist_y:
+                min_dist_y = dy
+                best_candidate = entry_b
+
+        if best_candidate and best_candidate["words"]:
+            score_b = best_candidate["score"]
+            if score_b is not None and score_b < min_thresh:
+                continue
+            for w_idx, raw_w in enumerate(best_candidate["words"][:2]):
+                cleaned_w = raw_w.strip(".,:;!?()[]{}\"'")
+                if cleaned_w and cleaned_w.isalpha():
+                    suffix = cleaned_w.lower()
+                    comb = f"{prefix.lower()}{suffix}"
+                    comb_hyphen = f"{prefix.lower()}-{suffix}"
+                    is_valid = (
+                        word_profile.spellchecker.issue_for(comb) is None
+                        or word_profile.spellchecker.issue_for(comb_hyphen) is None
+                    )
+                    if is_valid:
+                        continuation_words.add((best_candidate["line_index"], w_idx))
+                    break
+
+    return continuation_words
+
+
 def collect_word_candidates(
     ocr_payload: dict[str, Any],
     mode: str,
@@ -561,6 +659,12 @@ def collect_word_candidates(
     mode = mode if mode in {"suspicious", "low_confidence", "all"} else "suspicious"
     if word_profile is None:
         word_profile = build_word_profile(ocr_payload, low_confidence_threshold)
+
+    continuation_words = (
+        find_hyphen_continuation_words(ocr_payload, word_profile, low_confidence_threshold)
+        if mode in {"suspicious", "low_confidence"}
+        else set()
+    )
 
     for line_index, words in enumerate(text_word):
         if hasattr(words, "tolist"):
@@ -647,6 +751,13 @@ def collect_word_candidates(
                     line_score is not None
                     and line_score >= max(0.88, low_confidence_threshold)
                     and is_hyphenated_break
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 4. Skip high-confidence line-break continuation suffix words without severe anomalies
+                if (
+                    (line_index, word_index) in continuation_words
                     and not has_severe_anomaly
                 ):
                     continue
