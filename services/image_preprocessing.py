@@ -212,7 +212,14 @@ def preprocess_image_for_ocr(
         steps.append("crop_black_border")
         details.update(border_details)
 
-    # Auto-detect degraded microfilm and dynamically apply CLAHE contrast enhancement
+    # Auto-deskew: correct slight page skew (0.35 deg to 5.0 deg) to keep line baselines horizontal
+    skew_angle = estimate_skew_angle(gray)
+    if 0.35 <= abs(skew_angle) <= MAX_CONSERVATIVE_DESKEW_DEGREES:
+        gray = rotate_keep_size(gray, skew_angle)
+        steps.append("auto_deskew")
+        details["auto_deskew_angle_degrees"] = round(float(skew_angle), 4)
+
+    # Auto-detect degraded microfilm and dynamically apply CLAHE + stroke reconnection
     is_microfilm, microfilm_details = detect_microfilm_degradation(gray)
     details["microfilm_detection"] = microfilm_details
     effective_steps = list(preprocessing_steps)
@@ -221,6 +228,11 @@ def preprocess_image_for_ocr(
         details["auto_microfilm_clahe_applied"] = True
 
     processed, step_details = apply_preprocessing_steps(gray, effective_steps)
+    if is_microfilm:
+        processed = reconnect_broken_strokes(processed)
+        step_details.setdefault("steps", []).append("stroke_reconnect")
+        details["auto_stroke_reconnect_applied"] = True
+
     details.update(step_details)
     details["steps"] = [*steps, *step_details.get("steps", [])]
 
@@ -402,6 +414,14 @@ def apply_clahe(gray: np.ndarray) -> np.ndarray:
     """Boost local contrast with CLAHE while preserving grayscale output."""
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     return clahe.apply(gray)
+
+
+def reconnect_broken_strokes(gray: np.ndarray) -> np.ndarray:
+    """Subtle morphological closing on inverted grayscale to bridge 1-pixel stroke fractures."""
+    inv = 255 - gray
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    closed_inv = cv2.morphologyEx(inv, cv2.MORPH_CLOSE, kernel)
+    return 255 - closed_inv
 
 
 def background_flatten(gray: np.ndarray) -> np.ndarray:

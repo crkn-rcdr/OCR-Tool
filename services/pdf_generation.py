@@ -496,20 +496,120 @@ def build_items(texts, polys, method, select):
 
 
 def sort_items_reading_order(items):
-    """Sort OCR items into a simple top-to-bottom, left-to-right order."""
+    """Sort OCR items into a column-aware top-to-bottom reading order."""
+    if not items:
+        return []
+    if len(items) < 8:
+        return _sort_items_simple_rows(items)
+
+    page_w = max(item.rect.x1 for item in items)
+
+    # 1. Separate full-width banners (headers spanning > 55% of page width)
+    banners = []
+    body = []
+    for item in items:
+        if item.width > page_w * 0.55:
+            banners.append(item)
+        else:
+            body.append(item)
+
+    if not body:
+        return _sort_items_simple_rows(items)
+
+    # 2. Check if the page contains multiple columns separated by whitespace gutters
+    max_x = int(page_w) + 20
+    occ = [0.0] * max_x
+    for item in body:
+        start_x = max(0, int(item.rect.x0))
+        end_x = min(max_x, int(item.rect.x1))
+        for x in range(start_x, end_x):
+            occ[x] += 1.0
+
+    k_size = 31
+    smoothed = [0.0] * max_x
+    half_k = k_size // 2
+    for x in range(max_x):
+        w_start = max(0, x - half_k)
+        w_end = min(max_x, x + half_k + 1)
+        smoothed[x] = sum(occ[w_start:w_end]) / float(w_end - w_start)
+
+    max_density = max(smoothed) if smoothed else 0.0
+    gutter_threshold = max_density * 0.08
+
+    columns = []
+    in_col = False
+    col_start = 0
+    min_col_width = max(80, int(page_w * 0.08))
+
+    for x in range(max_x):
+        if smoothed[x] >= gutter_threshold and not in_col:
+            in_col = True
+            col_start = x
+        elif smoothed[x] < gutter_threshold and in_col:
+            in_col = False
+            if (x - col_start) >= min_col_width:
+                columns.append((col_start, x))
+    if in_col and (max_x - col_start) >= min_col_width:
+        columns.append((col_start, max_x))
+
+    if len(columns) <= 1:
+        return _sort_items_simple_rows(items)
+
+    # 3. Partition body items into detected columns based on horizontal center
+    col_bins = [[] for _ in range(len(columns))]
+    for item in body:
+        assigned = False
+        for i, (cs, ce) in enumerate(columns):
+            if cs <= item.center_x <= ce:
+                col_bins[i].append(item)
+                assigned = True
+                break
+        if not assigned:
+            nearest_idx = min(
+                range(len(columns)),
+                key=lambda idx: abs(item.center_x - ((columns[idx][0] + columns[idx][1]) / 2.0)),
+            )
+            col_bins[nearest_idx].append(item)
+
+    sorted_cols = [_sort_items_simple_rows(c) for c in col_bins if c]
+
+    if not banners:
+        ordered = []
+        for c in sorted_cols:
+            ordered.extend(c)
+        return ordered
+
+    banners.sort(key=lambda b: b.center_y)
+    min_body_y = min(it.rect.y0 for it in body)
+    max_body_y = max(it.rect.y1 for it in body)
+
+    top_banners = [b for b in banners if b.center_y <= min_body_y + 40]
+    bottom_banners = [b for b in banners if b.center_y >= max_body_y - 40]
+    mid_banners = [b for b in banners if b not in top_banners and b not in bottom_banners]
+
+    ordered = list(top_banners)
+    for c in sorted_cols:
+        ordered.extend(c)
+    ordered.extend(mid_banners)
+    ordered.extend(bottom_banners)
+    return ordered
+
+
+def _sort_items_simple_rows(items):
+    """Sort items into simple horizontal lines and then order by vertical position."""
     if not items:
         return []
 
     median_height = sorted(item.height for item in items)[len(items) // 2]
     line_threshold = max(8.0, median_height * 0.6)
 
-    items = sorted(items, key=lambda item: (item.center_y, item.rect.x0))
+    sorted_items = sorted(items, key=lambda item: (item.center_y, item.rect.x0))
 
     lines = []
-    current_line = [items[0]]
-    current_y = items[0].center_y
+    current_line = [sorted_items[0]]
+    current_y = sorted_items[0].center_y
 
-    for item in items[1:]:
+    for item in sorted_items[1:]:
         if abs(item.center_y - current_y) <= line_threshold:
             current_line.append(item)
             current_y = sum(x.center_y for x in current_line) / len(current_line)

@@ -393,7 +393,12 @@ def box_sort_key(box):
 
 
 def sort_lines_reading_order(lines):
-    """Sort normalized OCR lines into a consistent reading order."""
+    """Sort normalized OCR lines into a column-aware reading order.
+
+    In multi-column documents (such as newspapers), groups lines by vertical column
+    gutters before sorting top-to-bottom within each column. For single-column text
+    (annual reports, monographs), falls back cleanly to natural top-to-bottom reading order.
+    """
     if len(lines) < 2:
         return list(lines)
 
@@ -404,21 +409,137 @@ def sort_lines_reading_order(lines):
             {
                 "line": line,
                 "rect": (x1, y1, x2, y2),
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "center_x": (x1 + x2) / 2.0,
                 "center_y": (y1 + y2) / 2.0,
+                "width": max(1.0, x2 - x1),
                 "height": max(1.0, y2 - y1),
             }
         )
 
-    heights = sorted(item["height"] for item in structured)
+    # For short snippets (< 8 lines), simple vertical sorting is always best
+    if len(structured) < 8:
+        return _sort_lines_simple_rows(structured)
+
+    page_w = max(s["x2"] for s in structured)
+
+    # 1. Separate full-width banners / running titles (spanning > 55% of page width)
+    banners = []
+    body = []
+    for s in structured:
+        if s["width"] > page_w * 0.55:
+            banners.append(s)
+        else:
+            body.append(s)
+
+    if not body:
+        return _sort_lines_simple_rows(structured)
+
+    # 2. Check if the page contains multiple columns separated by whitespace gutters
+    max_x = int(page_w) + 20
+    occ = [0.0] * max_x
+    for s in body:
+        start_x = max(0, int(s["x1"]))
+        end_x = min(max_x, int(s["x2"]))
+        for x in range(start_x, end_x):
+            occ[x] += 1.0
+
+    k_size = 31
+    smoothed = [0.0] * max_x
+    half_k = k_size // 2
+    for x in range(max_x):
+        w_start = max(0, x - half_k)
+        w_end = min(max_x, x + half_k + 1)
+        smoothed[x] = sum(occ[w_start:w_end]) / float(w_end - w_start)
+
+    max_density = max(smoothed) if smoothed else 0.0
+    gutter_threshold = max_density * 0.08
+
+    columns = []
+    in_col = False
+    col_start = 0
+    min_col_width = max(80, int(page_w * 0.08))
+
+    for x in range(max_x):
+        if smoothed[x] >= gutter_threshold and not in_col:
+            in_col = True
+            col_start = x
+        elif smoothed[x] < gutter_threshold and in_col:
+            in_col = False
+            if (x - col_start) >= min_col_width:
+                columns.append((col_start, x))
+    if in_col and (max_x - col_start) >= min_col_width:
+        columns.append((col_start, max_x))
+
+    # If only 1 column detected, use standard top-to-bottom row sort
+    if len(columns) <= 1:
+        return _sort_lines_simple_rows(structured)
+
+    # 3. Partition body lines into detected columns based on horizontal center
+    col_bins = [[] for _ in range(len(columns))]
+    for s in body:
+        assigned = False
+        for i, (cs, ce) in enumerate(columns):
+            if cs <= s["center_x"] <= ce:
+                col_bins[i].append(s)
+                assigned = True
+                break
+        if not assigned:
+            nearest_idx = min(
+                range(len(columns)),
+                key=lambda idx: abs(s["center_x"] - ((columns[idx][0] + columns[idx][1]) / 2.0)),
+            )
+            col_bins[nearest_idx].append(s)
+
+    # 4. Sort each column top-to-bottom using simple row grouping
+    sorted_col_lines = []
+    for c_lines in col_bins:
+        if c_lines:
+            sorted_col_lines.append(_sort_lines_simple_rows(c_lines))
+
+    # 5. Integrate full-width banners and columns in natural reading order
+    if not banners:
+        ordered = []
+        for c in sorted_col_lines:
+            ordered.extend(c)
+        return ordered
+
+    banners.sort(key=lambda b: b["center_y"])
+    min_body_y = min(s["y1"] for s in body)
+    max_body_y = max(s["y2"] for s in body)
+
+    top_banners = [b["line"] for b in banners if b["center_y"] <= min_body_y + 40]
+    bottom_banners = [b["line"] for b in banners if b["center_y"] >= max_body_y - 40]
+    mid_banners = [b["line"] for b in banners if b["line"] not in top_banners and b["line"] not in bottom_banners]
+
+    ordered = list(top_banners)
+    for c in sorted_col_lines:
+        ordered.extend(c)
+    ordered.extend(mid_banners)
+    ordered.extend(bottom_banners)
+    return ordered
+
+
+def _sort_lines_simple_rows(structured_items):
+    """Sort items by center_y and x1 with small row thresholding."""
+    if not structured_items:
+        return []
+    if len(structured_items) == 1:
+        return [structured_items[0]["line"]]
+
+    heights = sorted(item["height"] for item in structured_items)
     median_h = heights[len(heights) // 2] if heights else 12.0
     line_threshold = max(5.0, median_h * 0.35)
 
-    structured.sort(key=lambda item: (item["center_y"], item["rect"][0]))
+    items = sorted(structured_items, key=lambda item: (item["center_y"], item["rect"][0]))
     rows = []
-    current = [structured[0]]
-    current_y = structured[0]["center_y"]
+    current = [items[0]]
+    current_y = items[0]["center_y"]
 
-    for item in structured[1:]:
+    for item in items[1:]:
         if abs(item["center_y"] - current_y) <= line_threshold:
             current.append(item)
             current_y = sum(entry["center_y"] for entry in current) / len(current)
