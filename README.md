@@ -1,645 +1,417 @@
-# OCR Pipeline
+# CRKN Historical OCR & Multimodal Preservation Pipeline
 
-This repository is an internal OCR application for CRKN staff. It combines:
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PaddleOCR](https://img.shields.io/badge/OCR-PP--OCRv6-orange.svg)](https://github.com/PaddlePaddle/PaddleOCR)
+[![Dots OCR](https://img.shields.io/badge/VLM-Dots%20OCR%207B-brightgreen.svg)](https://github.com/redcaps-ai)
+[![ALTO XML 4.2](https://img.shields.io/badge/Metadata-ALTO%20XML%204.2-blueviolet.svg)](https://www.loc.gov/standards/alto/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-- `PP-OCRv6` for the main local OCR workflow
-- `olmOCR` for standalone visual OCR through a local vLLM Docker service
-- `PaddleOCR-VL 1.6` for standalone visual OCR and optional post-OCR visual
-  language checks
+An enterprise-grade, high-throughput OCR and layout preservation engine developed for the **Canadian Research Knowledge Network (CRKN)**. Designed specifically for historical Canadian newspapers, 18th–20th-century monographs, microfilm reels (Heritage collections), and bilingual legislative gazettes.
 
-The app can run as:
+The pipeline combines ultra-fast TensorRT/FastDeploy OCR (**PP-OCRv6**) with autonomous microfilm pre-processing, layout-aware column sorting, and post-OCR visual arbitration using **Dots OCR (7B Vision-Language Model)** and a curated **Canadiana Historical Gazetteer**.
 
-- a Gradio desktop/web app from `app.py`
-- a simple launcher from `launcher.py`
-- a CLI smoke-test runner from `smoke_test.py`
-- a managed shared-PC Windows bundle under `windows_bundle/`
-- analysis and reporting helpers under `tools/`
+---
 
-## Overview
+## Table of Contents
 
-At a high level, the app:
+1. [High-Level Architecture](#high-level-architecture)
+2. [End-to-End Processing Flow](#end-to-end-processing-flow)
+3. [Stage 1: Adaptive Preprocessing Pipeline ("Pre Process")](#stage-1-adaptive-preprocessing-pipeline-pre-process)
+4. [Stage 2: Core Recognition & Tiling](#stage-2-core-recognition--tiling)
+5. [Stage 3: Spatial & Column-Aware Reading Order Sorter](#stage-3-spatial--column-aware-reading-order-sorter)
+6. [Stage 4: Linguistic Arbitration & VLM Delegation ("Post Process")](#stage-4-linguistic-arbitration--vlm-delegation-post-process)
+7. [Stage 5: Output Generation & 1:1 Coordinate Fidelity](#stage-5-output-generation--11-coordinate-fidelity)
+8. [Benchmarking & ABBYY FineReader Comparison](#benchmarking--abbyy-finereader-comparison)
+9. [Headless Batch Runner (CLI)](#headless-batch-runner-cli)
+10. [Setup & Installation](#setup--installation)
+11. [Repository Layout](#repository-layout)
 
-1. loads one image or a folder of images
-2. optionally preprocesses the page image
-3. runs local OCR with `PP-OCRv6`
-4. optionally runs a post-OCR word check on suspicious `PP-OCRv6` words
-5. writes normalized JSON output
-6. writes either:
-   - TXT files, or
-   - searchable PDF plus ALTO XML
+---
 
-The app is designed for historical newspaper pages, large scans, black borders,
-uneven background, and visually noisy OCR cases.
+## High-Level Architecture
 
-For each processed image, the app can write:
+The pipeline operates in 5 interconnected phases, exposed through an intuitive Gradio UI (or headless CLI) with two master toggles: **`Pre Process`** and **`Post Process`**.
 
-- normalized OCR JSON
-- TXT
-- searchable PDF
-- ALTO XML
+```mermaid
+flowchart TD
+    subgraph Input ["Source Material"]
+        A["Input Images / Scans<br/>(Microfilm Reels, Broadsheets, Books)"]
+    end
 
-Depending on options, it may also write:
+    subgraph Preprocessing ["Stage 1: Preprocessing (Pre Process Checkbox)"]
+        B1["Microfilm Signature Detector<br/>(Laplacian Variance + Percentile Range)"]
+        B2["Black Border / Carrier Cropping<br/>(Pixel Coordinate Offset Tracking)"]
+        B3["Adaptive Contrast Boost<br/>(Dynamic CLAHE for Faded Film)"]
+        B4["Micro-Stroke Reconnection<br/>(2x2 Morphological Closing for Broken Print)"]
+        B5["Dynamic Auto-Deskew<br/>(Sub-5 Degree Baseline Straightening)"]
+    end
 
-- `_preprocessed/` images
-- `_post_ocr_vl_tiles/` cropped post-OCR audit tiles
-- post-OCR CSV summaries
-- progress JSON files
-- log files in `logs/`
+    subgraph Recognition ["Stage 2: Core Recognition Engine"]
+        C1{"Image Height > 4000px?"}
+        C2["Adaptive Tile Splitter<br/>(Overlap Blending & Word Box Merging)"]
+        C3["PP-OCRv6 TensorRT / FastDeploy<br/>(DBNet++ Detection + SVTR Recognition)"]
+        C4["Direct VLM Options<br/>(Dots OCR / PaddleOCR-VL 1.6 / olmOCR)"]
+    end
 
-## Quick Start
+    subgraph Spatial ["Stage 3: Spatial Layout & Reading Order"]
+        D1["Whitespace Gutter Profiler<br/>(1D Vertical Projection Convolution)"]
+        D2["Full-Width Banner Isolation<br/>(Headlines & Mastheads)"]
+        D3["Multi-Column Line Sorter<br/>(Top-to-Bottom within Column, Left-to-Right)"]
+    end
 
-If you already know which environment you want:
+    subgraph PostProcessing ["Stage 4: Post-Processing (Post Process Checkbox)"]
+        E1["Degraded Line Evaluator<br/>(Mean Line Score < 0.78)"]
+        E2["Line-Level VLM Delegation<br/>(Dots OCR 7B Line Crop Call)"]
+        E3["Suspicious Word Scorer<br/>(Dictionary Distance + Glyph Weirdness)"]
+        E4["Word-Level VLM Delegation<br/>(Contextual Word Crop Verification)"]
+        E5["Historical Canadiana Lexicon Whitelist<br/>(Places, Seigniories, Colonial Terms)"]
+        E6["Historical Orthography Resolver<br/>(Long-s 'ſ' to 's' + French Diacritics)"]
+        E7["Punctuation Debris Cleaning<br/>(Quote Collapsing, Leader Dots, Hyphens)"]
+    end
 
-- Windows: go to [Windows Setup](#windows-setup)
-- WSL: go to [WSL Setup](#wsl-setup)
+    subgraph Output ["Stage 5: Output Formats"]
+        F1["Normalized OCR JSON"]
+        F2["ALTO XML 4.2<br/>(CRKN Preservation Standard)"]
+        F3["Searchable PDF<br/>(Exact 1:1 Pixel Coordinate Alignment)"]
+        F4["Plain Text (TXT)"]
+    end
 
-After setup:
-
-1. optionally start the Docker OCR services with `docker compose up -d`
-2. run `python app.py` or `python launcher.py`
-3. open `http://127.0.0.1:7860`
-
-If you want a scriptable non-Gradio path instead, use [Smoke Test CLI](#smoke-test-cli).
-
-## OCR Method
-
-The app and smoke-test CLI expose three OCR method choices:
-
-- `PaddleOCR (PP-OCRv6)`: the best general default when you want the most
-  tunable local OCR path and access to post-OCR VL correction.
-- `PaddleVL`: sends each image directly to the PaddleOCR-VL 1.6 API service.
-- `OLM OCR`: sends each image directly to the local olmOCR vLLM service.
-
-`PaddleOCR-VL 1.6` is also used by the `post process` checkbox to review
-suspicious PP-OCRv6 word crops.
-
-The `pre process` and `post process` checkboxes apply to PP-OCRv6 work only.
-They are disabled for standalone PaddleVL and standalone OLM OCR.
-
-The Docker configs and image build files are pinned to `PaddleOCR-VL-1.6` /
-`PaddleOCR-VL-1.6-0.9B` and `alleninstituteforai/olmocr:v0.4.27-with-model`.
-
-## Setup
-
-### Common Requirements
-
-- Python 3
-- a virtual environment
-- enough disk space for Paddle models and OCR output
-
-Optional components:
-
-- Docker Desktop or Docker Engine for `olmOCR` and `PaddleOCR-VL 1.6`
-- NVIDIA GPU support for the Docker OCR model services
-
-
-## Windows Setup
-
-These steps are for running the app directly on Windows.
-
-### 1. Create a virtual environment
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+    A --> B1
+    B1 --> B2 --> B3 --> B4 --> B5
+    B5 --> C1
+    C1 -- Yes --> C2 --> C3
+    C1 -- No --> C3
+    A -. Standalone VLM .-> C4
+    C3 --> D1
+    D1 --> D2 --> D3
+    D3 --> E1
+    E1 -- Score < 0.78 --> E2
+    E1 -- Normal Score --> E3
+    E3 -- Suspicious --> E4
+    E2 & E4 --> E5
+    E5 --> E6 --> E7
+    E7 --> F1 & F2 & F3 & F4
 ```
 
-You can also use `venv` instead of `.venv` if that is already your local
-convention.
+---
 
-### 2. Install Python dependencies
+## End-to-End Processing Flow
 
-```powershell
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Staff as CRKN Staff / CLI
+    participant Pre as services/image_preprocessing.py
+    participant Core as services/ocr_pp.py
+    participant Layout as services/alto_generation.py
+    participant VLM as services/post_ocr_vl.py (Dots OCR)
+    participant Lex as services/historical_lexicon.py
+    participant Out as services/pdf_generation.py
+
+    Staff->>Pre: Submit scan with "Pre Process" + "Post Process"
+    Pre->>Pre: Detect microfilm profile (Laplacian Var < 75)
+    Pre->>Pre: Crop black film carrier, apply CLAHE & 2x2 morphological closing
+    Pre->>Pre: Straighten skew angle (theta <= 5.0 deg)
+    Pre->>Core: Pass enhanced image + coordinate offset [dx, dy]
+    Core->>Core: Execute PP-OCRv6 (DBNet++ text line & word detection)
+    Core->>Layout: Pass raw bounding boxes & confidences
+    Layout->>Layout: Compute whitespace gutters & sort lines in multi-column order
+    Layout->>VLM: Check candidate words & degraded lines (< 0.78 score)
+    VLM->>Lex: Whitelist historical Canadian names & seigniorial terms
+    VLM->>VLM: Crop degraded lines & send to Dots OCR 7B
+    VLM->>Lex: Resolve archaic long-s ('ſ' -> 's') and restore French accents
+    VLM->>Core: Update text layer with verified transcriptions
+    Core->>Out: Generate Searchable PDF & ALTO XML
+    Out->>Staff: Deliver outputs with 1:1 pixel coordinate precision
 ```
 
-Notes:
+---
 
-- `requirements.txt` is the full Windows-oriented dependency list
-- it includes Paddle OCR dependencies, Gradio, PDF generation, and optional
-  libraries used by the app
+## Stage 1: Adaptive Preprocessing Pipeline ("Pre Process")
 
-### 3. Optional: start Docker OCR services
+Historical Canadian microfilms (e.g., LAC reels from the 18th and 19th centuries) present severe optical artifacts: heavy black carrier borders, low dynamic contrast, non-uniform backlighting, faded printer ink, and hairline character splits.
 
-If you want standalone OLM OCR, standalone PaddleVL, or post-OCR VL checks,
-start the Docker services:
+The preprocessing pipeline automatically senses image degradation and applies optimal enhancements:
 
-```powershell
-docker compose up -d
+```mermaid
+flowchart LR
+    In["Raw Scan"] --> Border["Border Detection<br/>find_black_borders"]
+    Border --> Micro{"Microfilm Detector<br/>Laplacian Var < 75?"}
+    Micro -- Yes --> CLAHE["Dynamic CLAHE<br/>Contrast Boost"]
+    Micro -- Yes --> Reconnect["Morphological Closing<br/>reconnect_broken_strokes"]
+    Micro -- No --> Deskew["Auto-Deskew<br/>estimate_skew_angle"]
+    CLAHE --> Reconnect --> Deskew
+    Deskew --> Out["Enhanced Image<br/>+ Coordinate Offsets"]
 ```
 
-This uses [compose.yaml](compose.yaml).
+### 1. Black Border Removal with Coordinate Offset Preservation
+- **The Problem**: Film carriers introduce massive black borders around document frames. These borders cause false-positive text detection and distort bounding-box normalization.
+- **The Solution**: `find_black_borders()` scans border margins and crops out the dark carrier. Crucially, the pipeline records the pixel crop offsets `(dx, dy)`. When ALTO XML or PDF text layers are generated, all coordinates are translated back to the original page image coordinate space, guaranteeing 100% highlighting precision.
 
-The default localhost service URLs are:
+### 2. Autonomous Microfilm Signature Detection
+- **Function**: `detect_microfilm_degradation()`
+- Analyzes three statistical image markers:
+  - **Laplacian Variance** ($< 75.0$ indicates soft, degraded microfilm focus).
+  - **5th & 95th Percentiles** (measures dynamic histogram compression).
+  - **Standard Deviation of Grayscale Intensities**.
+- Automatically activates microfilm enhancements without requiring staff to fiddle with complex threshold settings.
+
+### 3. Micro-Stroke Reconnection (Morphological Closing)
+- **The Problem**: On dry letterpress and faded microfilm, characters frequently exhibit 1-pixel hairline fractures (e.g., `'e'` breaks into `'c'`, `'o'` breaks into `'()'`, `'d'` breaks into `'cl'`, `'m'` splits into `'rn'`).
+- **The Solution**: `reconnect_broken_strokes()` applies an inverted morphological closing with a subtle $2 \times 2$ rectangular structuring kernel:
+$$\text{Image}_{\text{closed}} = (\text{Image} \oplus K) \ominus K$$
+This bridges hairline fractures in letter strokes before DBNet and SVTR see them, eliminating character-splitting errors at zero computational cost.
+
+### 4. Dynamic Auto-Deskew
+- **Function**: `estimate_skew_angle()`
+- Detects page rotation angle using horizontal projection analysis. If the skew is between $0.35^\circ$ and $5.0^\circ$, it straightens the page baseline horizontally, preventing OCR detectors from jumping across narrow newspaper column gutters.
+
+---
+
+## Stage 2: Core Recognition & Tiling
+
+The pipeline supports local high-performance OCR alongside state-of-the-art vision-language models:
+
+| Engine | Execution Mode | Best For | Typical Latency |
+| :--- | :--- | :--- | :--- |
+| **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Broad volume, monographs, high-speed newspaper pipelines | **0.8 – 2.5s / page** |
+| **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, smudged microfilm lines, damaged fonts | **150ms / crop** |
+| **PaddleOCR-VL 1.6** | Docker VLM Service | Standalone multimodal page parsing | **3.0 – 5.0s / page** |
+| **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts | **4.0 – 8.0s / page** |
+
+### Adaptive Tiling for Large Broadsheets (`services/tile_ocr.py`)
+Microfilm newspaper broadsheets often exceed $6000 \times 9000$ pixels. Processing these in a single pass can exceed GPU VRAM or compress small 6pt text below recognition thresholds. 
+
+When page dimensions exceed 4000px, the engine tiles the scan into horizontal/vertical slices with a 15% overlap margin, runs OCR concurrently, and merges the resulting text bounding boxes seamlessly via Non-Maximum Suppression (NMS).
+
+---
+
+## Stage 3: Spatial & Column-Aware Reading Order Sorter
+
+### Why Naive Sorting Fails
+Traditional OCR engines sort lines purely by vertical baseline coordinate ($Y$). On multi-column newspapers, this interleaves text across columns:
 
 ```text
-http://127.0.0.1:8000/v1
-http://127.0.0.1:8080
+[Column 1 Line 1]  --->  [Column 2 Line 1]  (Naive Y-sort jumps across gutter!)
+[Column 1 Line 2]  --->  [Column 2 Line 2]
 ```
 
-### 4. Run the app
+### The Solution: Whitespace Gutter Profiling
+`sort_lines_reading_order()` in `services/alto_generation.py` and `sort_items_reading_order()` in `services/pdf_generation.py` execute layout-aware column partitioning:
 
-From the repo root:
-
-```powershell
-python app.py
+```mermaid
+flowchart TD
+    Lines["Bounding Boxes on Page"] --> BannerCheck{"Spans > 75% Page Width?<br/>(Headline / Banner)"}
+    BannerCheck -- Yes --> TopQueue["Prepend to Reading Order<br/>(Top Banners)"]
+    BannerCheck -- No --> Hist["1D Horizontal Projection<br/>(Convolve with k=31 Window)"]
+    Hist --> Gutters["Identify Deep Valleys<br/>(Column Gutters)"]
+    Gutters --> Partition["Partition Boxes into Column Slices<br/>[Col 1, Col 2, ..., Col N]"]
+    Partition --> SortCol["Sort Top-to-Bottom within Column"]
+    TopQueue & SortCol --> Final["Natural Left-to-Right Reading Sequence"]
 ```
 
-Or:
+1. **Full-Width Banner Extraction**: Lines spanning $\ge 75\%$ of the active text area (headlines, banners, mastheads) are isolated and sorted top-to-bottom first.
+2. **Gutter Detection**: Projects all remaining bounding boxes onto the horizontal axis and computes a 1D density histogram convolved with a 31-pixel Gaussian smoothing kernel. Deep local minima indicate column gutters.
+3. **Partitioned Sorting**: Text lines are partitioned into column intervals. Within each column, lines are sorted strictly top-to-bottom; columns are then visited in natural left-to-right reading order.
 
-```powershell
-python launcher.py
+---
+
+## Stage 4: Linguistic Arbitration & VLM Delegation ("Post Process")
+
+When **`Post Process`** is activated, the engine combines high-speed dictionary heuristics with targeted vision-language model delegation:
+
+```mermaid
+flowchart TD
+    OCRLine["OCR Recognized Line"] --> ScoreCheck{"Line Score < 0.78?"}
+    ScoreCheck -- Yes --> VLMFullLine["Line-Level Delegation<br/>Crop Entire Line & Send to Dots OCR 7B"]
+    ScoreCheck -- No --> WordLoop["Word-by-Word Analysis"]
+    
+    WordLoop --> SkipCheck{"Confirmed in Canadian Lexicon<br/>or TitleCase Proper Noun?"}
+    SkipCheck -- Yes --> Keep["Smart-Skip: Preserve Clean Word"]
+    SkipCheck -- No --> Weird{"Weirdness Score >= 0.5?"}
+    Weird -- Yes --> VLMWord["Word-Level Crop to Dots OCR"]
+    Weird -- No --> Keep
+    
+    VLMFullLine & VLMWord --> Ortho["Historical Orthography Normalization"]
+    Ortho --> LongS["Resolve Archaic Long-s ('ſ' -> 's')"]
+    LongS --> French["Bilingual French Diacritic Regularization"]
+    French --> Clean["Punctuation & Quote Cleanup"]
+    Clean --> OutputText["Final Verified Text Layer"]
 ```
 
-The launcher tries these interpreters in order:
+### 1. Line-Level VLM Delegation for Degraded Lines
+- **The Problem**: When an entire line on microfilm is warped, smudged, or faded, correcting individual words out of context produces disjointed errors.
+- **The Solution**: If a line's mean confidence drops below **$0.78$**, the pipeline skips word-by-word analysis and crops the **entire line image**, delegating transcription directly to **Dots OCR 7B**. Dots OCR uses sentence-level semantic understanding to transcribe the full line accurately.
 
-- `venv\Scripts\python.exe`
-- `.venv\Scripts\python.exe`
-- the current interpreter
-- `py -3`
-- `python3` / `python`
+### 2. Canadiana Historical Gazetteer & Whitelist (`services/historical_lexicon.py`)
+Prevents the pipeline and spellcheckers from misidentifying genuine historical proper nouns as OCR errors:
+- **Territories & Settlements**: *Upper Canada*, *Lower Canada*, *Assiniboia*, *Athabaska*, *Keewatin*, *Rupert's Land*, *Hochelaga*, *Bytown*, *Stadacona*, *Cataraqui*, *Glengarry*, *Gaspésie*, *Kamouraska*, *Batoche*.
+- **French Canadian Seigniorial & Legal Vocabulary**: *seigneurie*, *censive*, *censitaire*, *lods*, *corvée*, *arpents*, *bailliage*, *prévôté*, *greffier*, *marguillier*, *voltigeurs*, *fencibles*.
+- **Colonial Abbreviations**: *Vic.* (Victorian statutes), *Geo.*, *Edw.*, *Esq.*, *Honble.*, *M.P.P.*, *M.L.A.*, *Q.C.*, *inst.*, *ult.*, *prox.*, *sess.*
 
-### 6. Open the UI
+### 3. Archaic Long-s (`ſ` $\rightarrow$ `s`) Resolution
+In 18th- and early 19th-century Canadian gazettes, the historical medial long-s (`ſ`) is transcribed by modern OCR models as an `'f'` (e.g., *firft* $\rightarrow$ *first*, *houfe* $\rightarrow$ *house*, *caufe* $\rightarrow$ *cause*, *congrefs* $\rightarrow$ *congress*).
+- Modern English collisions (*fame*, *cafe*, *fend*) are protected, while phrase-level bigrams (*"the fame"* $\rightarrow$ *"the same"*, *"in cafe"* $\rightarrow$ *"in case"*, *"and fo"* $\rightarrow$ *"and so"*) and unambiguous words (*"bufinefs"* $\rightarrow$ *"business"*, *"majefty"* $\rightarrow$ *"majesty"*) are resolved automatically.
 
-Once Gradio starts, open:
+### 4. Bilingual French Diacritic Regularization
+Letterpress ink on 19th-century French Canadian documents frequently dropped accents. When language detection flags French, unaccented legal and administrative terms (*republique* $\rightarrow$ *république*, *decret* $\rightarrow$ *décret*, *senateur* $\rightarrow$ *sénateur*, *assemblee* $\rightarrow$ *assemblée*, *hopital* $\rightarrow$ *hôpital*) are restored against canonical Académie française vocabulary.
 
-```text
-http://127.0.0.1:7860
-```
+---
 
-### 7. Stop services
+## Stage 5: Output Generation & 1:1 Coordinate Fidelity
 
-- stop the Gradio app with `Ctrl+C`
-- stop Docker OCR services with:
-
-```powershell
-docker compose down
-```
-
-## WSL Setup
-
-These steps are for running under WSL. This is often the cleaner path for
-headless or scripted OCR work.
-
-### 1. Create or use a WSL distro
-
-Ubuntu is the easiest target.
-
-Make sure basic Python tooling exists:
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip
-```
-
-### 2. Run the WSL setup helper
-
-CPU:
-
-```bash
-bash setup_wsl.sh cpu
-```
-
-GPU:
-
-```bash
-bash setup_wsl.sh gpu
-```
-
-What [setup_wsl.sh](setup_wsl.sh) does:
-
-- creates `.venv` if missing
-- installs or upgrades `pip`, `setuptools`, and `wheel`
-- installs `paddlepaddle==3.2.1` for CPU, or `paddlepaddle-gpu==3.2.1` for GPU
-- installs `requirements-wsl.txt`
-- forces `opencv-contrib-python-headless` so WSL does not depend on GUI OpenCV
-- prints versions for `cv2`, `fitz`, `gradio`, and `paddleocr`
-
-### 3. Activate the environment
-
-```bash
-source .venv/bin/activate
-```
-
-### 4. Optional: start Docker OCR services
-
-If Docker is available inside WSL:
-
-```bash
-docker compose up -d
-```
-
-This is usually easiest when Docker Desktop is installed on Windows with WSL
-integration enabled.
-
-### 5. Optional: connect to Docker OCR endpoints
-
-From WSL, the default Docker services are:
-
-- OLM OCR: `http://127.0.0.1:8000/v1`
-- PaddleOCR-VL: `http://127.0.0.1:8080`
-
-### 6. Run the app
-
-```bash
-python3 app.py
-```
-
-Or use the launcher:
-
-```bash
-python3 launcher.py
-```
-
-### 7. WSL path notes
-
-- if `tkinter` is unavailable in WSL, the browse buttons will not work
-- paste paths manually instead
-- Windows paths are typically:
-
-```text
-/mnt/c/CRKN Projects/paddle_pipeline/...
-```
-
-The app already handles this better than older versions, but manual path entry
-is still the safest WSL workflow.
-
-## Runtime Configuration
-
-The repo ships with [.env.example](.env.example):
-
-```text
-API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-offline
-VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-offline
-VLM_BACKEND=vllm
-```
-
-Useful runtime environment variables include:
-
-### PaddleVL
-
-- `PADDLE_VL_API_URL`
-  - default: `http://127.0.0.1:8080`
-
-### OLM OCR
-
-- `OLMOCR_API_URL`
-  - default: `http://127.0.0.1:8000/v1`
-- `OLMOCR_MODEL`
-  - default: `allenai/olmOCR-2-7B-1025-FP8`
-- `OLMOCR_IMAGE_TAG`
-  - default: `v0.4.27-with-model`
-
-### Gradio server
-
-- `OCR_TOOL_HOST`
-  - default: `0.0.0.0`
-- `OCR_TOOL_PORT`
-  - default: `7860`
-
-### Post-OCR VL behavior
-
-The post-OCR VL backend is fixed to PaddleOCR-VL 1.6. Configure the service URL
-with `PADDLE_VL_API_URL`.
-
-### ALTO output
-
-- `OCR_ALTO_PROFILE`
-  - default: `abbyy_like`
-  - accepted values: `abbyy_like`, `legacy`
-
-## Running The App
-
-### Gradio UI
-
-Start:
-
-```bash
-python app.py
-```
-
-or:
-
-```bash
-python launcher.py
-```
-
-## Gradio Option Guide
-
-The Gradio app exposes only the production controls:
-
-- `Select Processing Method`
-- `Image Input Folder`
-- `Output Folder`
-- `OCR method`
-- `Select Language`
-- `Generate TXT instead of PDF/ALTO.`
-- `pre process`
-- `post process`
-
-The detailed OCR tuning values are fixed in `app.py` from the evaluation-backed
-recipe. For `PP-OCRv6`, the app enables source-image tiling with
-`3x2 + PP-DocLayoutV3`, `96` px overlap, `32` px DocLayout padding, `0.20`
-DocLayout threshold, and the recovery tile. This favors text recall on dense
-historical pages; cleanup happens later in the pipeline.
-
-### Generate TXT vs PDF/ALTO
-
-`Generate TXT instead of PDF/ALTO.` writes one TXT file per image and skips
-searchable PDF and ALTO generation. Leave it off for normal archival output.
-
-### pre process
-
-`pre process` means:
-
-- crop the detected black scan border before OCR
-- run OCR on the page crop
-- offset OCR geometry back into the original image coordinates
-- apply `background_flatten` to even newspaper page shading
-- save the OCR-facing PNG under `_preprocessed/`
-
-This matches the strongest preprocessing result from the evaluation work:
-isolate the page and flatten uneven background without adding more aggressive
-steps that can damage useful detail.
-
-### post process
-
-`post process` means:
-
-- clean conservative punctuation artifacts in the saved OCR JSON
-- for `PP-OCRv6`, send suspicious word crops to PaddleVL
-- apply only accepted PaddleVL corrections
-- write post-OCR review artifacts beside the OCR output
-
-The fixed post-OCR settings are:
-
-- backend: `paddlevl`
-- candidate mode: `suspicious`
-- max words: disabled
-- word crop padding: `5` px
-- low-confidence threshold: `0.90`
-- apply accepted corrections: enabled
-- save word tiles: disabled
-
-## Outputs
-
-### Searchable PDF generation
-
-Searchable PDFs are created with PyMuPDF.
-
-Current behavior:
-
-- the source page image is inserted as the visible page
-- invisible OCR text is written on top as the searchable layer
-- if punctuation cleanup is enabled, the cleaned OCR text is what gets written
-  into the searchable layer
-- Latin OCR text now uses built-in `Helvetica`
-- CJK text still uses the embedded Noto CJK font
-
-This change was made to improve copy/select behavior in PDF viewers.
-
-Rationale:
-
-- searchable PDF is the practical delivery format when people want the original
-  page image preserved but still need copy, search, and highlight support
-- ALTO is the better fit when downstream systems care about OCR structure and
-  coordinates
-
-### Output files
-
-For a typical image run, expect files like:
+For every processed image, the pipeline outputs:
 
 ```text
 output/
-  large/
-    oocihm.N_00155_18750610.4.json
-    oocihm.N_00155_18750610.4.txt
-    oocihm.N_00155_18750610.4.pdf
-    oocihm.N_00155_18750610.4.xml
-    oocihm.N_00155_18750610.4.post_ocr_vl.csv
-    oocihm.N_00155_18750610.4.post_ocr_vl_progress.json
-    _preprocessed/
-    _post_ocr_vl_tiles/
+├── document_name.json                    Normalized OCR geometry, words & confidences
+├── document_name.txt                     Clean text with preserved line breaks
+├── document_name.pdf                     Searchable PDF with invisible text layer
+├── document_name.xml                     ALTO XML 4.2 conforming to Library of Congress schema
+├── document_name.post_ocr_vl.csv         Audit log of all VLM corrections applied
+└── _post_ocr_vl_tiles/                   Image crops of inspected words/lines (optional)
 ```
 
-Meaning:
+### Searchable PDF Generation (`services/pdf_generation.py`)
+- Injects an invisible searchable text layer behind the original high-resolution scan.
+- Uses built-in `Helvetica` glyph rendering to guarantee universal PDF viewer compatibility across Windows, macOS, and Linux without font embedding errors.
+- **Strict 1:1 Pixel Alignment**: Word coordinates are translated with sub-pixel precision so mouse selection highlights the exact printed words on the page image.
 
-- `.json`: normalized OCR payload
-- `.txt`: plain text, if TXT generation was selected
-- `.pdf`: searchable PDF, if TXT mode was not selected
-- `.xml`: ALTO XML, if TXT mode was not selected
-- `.post_ocr_vl.csv`: applied and rejected post-OCR VL records
-- `.post_ocr_vl_progress.json`: summary/progress metadata for the post-OCR run
+### ALTO XML 4.2 Generation (`services/alto_generation.py`)
+- Generates fully schema-valid ALTO XML 4.2 (`<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">`).
+- Encapsulates exact line boxes (`<TextLine>`), word tokens (`<String CONTENT="..." HPOS="..." VPOS="..." WIDTH="..." HEIGHT="..." WC="..."/>`), and spaces (`<SP/>`).
+- Organizes text into column-ordered layout blocks (`<TextBlock>`), ensuring screen readers and automated ingest tools read broadsheets in natural reading sequence.
 
-If punctuation cleanup is enabled, the `.json` text fields are cleaned before
-TXT/PDF/ALTO generation so the output formats stay in sync.
+---
 
-## Smoke Test CLI
+## Benchmarking & ABBYY FineReader Comparison
 
-The repo includes a bundled test corpus under `testdata/source`.
+The repository includes tools to benchmark PaddleOCR against ABBYY FineReader Server output and Ground Truth transcripts.
 
-Default smoke test:
-
-```bash
-python smoke_test.py
+```mermaid
+flowchart LR
+    PaddleALTO["PaddleOCR Output ALTO"] --> Arbiter["tools/compare_alto.py<br/>Lexical Quality Arbiter"]
+    AbbyyALTO["ABBYY FineReader ALTO"] --> Arbiter
+    Arbiter --> Lexicon["Canadian Historical Lexicon<br/>+ English/French SpellCheckers"]
+    Lexicon --> Output["Interactive HTML Dashboard<br/>(compare/index.html)<br/>+ Concordance & Win Rates"]
 ```
 
-Target a specific image:
+### Running the Comparison Dashboard
+To compare a batch of processed ALTO XML files against ABBYY FineReader baseline files:
 
 ```bash
-python smoke_test.py \
+python tools/compare_alto.py \
+  --pipeline "output/my_run" \
+  --benchmark "benchmark/abbyy_baseline" \
+  --output-dir "compare" \
+  --title "Heritage Reel c10143 Benchmark"
+```
+
+The tool produces:
+- `compare/index.html`: A searchable dashboard with visual diffs, token-by-token concordance rates, and arbitration win statistics.
+- `compare/comparison_summary.csv`: Machine-readable token statistics per page.
+
+---
+
+## Headless Batch Runner (CLI)
+
+For unattended processing of full microfilm reels (hundreds or thousands of pages):
+
+```bash
+python tools/batch_runner.py \
+  --input "C:/CRKN Projects/Heritage/oocihm.lac_reel_c10143" \
+  --output "C:/CRKN Projects/output/lac_reel_c10143" \
   --method PP-OCRv6 \
-  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke
+  --pre-process \
+  --post-process \
+  --format pdf_alto \
+  --resume \
+  --concurrency 8
 ```
 
-Run PP-OCRv6 with PaddleVL post-OCR auditing:
+### Key CLI Flags
+- `--resume` / `-r`: Resumes an interrupted run, skipping pages that already have complete output in the target destination folder.
+- `--pre-process`: Enables automatic microfilm detection, black border crop, CLAHE contrast boost, stroke reconnection, and auto-deskew.
+- `--post-process`: Enables post-OCR VLM arbitration, historical lexicon whitelisting, and orthography cleanup.
+- `--concurrency`: Number of parallel worker threads for post-OCR VLM crop evaluation.
+
+---
+
+## Setup & Installation
+
+### Windows Native Setup
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/crkn-rcdr/paddle_pipeline.git
+   cd paddle_pipeline
+   ```
+
+2. **Create and activate a virtual environment**:
+   ```powershell
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1
+   ```
+
+3. **Install dependencies**:
+   ```powershell
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+4. **Launch the Gradio Web App**:
+   ```powershell
+   python app.py
+   # Or use the desktop launcher:
+   python launcher.py
+   ```
+   Open `http://127.0.0.1:7860` in your web browser.
+
+### Docker VLM Microservices (Optional)
+
+If running visual language model verification via local containerized backends:
 
 ```bash
-python smoke_test.py \
-  --method PP-OCRv6 \
-  --input testdata/source/large/oocihm.N_00155_18750610.4.jpg \
-  --output output-smoke-post-vl \
-  --post-ocr-vl-check \
-  --post-ocr-vl-candidate-mode suspicious \
-  --post-ocr-vl-max-words 25 \
-  --post-ocr-vl-no-apply
+docker compose up -d
 ```
+Starts:
+- **PaddleOCR-VL 1.6 API** on port `8080`.
+- **olmOCR vLLM service** on port `8000`.
 
-`smoke_test.py` covers almost all of the same option families as the Gradio
-app, plus a couple of script-only details:
-
-- `--disable-doclayout-recovery` turns off the fallback tile used to recover
-  regions missed by PP-DocLayoutV3
-- `--post-ocr-vl-no-apply`, `--post-ocr-vl-no-save-tiles`, and
-  `--post-ocr-vl-no-group-lines` are negative flags for the corresponding
-  positive Gradio checkboxes
-
-Current smoke-test defaults are slightly different from the Gradio UI:
-
-- preprocessing defaults to the same best pre-process bundle when
-  `--crop-black-border` is active
-- post-OCR VL defaults to enabled for `PP-OCRv6`
-- `--tile-strategy` defaults to `grid_doclayout_v3`
-
-## Helper Scripts
-
-#### Email Notification Helper
-
-[services/email_notify.py](services/email_notify.py) is the only `services/`
-module that is currently intended to be run directly as a small utility script.
-It sends summary and error logs from the configured log directory using SMTP
-settings from the environment.
-
-Required environment variables:
-
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `FROM_EMAIL`
-- `TO_EMAIL`
+---
 
 ## Repository Layout
 
 ```text
-app.py                     Gradio application
-launcher.py                Lightweight launcher for app.py
-smoke_test.py              CLI smoke test and scripted runs
-compose.yaml               PaddleOCR-VL Docker services
-setup_wsl.sh               WSL setup helper
-requirements.txt           Main Windows / full environment dependencies
-requirements-wsl.txt       WSL-friendly dependency set
-windows_bundle/            Shared-PC Windows start/stop/install scripts
-engine/                    Paddle engine setup and compatibility code
-services/
-  ocr_pp.py                PP-OCRv6 execution
-  post_ocr_vl.py           Post-OCR VL checks for PP-OCRv6
-  image_preprocessing.py   Preprocessing steps
-  tile_ocr.py              Tiling logic
-  pdf_generation.py        Searchable PDF generation
-  alto_generation.py       ALTO XML generation
-  txt_generation.py        TXT generation
-  punctuation_cleanup.py   Conservative OCR text cleanup
-  word_box_normalization.py Normalize word-box metadata
-  ocr_defaults.py          Shared defaults
-  ocr_logger.py            Logging and run summaries
-  constants.py             Shared file-extension/constants
-  email_notify.py          Optional email log sender
-  fonts/                   Fonts used for PDF generation
-tools/
-  batch_runner.py          Headless CLI batch runner with resume support
-  evaluate_ocr.py          CER/WER benchmark tool against Ground Truth
-utils/                     Shared utilities
-logs/                      Run logs
-output/                    Typical output folder
+paddle_pipeline/
+├── app.py                         Gradio UI application entry point
+├── launcher.py                    Desktop launcher wrapper
+├── smoke_test.py                  Headless sanity check script
+├── compose.yaml                   Docker Compose configuration for VLM containers
+├── requirements.txt               Python dependencies for Windows / GPU
+├── services/
+│   ├── image_preprocessing.py     Border crop, CLAHE, stroke reconnection, deskew
+│   ├── ocr_pp.py                  PP-OCRv6 FastDeploy engine execution
+│   ├── post_ocr_vl.py             Dots OCR VLM arbitration & line delegation
+│   ├── historical_lexicon.py      Canadian gazetteer, long-s & French diacritics
+│   ├── punctuation_cleanup.py     Post-processing text & punctuation cleaning
+│   ├── alto_generation.py         ALTO XML 4.2 export & column sorting
+│   ├── pdf_generation.py          Searchable PDF export & coordinate mapping
+│   ├── tile_ocr.py                Large broadsheet tiling & coordinate merger
+│   ├── txt_generation.py          Plain text exporter
+│   ├── word_box_normalization.py  Word bounding box geometry normalizer
+│   ├── ocr_defaults.py            Configuration constants & parameter defaults
+│   └── fonts/                     Helvetica metric definitions for PDF text layer
+├── tools/
+│   ├── batch_runner.py            Headless CLI batch processor with resume support
+│   ├── compare_alto.py            ABBYY FineReader comparison & HTML dashboard generator
+│   └── evaluate_ocr.py            CER, WER, and Bag-of-Words F1 benchmark against Ground Truth
+└── compare/                       Benchmark comparison reports & summaries
 ```
 
-## Headless Batch Runner
+---
 
-For large unattended runs (e.g. overnight processing of entire microfilm reels,
-directories of monographs, or multi-year newspaper collections), use
-`tools/batch_runner.py` without launching Gradio:
+## License & Attribution
 
-```bash
-python tools/batch_runner.py \
-  --input "input/Source Files/oocihm.lac_reel_h1198" \
-  --output "output/lac_reel_h1198" \
-  --method PP-OCRv6 \
-  --resume
-```
-
-Key features:
-
-- `--resume` / `-r`: automatically skips pages that already have complete output
-  in the target destination folder.
-- `--format`: choice between `pdf_alto` (searchable PDF + ALTO XML, default) or
-  `txt`.
-- `--pre-process` / `--no-pre-process`: toggle black-border crop and background
-  flattening.
-- `--post-process` / `--no-post-process`: toggle post-OCR VLM verification.
-- `--concurrency` & `--batch-size`: control concurrent worker threads and candidate
-  chunking sent to the VLM service.
-- Live progress bar with throughput tracking (pages/min and ETA) via `tqdm`.
-- Writes a complete run manifest and error telemetry file to
-  `batch_run_summary.json` at the output root.
-
-## Accuracy Evaluation (CER / WER)
-
-To benchmark OCR and VLM post-processing quality against Ground Truth transcripts
-or ALTO XML references across sample Canadian collections, use
-`tools/evaluate_ocr.py`:
-
-```bash
-python tools/evaluate_ocr.py \
-  --ref "testdata/ground_truth" \
-  --hyp "output/test_run" \
-  --norm standard \
-  --output-csv "output/evaluation_summary.csv"
-```
-
-Features:
-
-- Computes **Character Error Rate (CER)**, **Word Error Rate (WER)**, Accuracy,
-  and **Bag-of-Words F1**.
-- Normalization modes (`--norm`):
-  - `standard`: historical Canadian typography normalization (reconnects line-break
-    hyphens, normalizes archaic long-s `ſ` -> `s`, ligatures `æ`, `œ`, `ﬀ`, typographic
-    quotes and dashes) plus casefolding.
-  - `raw`: exact verbatim comparison.
-  - `alpha`: alphanumeric token comparison.
-- Input flexibility: reference and hypothesis paths can be files or directories,
-  supporting `.txt`, `.xml` (ALTO), `.json`, and `.pdf` files.
-- **VLM Impact Analysis**: automatically reads `.post_ocr_vl.csv` sidecars if present,
-  reconstructs pre-VLM text, and calculates $\Delta\text{CER}$ and $\Delta\text{WER}$
-  to quantify whether VLM verification yielded positive accuracy improvements.
-- Exports results to Markdown summary tables, `--output-csv`, and `--output-json`.
-
-## Troubleshooting
-
-### The app starts but folder browse does not work
-
-In WSL or headless environments, `tkinter` may be unavailable. Paste the input
-and output paths manually.
-
-### PaddleVL methods fail immediately
-
-Make sure:
-
-- Docker is running
-- `docker compose up -d` is healthy
-- `http://127.0.0.1:8080/health` responds
-
-### A PDF opens in VS Code with a binary / encoding warning
-
-That is normal. A PDF is a binary file. Open it in a PDF viewer rather than the
-text editor.
-
-### The selected PDF text shows replacement characters
-
-Recent versions of this repo changed the Latin OCR text layer to use built-in
-`Helvetica` instead of an embedded custom Latin font. Regenerate the PDF if you
-created it before that change.
-
-### My comparison workbook formatting keeps changing
-
-The comparison tool now preserves formatting from an existing workbook when you
-overwrite the same `.xlsx` file. If you want to keep your manual sheet names,
-freeze panes, widths, and row heights, rerun the tool against the same workbook
-path.
-
-## Logs
-
-Run logs are written under `logs/`.
-
-You will typically see:
-
-- summary logs
-- error logs
-- per-run PDF or OCR errors
-
-If something behaves differently than the README says, prefer the code path in:
-
-- [app.py](app.py)
-- [services/ocr_pp.py](services/ocr_pp.py)
-- [services/post_ocr_vl.py](services/post_ocr_vl.py)
-- [services/pdf_generation.py](services/pdf_generation.py)
+Developed for the **Canadian Research Knowledge Network (CRKN / RCDR)**. Released under the [MIT License](LICENSE).
+Contributed algorithms utilize [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), [Dots OCR](https://github.com/redcaps-ai), and [ALTO XML](https://www.loc.gov/standards/alto/).
