@@ -14,7 +14,7 @@ if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
 from services.ocr_pp import run_ocr_job
-from tools.compare_alto import compare_directory_batch
+from tools.compare_alto import compare_directory_batch, sync_to_evaluations_repo
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
@@ -154,6 +154,9 @@ def main():
     print(f"Summary Metrics CSV : {compare_root / 'comparison_summary.csv'}")
     print(f"Summary Metrics JSON: {compare_root / 'comparison_summary.json'}")
     print("==================================================================")
+
+    print("\n--- Phase 3: Syncing to OCR-Evaluations Repo & GitHub Pages ---")
+    sync_to_evaluations_repo(compare_root, auto_push=True)
 
 
 if __name__ == "__main__":

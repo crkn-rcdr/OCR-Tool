@@ -1807,6 +1807,8 @@ def compare_directory_batch(
     render_html: bool = True,
     render_image: bool = False,
     min_iou: float = 0.25,
+    sync_docs: bool = False,
+    auto_push: bool = True,
 ) -> int:
     """Compare pipeline outputs against benchmark outputs, merging results into master dashboard."""
     pipeline_dir = Path(pipeline_dir)
@@ -2008,7 +2010,92 @@ def compare_directory_batch(
     generate_master_dashboard(merged_records, master_index_path)
     print(f"[CRKN Comparison] Generated Master AI Dashboard at: {master_index_path}")
 
+    if sync_docs:
+        sync_to_evaluations_repo(out_dir, auto_push=auto_push)
+
     return len(new_records)
+
+
+def sync_to_evaluations_repo(
+    compare_dir: Path,
+    eval_repo_dir: Optional[Path] = None,
+    auto_push: bool = True
+) -> bool:
+    """Sync compare directory results (HTML, JSON, CSV, JPG scans) to OCR-Evaluations/docs and git push."""
+    import shutil
+    import subprocess
+
+    if eval_repo_dir is None:
+        eval_repo_dir = Path.home() / "Documents" / "OCR-Evaluations"
+
+    eval_repo_dir = Path(eval_repo_dir)
+    docs_dir = eval_repo_dir / "docs"
+
+    if not eval_repo_dir.exists() or not (eval_repo_dir / ".git").exists():
+        print(f"[CRKN Comparison] OCR-Evaluations repo not found at {eval_repo_dir}; skipping sync.")
+        return False
+
+    print(f"\n[CRKN Sync] Syncing comparison outputs to {docs_dir}...")
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Copy directory tree including HTML, JSON, CSV, and JPG scans
+        for item in compare_dir.iterdir():
+            dest = docs_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+
+        print(f"[CRKN Sync] Successfully copied evaluation assets to {docs_dir}.")
+
+        if auto_push:
+            print("[CRKN Sync] Committing and pushing updates to GitHub Pages...")
+            # Git add
+            subprocess.run(
+                ["git", "add", "docs/"],
+                cwd=str(eval_repo_dir),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            # Check if there are changes staged
+            status_res = subprocess.run(
+                ["git", "status", "--porcelain", "docs/"],
+                cwd=str(eval_repo_dir),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if not status_res.stdout.strip():
+                print("[CRKN Sync] No changes detected to commit in OCR-Evaluations.")
+                return True
+
+            commit_msg = "Auto-update evaluation docs & dashboard from paddle_pipeline run"
+            subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                cwd=str(eval_repo_dir),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            push_res = subprocess.run(
+                ["git", "push", "origin", "main"],
+                cwd=str(eval_repo_dir),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            print("[CRKN Sync] Successfully pushed to origin main on crkn-rcdr/OCR-Evaluations!")
+            return True
+    except subprocess.CalledProcessError as e:
+        print(f"[CRKN Sync ERROR] Git command failed: {e.cmd}\n{e.stderr or e.stdout}")
+        return False
+    except Exception as e:
+        print(f"[CRKN Sync ERROR] Failed to sync to OCR-Evaluations: {e}")
+        return False
+
+    return True
 
 
 def main() -> int:
@@ -2047,6 +2134,8 @@ def main() -> int:
     parser.add_argument("--render-image", action="store_true", help="Render annotated side-by-side PNG diffs")
     parser.add_argument("--min-iou", type=float, default=0.25, help="Minimum IoU threshold to consider boxes aligned (default: 0.25)")
     parser.add_argument("--dashboard-only", action="store_true", help="Regenerate master index.html from existing summary data without reprocessing")
+    parser.add_argument("--sync-docs", action="store_true", help="Sync compare results and images to OCR-Evaluations/docs")
+    parser.add_argument("--no-push", action="store_true", help="Do not git push to remote when syncing docs")
 
     args = parser.parse_args()
 
@@ -2063,6 +2152,8 @@ def main() -> int:
             records = json.load(f)
         idx_path = generate_master_dashboard(records, out_dir / "index.html")
         print(f"[CRKN Comparison] Successfully rebuilt Master AI Dashboard at: {idx_path}")
+        if args.sync_docs:
+            sync_to_evaluations_repo(out_dir, auto_push=not args.no_push)
         return 0
 
     # Single-file mode
@@ -2089,6 +2180,8 @@ def main() -> int:
             out_html = out_dir / f"{stem}_comparison.html"
             generate_interactive_html(res, None, out_html)
             print(f"Generated HTML: {out_html}")
+        if args.sync_docs:
+            sync_to_evaluations_repo(out_dir, auto_push=not args.no_push)
         return 0
 
     # Directory batch mode
@@ -2100,6 +2193,8 @@ def main() -> int:
             render_html=args.render_html,
             render_image=args.render_image,
             min_iou=args.min_iou,
+            sync_docs=args.sync_docs,
+            auto_push=not args.no_push,
         )
         return 0 if count >= 0 else 1
 
