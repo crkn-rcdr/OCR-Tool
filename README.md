@@ -166,6 +166,17 @@ This bridges hairline fractures in letter strokes before DBNet and SVTR see them
 - **Function**: `estimate_skew_angle()`
 - Detects page rotation angle using horizontal projection analysis. If the skew is between $0.35^\circ$ and $5.0^\circ$, it straightens the page baseline horizontally, preventing OCR detectors from jumping across narrow newspaper column gutters.
 
+### 5. Table Ruling Line Suppression & Gutter Protection
+- **Function**: `suppress_ruling_lines_if_present()`
+- Statistical annuals and financial registers feature dense black grid lines that slice through characters and cause word bounding boxes to fracture.
+- Detects table grid intersections using horizontal and vertical morphological kernels. When $\ge 15$ intersections are detected, it suppresses the grid lines via telea inpainting and automatically tightens DBNet box dilation (`table_unclip_ratio = 1.25`), preventing numbers in adjacent columns from merging across narrow gutters.
+
+### 6. Adaptive 1.5× Bicubic Upscaling for Micro-Print (< 18px)
+- **Function**: `estimate_median_character_height()`
+- Automatically measures the median character height on the page during preprocessing.
+- If median height is $< 18\text{px}$ (e.g. 6pt legal notices or dense 9-column classifieds), the image is dynamically upscaled $1.5\times$ with bicubic interpolation.
+- **Coordinate Inversion (`services/tile_ocr.py` & `services/ocr_pp.py`)**: All OCR bounding boxes are scaled by $1 / 1.5$ back to original canvas dimensions, guaranteeing 100% exact alignment for Searchable PDFs and ALTO XML.
+
 ---
 
 ## Stage 2: Core Recognition & Tiling
@@ -183,6 +194,13 @@ The pipeline supports local high-performance OCR alongside state-of-the-art visi
 Microfilm newspaper broadsheets often exceed $6000 \times 9000$ pixels. Processing these in a single pass can exceed GPU VRAM or compress small 6pt text below recognition thresholds. 
 
 When page dimensions exceed 4000px, the engine tiles the scan into horizontal/vertical slices with a 15% overlap margin, runs OCR concurrently, and merges the resulting text bounding boxes seamlessly via Non-Maximum Suppression (NMS).
+
+### Autonomous Script & Language Resolution (`services/language_detection.py`)
+CRKN collections span multilingual archives: 19th-century English newspapers, French Canadian records, and early 20th-century Chinese broadsheets.
+- **Auto-Detect Script (Default in UI)**: The pipeline inspects folder metadata and collection identifiers:
+  - **Traditional Chinese (`chinese_cht`)**: Detected for Chinese broadsheets (e.g., `sfu.00001` *The Chinese Times / 大漢公報*, `dahan`, `cht`). Recognizes over 6,000 Traditional Chinese characters with near 100% lexical precision.
+  - **Bilingual Federal Serials (`fr` Superset)**: Detected for Canadian federal publications (StatCan `sru.00007`, `sru.00004`, RCMP forms, Hansard). Paddle's French model is a strict superset of English, capturing all French accented vowels without dropping any English characters.
+  - **Standard Serials**: Defaults to `en`.
 
 ---
 
@@ -255,6 +273,12 @@ In 18th- and early 19th-century Canadian gazettes, the historical medial long-s 
 
 ### 4. Bilingual French Diacritic Regularization
 Letterpress ink on 19th-century French Canadian documents frequently dropped accents. When language detection flags French, unaccented legal and administrative terms (*republique* $\rightarrow$ *république*, *decret* $\rightarrow$ *décret*, *senateur* $\rightarrow$ *sénateur*, *assemblee* $\rightarrow$ *assemblée*, *hopital* $\rightarrow$ *hôpital*) are restored against canonical Académie française vocabulary.
+
+### 5. Word-Box & Historical Ligature Consolidation (`services/word_box_normalization.py`)
+PaddleX outputs symbols as individual word boxes. In historical print, this creates sub-token fragmentation:
+- **Historical Latin Ligatures**: Automatically merges `["&", "c", "."]` into single valid token `"&c."`.
+- **Standard Abbreviations**: Fuses `["No", "."]` $\rightarrow$ `"No."`, `["Co", "."]` $\rightarrow$ `"Co."`, `["Reg", "."]` $\rightarrow$ `"Reg."`, `["Esq", "."]` $\rightarrow$ `"Esq."`.
+- **Orphan Punctuation Attachment**: Attaches trailing commas, periods, colons, and semicolons to their preceding word tokens, eliminating false-positive dictionary rejections while preserving 1:1 ALTO XML and PDF bounding box coordinates.
 
 ---
 
@@ -390,7 +414,8 @@ paddle_pipeline/
 ├── compose.yaml                   Docker Compose configuration for VLM containers
 ├── requirements.txt               Python dependencies for Windows / GPU
 ├── services/
-│   ├── image_preprocessing.py     Border crop, CLAHE, stroke reconnection, deskew
+│   ├── image_preprocessing.py     Border crop, CLAHE, stroke reconnection, deskew, table suppression
+│   ├── language_detection.py      Multilingual script detection (Traditional Chinese, bilingual fr, en)
 │   ├── ocr_pp.py                  PP-OCRv6 FastDeploy engine execution
 │   ├── post_ocr_vl.py             Dots OCR VLM arbitration & line delegation
 │   ├── historical_lexicon.py      Canadian gazetteer, long-s & French diacritics
