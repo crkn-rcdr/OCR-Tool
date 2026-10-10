@@ -9,15 +9,10 @@ An intuitive, high-throughput OCR and layout preservation tool developed for the
 ### Step 1: Launch the Application
 Double-click **CRKN OCR Tool** on your desktop (or double-click `Start OCR Tool.bat` in the project folder).
 
-<img width="1913" height="1117" alt="Desktop Shortcut" src="https://github.com/user-attachments/assets/5096fafe-70f5-4c6a-b7e2-4244f51b5a91" />
-
 ---
 
 ### Step 2: Service Initialization
 A terminal window will open briefly as background services verify offline pre-cached models and initialize the GPU.
-
-<img width="949" height="999" alt="Console Launch Screen" src="https://github.com/user-attachments/assets/7ca5b637-0a2e-4aa5-bd13-5f649770ef93" />
-<img width="1917" height="1145" alt="Service Verification" src="https://github.com/user-attachments/assets/9a4d076f-4755-4a24-abc2-8bf80c458a22" />
 
 ---
 
@@ -86,14 +81,12 @@ Once initialization completes, your web browser will automatically open **`http:
 
 Click **Run OCR** to start processing.
 
-Progress will stream directly into the **OCR Output** log:
-<img width="1462" height="663" alt="OCR Output Streaming" src="https://github.com/user-attachments/assets/0631df7d-7ca5-49bc-8e08-693dcdc0cedc" />
+Progress will stream directly into the **OCR Result** box in real time.
 
 When processing completes, you will see:
 ```text
 OCR Completed, please check pdf and alto files at your output folder
 ```
-<img width="1507" height="550" alt="OCR Complete Screen" src="https://github.com/user-attachments/assets/6bb6489d-c00a-4ac3-92b6-f5d5a975bc47" />
 
 ---
 
@@ -123,9 +116,7 @@ Clicking on any page opens the interactive **Side-by-Side Diff Viewer**, highlig
 
 ## 🛑 Stopping the Tool
 
-When finished for the day, click **Stop CRKN OCR Tool** from the Start Menu (or run `Stop OCR Tool.bat`):
-
-<img width="1916" height="1115" alt="Stop Shortcut in Start Menu" src="https://github.com/user-attachments/assets/d016b562-0dd1-4006-8337-4e6c7f97f1bf" />
+When finished for the day, click **Stop CRKN OCR Tool** from the Start Menu (or run `Stop OCR Tool.bat`).
 
 ---
 
@@ -141,4 +132,3 @@ If you encounter an issue, copy and send the log files from:
 ```text
 C:\ProgramData\CRKN OCR Tool\logs
 ```
-<img width="1182" height="899" alt="Logs Folder" src="https://github.com/user-attachments/assets/34d428bd-f7d5-4a33-aef5-02790e2da1cd" />
