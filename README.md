@@ -23,6 +23,8 @@ Launch the user-friendly interface for single pages or folder batches:
 ```
 Open **`http://127.0.0.1:7860`** in your browser.
 
+![CRKN Web Interface](images/01_web_interface.png)
+
 > [!TIP]
 > **Recommended UI Settings for Historical Archives**:
 > - **Language**: Leave as `Auto-detect Script` (automatically identifies Traditional Chinese, Bilingual French/English, or English).
@@ -320,6 +322,12 @@ To compare an existing folder of ALTO XML files against ABBYY FineReader baselin
 The tool produces:
 - `compare/index.html`: An interactive HTML dashboard with side-by-side diffs, token concordance rates, and win statistics.
 - `compare/comparison_summary.csv`: Machine-readable token statistics and dictionary validity metrics per page.
+
+#### Executive Benchmark Overview
+![OCR Quality Benchmark Dashboard](images/02_comparison_dashboard.png)
+
+#### Interactive Side-by-Side Word Concordance Diff
+![Interactive Side-by-Side Word Concordance Diff](images/03_side_by_side_diff.png)
 
 ---
 

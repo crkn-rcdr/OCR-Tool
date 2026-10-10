@@ -14,7 +14,7 @@ Double-click **CRKN OCR Tool** on your desktop (or double-click `Start OCR Tool.
 ---
 
 ### Step 2: Service Initialization
-You will see a command window open briefly as it verifies background services and loads pre-cached models.
+A terminal window will open briefly as background services verify offline pre-cached models and initialize the GPU.
 
 <img width="949" height="999" alt="Console Launch Screen" src="https://github.com/user-attachments/assets/7ca5b637-0a2e-4aa5-bd13-5f649770ef93" />
 <img width="1917" height="1145" alt="Service Verification" src="https://github.com/user-attachments/assets/9a4d076f-4755-4a24-abc2-8bf80c458a22" />
@@ -24,13 +24,13 @@ You will see a command window open briefly as it verifies background services an
 ### Step 3: Browser Interface
 Once initialization completes, your web browser will automatically open **`http://127.0.0.1:7860/`**.
 
-<img width="1898" height="927" alt="CRKN Web Interface" src="https://github.com/user-attachments/assets/72f203dc-1ff5-4e20-be45-1f0062af7a32" />
+![CRKN Web Interface](images/01_web_interface.png)
 
 ---
 
 ### Step 4: Choose the OCR Method
 
-<img width="1616" height="144" alt="OCR Method Selector" src="https://github.com/user-attachments/assets/2e08359b-93f5-4eab-adb0-4de3dcb6cbcc" />
+![OCR Method Selector](images/04_method_selector.png)
 
 | OCR Method | Best For | Advantages | Outputs Supported |
 | :--- | :--- | :--- | :--- |
@@ -48,17 +48,18 @@ Once initialization completes, your web browser will automatically open **`http:
 
 ### Step 5: Select Folders
 
+![Folder Selector](images/05_folder_selection.png)
+
 1. **Image Input Folder**: Enter or browse to the folder containing your scans (e.g. `C:\Users\blapierre\Documents\PDF Test\Newspapers\ome.00003_19290103`). If the input folder contains multiple subfolders, the tool will queue them up automatically in order.
 2. **Output Folder**: Enter or browse to where you want the resulting PDFs, ALTO XML, and text files saved (e.g. `C:\Users\blapierre\Desktop\PDF Test - Final`).
 
-<img width="1539" height="403" alt="Folder Selector" src="https://github.com/user-attachments/assets/44144ad0-2e85-4b78-bde0-4d0b6146865e" />
-
 ---
 
-### Step 6: Select Language / Script
+### Step 6 & 7: Language Selection and Master Processing Toggles
 
-<img width="1526" height="590" alt="Language Dropdown" src="https://github.com/user-attachments/assets/d096d410-8168-4780-bf5e-8d96c5ba38d0" />
+![Language Dropdown and Master Toggles](images/06_language_and_options.png)
 
+#### Language Selection
 * **`Auto-detect Script (Recommended)` (Default)**:
   * **Leave this on `Auto-detect Script` for most jobs!** The engine automatically examines your folder and files:
     * Dispatches **Traditional Chinese (`chinese_cht`)** for Chinese-Canadian broadsheets (e.g. *The Chinese Times* / 《大漢公報》).
@@ -73,16 +74,11 @@ Once initialization completes, your web browser will automatically open **`http:
     * `Latin (Latina - Parish / Church Records)`
     * `Polish (Polski)`, `Russian (Русский)`, `Icelandic (Íslenska)`, `Japanese (日本語)`...
 
----
-
-### Step 7: Master Processing Toggles
-
-<img width="1917" height="1056" alt="Pre and Post Process Checkboxes" src="https://github.com/user-attachments/assets/014b7803-0d1e-41d4-ae0e-fc3d60efc15e" />
-
+#### Master Processing Toggles
 | Toggle | What It Does | When to Check It |
 | :--- | :--- | :--- |
-| **`Pre Process`** | **Adaptive Archival Enhancement**: Crops black microfilm borders (preserving pixel offsets), boosts dynamic contrast (CLAHE), reconnects broken letter strokes ($2\times 2$ morphological closing), straightens tilt (deskew), suppresses table ruling lines, and dynamically upscales micro-print ($< 18\text{px}$) by $1.5\times$ with coordinate inversion. | **Recommended ON** for all historical microfilms, yellowed broadsheets, and newspaper scans. |
-| **`Post Process`** | **Visual & Linguistic Arbitration**: Evaluates degraded text lines ($< 0.78$ score) and delegates them to **Dots OCR 7B**. Merges split contractions (`&c.`) and abbreviations (`No.`, `Co.`), re-attaches orphan punctuation, fixes archaic long-s (`ſ` $\rightarrow$ `s`), and restores French accents against the Canadiana Historical Gazetteer. | **Recommended ON** for production preservation output. Turn off only for quick test drafts. |
+| **`pre process`** | **Adaptive Archival Enhancement**: Crops black microfilm borders (preserving pixel offsets), boosts dynamic contrast (CLAHE), reconnects broken letter strokes ($2\times 2$ morphological closing), straightens tilt (deskew), suppresses table ruling lines, and dynamically upscales micro-print ($< 18\text{px}$) by $1.5\times$ with coordinate inversion. | **Recommended ON** for all historical microfilms, yellowed broadsheets, and newspaper scans. |
+| **`post process`** | **Visual & Linguistic Arbitration**: Evaluates degraded text lines ($< 0.78$ score) and delegates them to **Dots OCR 7B**. Merges split contractions (`&c.`) and abbreviations (`No.`, `Co.`), re-attaches orphan punctuation, fixes archaic long-s (`ſ` $\rightarrow$ `s`), and restores French accents against the Canadiana Historical Gazetteer. | **Recommended ON** for production preservation output. Turn off only for quick test drafts. |
 
 ---
 
@@ -110,6 +106,18 @@ In your designated output folder, the pipeline generates:
 3. **`.json`**: Normalized OCR geometry containing bounding box coordinates and confidence scores.
 4. **`.txt`** *(if selected)*: Clean plain text with preserved column-aware line breaks.
 5. **`.post_ocr_vl.csv`**: Audit log recording every word or line reviewed and corrected by Dots OCR 7B.
+
+---
+
+## 📊 Quality Verification & ABBYY Comparison Dashboard
+
+To inspect the OCR quality against baseline ABBYY FineReader outputs, staff can open `compare/index.html` in any web browser:
+
+![OCR Quality Benchmark Dashboard](images/02_comparison_dashboard.png)
+
+Clicking on any page opens the interactive **Side-by-Side Diff Viewer**, highlighting exact word matches, discrepancies, and dictionary win rates:
+
+![Side-by-Side Word Concordance Diff](images/03_side_by_side_diff.png)
 
 ---
 
