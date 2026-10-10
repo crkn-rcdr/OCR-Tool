@@ -24,6 +24,7 @@ from langdetect import DetectorFactory, LangDetectException, detect_langs
 from PIL import Image
 from spellchecker import SpellChecker
 
+from services.historical_lexicon import ALL_CANADIAN_LEXICON_TOKENS
 from services.ocr_defaults import (
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
@@ -186,6 +187,10 @@ class SpellCheckerAdapter:
             return None
         if value in self.cache:
             return self.cache[value]
+
+        if value.casefold() in ALL_CANADIAN_LEXICON_TOKENS:
+            self.cache[value] = None
+            return None
 
         try:
             if not self.checker.unknown([value]):
@@ -689,6 +694,36 @@ def collect_word_candidates(
             rec_scores[line_index] if line_index < len(rec_scores) else None
         )
 
+        # Line-Level VLM Delegation: heavily degraded lines (<0.78) are delegated
+        # to Dots OCR as a whole line crop rather than inefficient word-by-word checks.
+        if (
+            line_score is not None
+            and line_score < 0.78
+            and len(words) >= 2
+        ):
+            line_box = line_bbox_for_candidates(ocr_payload, line_index, [])
+            if valid_bbox(line_box):
+                rec_texts_list = ocr_payload.get("rec_texts") or []
+                line_text_val = (
+                    str(rec_texts_list[line_index] or "")
+                    if line_index < len(rec_texts_list)
+                    else " ".join(str(w or "") for w in words)
+                )
+                if line_text_val.strip():
+                    candidates.append(
+                        WordCandidate(
+                            line_index=line_index,
+                            word_index=0,
+                            text=line_text_val,
+                            box=line_box,
+                            line_score=line_score,
+                            weirdness=1.0,
+                            reasons=["line-level degraded (<0.78)"],
+                            source="full_line",
+                        )
+                    )
+                    continue
+
         for word_index, word in enumerate(words):
             text = str(word or "")
             if mode == "suspicious" and not is_word_token(text):
@@ -911,7 +946,7 @@ def group_candidate_batches(
     current_word_batch: list[WordCandidate] = []
 
     for candidate in candidates:
-        if candidate.source == "line_text":
+        if candidate.source in {"line_text", "full_line"}:
             if current_word_batch:
                 batches.append(current_word_batch)
                 current_word_batch = []
@@ -930,7 +965,7 @@ def group_candidate_batches(
 
 def should_process_batch_as_line(batch: list[WordCandidate]) -> bool:
     """Return whether a candidate batch should be checked as one line image."""
-    return any(candidate.source == "line_text" for candidate in batch)
+    return any(candidate.source in {"line_text", "full_line"} for candidate in batch)
 
 
 def process_line_batch(
@@ -1029,7 +1064,7 @@ def process_line_batch(
         tile.save(tile_path)
         saved_tile_count += 1
 
-    if len(batch) == 1 and batch[0].source == "line_text":
+    if len(batch) == 1 and batch[0].source in {"line_text", "full_line"}:
         return process_single_line_text_batch(
             tile,
             crop_box,
@@ -1123,18 +1158,22 @@ def process_single_line_text_batch(
     results = []
     for backend in [active_backend]:
         try:
-            raw_text = run_backend_check(
-                backend,
-                tile,
-                candidate.text,
-                opt,
-            )
-            selected_from_line = extract_line_fallback_candidate_text(
-                raw_text,
-                candidate.text,
-                backend,
-                opt,
-            )
+            if candidate.source == "full_line" and str(backend).lower() in {"dots_ocr", "dotsocr", "dots"}:
+                raw_text = request_dotsocr_line(tile, candidate.text, opt)
+                selected_from_line = raw_text
+            else:
+                raw_text = run_backend_check(
+                    backend,
+                    tile,
+                    candidate.text,
+                    opt,
+                )
+                selected_from_line = extract_line_fallback_candidate_text(
+                    raw_text,
+                    candidate.text,
+                    backend,
+                    opt,
+                )
             results.append(
                 {
                     "backend": backend,
@@ -1149,7 +1188,9 @@ def process_single_line_text_batch(
             results.append({"backend": backend, "error": str(exc)})
 
     record["backend_results"] = results
-    selected_text, reason = choose_correction(candidate.text, results)
+    selected_text, reason = choose_correction(
+        candidate.text, results, is_full_line=(candidate.source == "full_line")
+    )
     record["selected_text"] = selected_text
     record["reason"] = reason
 
@@ -1528,7 +1569,7 @@ def build_word_profile(
         token_counts=all_token_counts,
         total_ngrams=sum(ngrams.values()),
         vocab_size=len(ngrams),
-        known_words={token for token, count in all_token_counts.items() if count >= 2},
+        known_words={token for token, count in all_token_counts.items() if count >= 2} | {token.lower() for token in ALL_CANADIAN_LEXICON_TOKENS},
         common_words_by_length=group_common_words_by_length(all_token_counts),
         training_token_count=len(training_tokens),
         language=language,
@@ -2300,6 +2341,7 @@ def extract_paddlevl_text(data: Any) -> str:
 def choose_correction(
     original_text: str,
     results: list[dict[str, Any]],
+    is_full_line: bool = False,
 ) -> tuple[str | None, str]:
     """Choose an accepted correction string from one backend response."""
     usable = [
@@ -2307,7 +2349,10 @@ def choose_correction(
         for result in results
         if result.get("text")
     ]
-    usable = [text for text in usable if is_clean_correction(original_text, text)]
+    if is_full_line:
+        usable = [text for text in usable if is_clean_line_correction(original_text, text)]
+    else:
+        usable = [text for text in usable if is_clean_correction(original_text, text)]
     if not usable:
         return None, "no_clean_vl_text"
 
@@ -2338,12 +2383,27 @@ def is_clean_correction(original_text: str, corrected_text: str) -> bool:
     return True
 
 
+def is_clean_line_correction(original_text: str, corrected_text: str) -> bool:
+    """Return whether a proposed full-line correction is safe to apply automatically."""
+    corrected = corrected_text.strip()
+    if not corrected or len(corrected) > 500:
+        return False
+    if not WORD_RE.search(corrected):
+        return False
+    if len(original_text.split()) >= 2 and len(corrected.split()) == 0:
+        return False
+    return True
+
+
 def apply_candidate_correction(
     ocr_payload: dict[str, Any],
     candidate: WordCandidate,
     corrected_text: str,
 ) -> None:
     """Apply one accepted correction to the OCR payload in place."""
+    if candidate.source == "full_line":
+        apply_full_line_correction(ocr_payload, candidate, corrected_text)
+        return
     if candidate.source == "line_text":
         apply_line_text_correction(ocr_payload, candidate, corrected_text)
         return
@@ -2801,3 +2861,104 @@ def parse_optional_float(value: Any) -> float | None:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write a JSON payload with the repo standard UTF-8 formatting."""
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+
+def apply_full_line_correction(
+    ocr_payload: dict[str, Any],
+    candidate: WordCandidate,
+    corrected_text: str,
+) -> None:
+    """Apply full-line transcription from VLM to rec_texts and text_word."""
+    rec_texts = ocr_payload.get("rec_texts")
+    if isinstance(rec_texts, list) and candidate.line_index < len(rec_texts):
+        rec_texts[candidate.line_index] = corrected_text
+
+    text_word = ocr_payload.get("text_word")
+    if isinstance(text_word, list) and candidate.line_index < len(text_word):
+        new_words = corrected_text.split()
+        if new_words:
+            text_word[candidate.line_index] = new_words
+
+
+def request_dotsocr_line(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+) -> str:
+    """Request a full line transcription from the Dots OCR OpenAI-compatible endpoint."""
+    raw_url = str(
+        opt.get("post_ocr_vl_dotsocr_url")
+        or opt.get("dotsocr_url")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_URL
+    ).rstrip("/")
+    if raw_url.endswith("/chat/completions"):
+        url = raw_url
+    else:
+        url = f"{raw_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    requested_model = str(
+        opt.get("post_ocr_vl_dotsocr_model")
+        or opt.get("dotsocr_model")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_MODEL
+    )
+    model = resolve_openai_model(url, requested_model, headers=headers, session=session)
+
+    b64_img = image_to_base64(tile)
+    prompt = (
+        "Read and transcribe all text in this cropped image line accurately. "
+        "Maintain the exact wording and capitalization. "
+        "Return only the transcribed line text without explanations or markdown formatting."
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_img}"
+                        },
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 256,
+    }
+
+    client = session if session is not None else requests
+    response = client.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=(10, 60),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+    data = response.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+        raw_text = " ".join(parts)
+    else:
+        raw_text = str(content or "")
+
+    return clean_vl_text(raw_text)

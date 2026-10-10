@@ -263,6 +263,7 @@ def _clean_text_value(text: Any, *, allow_space_insertion: bool) -> str:
     value = _clean_repeated_punctuation(value)
     if allow_space_insertion:
         value = _clean_spacing_artifacts(value)
+    value = _clean_historical_orthography(value)
     value = re.sub(r"[ \t]{2,}", " ", value)
     return value.strip()
 
@@ -308,3 +309,21 @@ def _clean_spacing_artifacts(value: str) -> str:
         for pattern, replacement in SPACING_PATTERNS:
             updated = pattern.sub(replacement, updated)
     return updated
+
+
+
+def _clean_historical_orthography(value: str) -> str:
+    """Normalize archaic long-s errors and French diacritics in historical print."""
+    try:
+        from services.historical_lexicon import normalize_historical_orthography
+
+        has_french_markers = bool(
+            re.search(
+                r"\b(?:le|la|les|un|une|des|du|de|au|aux|et|dans|pour|par|sur|avec|qui|que)\b",
+                value,
+                re.IGNORECASE,
+            )
+        )
+        return normalize_historical_orthography(value, is_french=has_french_markers)
+    except Exception:
+        return value

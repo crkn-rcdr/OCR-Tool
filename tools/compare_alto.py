@@ -88,6 +88,17 @@ COMMON_VALID_TOKENS = {
     "no", "vol", "pp", "co", "ltd", "inc", "dept", "sr", "jr", "vs", "etc", "can",
     "cap", "sec", "art", "sess", "geo", "edw", "wm", "chas", "thos", "jas"
 }
+try:
+    from services.historical_lexicon import (
+        ALL_CANADIAN_LEXICON_TOKENS,
+        resolve_archaic_long_s,
+        regularize_french_diacritics,
+    )
+    COMMON_VALID_TOKENS.update(ALL_CANADIAN_LEXICON_TOKENS)
+except ImportError:
+    ALL_CANADIAN_LEXICON_TOKENS = set()
+    resolve_archaic_long_s = None
+    regularize_french_diacritics = None
 SINGLE_LETTER_VALID = {"a", "i", "y", "à", "ô", "o", "d", "l"}
 
 
@@ -137,6 +148,18 @@ def is_lexically_valid_word(word: str) -> bool:
     if clean in COMMON_VALID_TOKENS:
         _LEXICAL_CACHE[clean] = True
         return True
+
+    if resolve_archaic_long_s is not None:
+        long_s_cand = resolve_archaic_long_s(clean)
+        if long_s_cand and long_s_cand != clean and is_lexically_valid_word(long_s_cand):
+            _LEXICAL_CACHE[clean] = True
+            return True
+
+    if regularize_french_diacritics is not None:
+        diacritic_cand = regularize_french_diacritics(clean)
+        if diacritic_cand and diacritic_cand != clean and is_lexically_valid_word(diacritic_cand):
+            _LEXICAL_CACHE[clean] = True
+            return True
 
     sp_en, sp_fr = get_spellcheckers()
     if sp_en is None and sp_fr is None:
