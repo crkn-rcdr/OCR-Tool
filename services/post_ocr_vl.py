@@ -1234,17 +1234,25 @@ def process_word_batch(
         saved_tile_count=saved_tile_count,
     )
 
-    crop_tasks: list[tuple[WordCandidate, dict[str, Any], Image.Image]] = []
+    crop_tasks: list[tuple[WordCandidate, dict[str, Any], Image.Image, str]] = []
     crop_failed: list[tuple[WordCandidate, dict[str, Any]]] = []
 
     for candidate in batch:
         record = candidate_record(candidate)
-        record["crop_type"] = "word"
         try:
+            window_box, context_text = get_word_context_window(
+                ocr_payload,
+                candidate,
+                window_words=1,
+            )
+            record["crop_type"] = "word_window" if valid_bbox(window_box) else "word"
+            record["context_text"] = context_text
+
             tile, crop_box = crop_word_tile(
                 image,
                 candidate.box,
                 padding_px=metadata["padding_px"],
+                window_box=window_box,
             )
             record["crop_box"] = crop_box
 
@@ -1257,7 +1265,7 @@ def process_word_batch(
                 record["tile_path"] = str(tile_path)
                 saved_tile_count += 1
 
-            crop_tasks.append((candidate, record, tile))
+            crop_tasks.append((candidate, record, tile, context_text))
         except Exception as exc:
             record["error"] = f"Unable to crop word tile: {exc}"
             crop_failed.append((candidate, record))
@@ -1265,8 +1273,8 @@ def process_word_batch(
     verified_results: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
 
     if crop_tasks:
-        def _check_one(item: tuple[WordCandidate, dict[str, Any], Image.Image]):
-            cand, rec, tile_obj = item
+        def _check_one(item: tuple[WordCandidate, dict[str, Any], Image.Image, str]):
+            cand, rec, tile_obj, ctx_text = item
             results = []
             for backend in backend_order:
                 try:
@@ -1276,6 +1284,7 @@ def process_word_batch(
                         cand.text,
                         opt,
                         session=session,
+                        context_text=ctx_text,
                     )
                     results.append({"backend": backend, "text": text})
                 except Exception as exc:
@@ -1907,16 +1916,59 @@ def is_legitimate_letter_digit_token(text: str) -> bool:
 
 
 
+def get_word_context_window(
+    ocr_payload: dict[str, Any],
+    candidate: WordCandidate,
+    window_words: int = 1,
+) -> tuple[list[float] | None, str]:
+    """Retrieve bounding box and text for a surrounding word window (previous, target, next)."""
+    text_word = ocr_payload.get("text_word") or []
+    text_word_boxes = ocr_payload.get("text_word_boxes") or []
+
+    line_idx = candidate.line_index
+    word_idx = candidate.word_index
+
+    if line_idx >= len(text_word) or line_idx >= len(text_word_boxes):
+        return None, candidate.text
+
+    words = text_word[line_idx]
+    boxes = text_word_boxes[line_idx]
+
+    if hasattr(words, "tolist"):
+        words = words.tolist()
+    if hasattr(boxes, "tolist"):
+        boxes = boxes.tolist()
+
+    if not isinstance(words, (list, tuple)) or not isinstance(boxes, (list, tuple)):
+        return None, candidate.text
+
+    if word_idx >= len(words) or word_idx >= len(boxes):
+        return None, candidate.text
+
+    start_idx = max(0, word_idx - window_words)
+    end_idx = min(len(words), word_idx + window_words + 1)
+
+    window_word_list = [str(w) for w in words[start_idx:end_idx] if str(w).strip()]
+    context_text = " ".join(window_word_list).strip()
+
+    valid_boxes = [geometry_to_bbox(b) for b in boxes[start_idx:end_idx] if geometry_to_bbox(b)]
+    window_box = union_bbox(valid_boxes) if valid_boxes else None
+
+    return window_box, context_text or candidate.text
+
+
 def crop_word_tile(
     image: Image.Image,
     box: list[float],
     padding_px: int,
+    window_box: list[float] | None = None,
 ) -> tuple[Image.Image, list[int]]:
-    """Crop an image tile around one suspicious OCR word candidate."""
-    x0, y0, x1, y1 = box
+    """Crop an image tile around one suspicious OCR word candidate, optionally expanded to a context window."""
+    target_box = window_box if valid_bbox(window_box) else box
+    x0, y0, x1, y1 = target_box
     width = max(1, x1 - x0)
     height = max(1, y1 - y0)
-    contextual_padding_x = max(padding_px, int(width * 0.35))
+    contextual_padding_x = max(padding_px, int(width * (0.15 if window_box else 0.35)))
     contextual_padding_y = max(padding_px, int(height * 0.75))
 
     left = max(0, int(x0 - contextual_padding_x))
@@ -2030,13 +2082,20 @@ def run_backend_check(
     original_text: str,
     opt: dict,
     session: requests.Session | None = None,
+    context_text: str | None = None,
 ) -> str:
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
     norm = str(backend or "").strip().lower()
     if norm in {"paddlevl", "paddle_vl", "paddleocr_vl"}:
         return request_paddlevl_word(tile, original_text, opt, session=session)
     if norm in {"dots_ocr", "dotsocr", "dots"}:
-        return request_dotsocr_word(tile, original_text, opt, session=session)
+        return request_dotsocr_word(
+            tile,
+            original_text,
+            opt,
+            session=session,
+            context_text=context_text,
+        )
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
@@ -2081,6 +2140,7 @@ def request_dotsocr_word(
     original_text: str,
     opt: dict,
     session: requests.Session | None = None,
+    context_text: str | None = None,
 ) -> str:
     """Request a word/token correction from the Dots OCR OpenAI-compatible endpoint."""
     raw_url = str(
@@ -2106,10 +2166,17 @@ def request_dotsocr_word(
     model = resolve_openai_model(url, requested_model, headers=headers, session=session)
 
     b64_img = image_to_base64(tile)
-    prompt = (
-        "Read the text in this image crop accurately. "
-        "Return only the word or text without explanations or markdown formatting."
-    )
+    if context_text and context_text.strip() and context_text.strip() != original_text.strip():
+        prompt = (
+            f"In this image excerpt showing the context '{context_text.strip()}', "
+            f"read and transcribe the target word '{original_text.strip()}'. "
+            "Return only the accurate target word without explanations, markdown, or punctuation wrappers."
+        )
+    else:
+        prompt = (
+            "Read the text in this image crop accurately. "
+            "Return only the word or text without explanations or markdown formatting."
+        )
     payload = {
         "model": model,
         "messages": [

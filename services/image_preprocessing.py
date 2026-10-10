@@ -139,6 +139,41 @@ def preprocessing_enabled(opt: dict | None) -> bool:
     )
 
 
+def detect_microfilm_degradation(gray: np.ndarray) -> tuple[bool, dict[str, Any]]:
+    """Analyze image contrast and edge gradient to auto-detect degraded microfilm.
+
+    Historical microfilms typically feature soft, blurry letter strokes (Laplacian variance < 75)
+    and compressed dynamic range with faded gray ink (p5 > 50).
+    """
+    height, width = gray.shape[:2]
+    sample = gray[
+        int(height * 0.1) : int(height * 0.9),
+        int(width * 0.1) : int(width * 0.9),
+    ]
+    if sample.size == 0:
+        return False, {}
+
+    p5, p95 = np.percentile(sample, [5, 95])
+    contrast_range = float(p95 - p5)
+    lap_var = float(cv2.Laplacian(sample, cv2.CV_64F).var())
+    std = float(sample.std())
+
+    # Microfilm signature:
+    # 1. Soft stroke edges (lap_var < 75.0) combined with faded ink (p5 > 50.0)
+    # 2. Or very low sharpness (lap_var < 60.0) and compressed contrast (range < 140.0)
+    is_microfilm = bool((lap_var < 75.0 and p5 > 50.0) or (lap_var < 60.0 and contrast_range < 140.0))
+
+    details = {
+        "laplacian_variance": round(lap_var, 1),
+        "percentile_5": round(float(p5), 1),
+        "percentile_95": round(float(p95), 1),
+        "contrast_range": round(contrast_range, 1),
+        "std_dev": round(std, 1),
+        "is_microfilm": is_microfilm,
+    }
+    return is_microfilm, details
+
+
 def preprocess_image_for_ocr(
     image_path: Path,
     out_dir: Path,
@@ -177,11 +212,19 @@ def preprocess_image_for_ocr(
         steps.append("crop_black_border")
         details.update(border_details)
 
-    processed, step_details = apply_preprocessing_steps(gray, preprocessing_steps)
+    # Auto-detect degraded microfilm and dynamically apply CLAHE contrast enhancement
+    is_microfilm, microfilm_details = detect_microfilm_degradation(gray)
+    details["microfilm_detection"] = microfilm_details
+    effective_steps = list(preprocessing_steps)
+    if is_microfilm and "contrast" not in effective_steps:
+        effective_steps.append("contrast")
+        details["auto_microfilm_clahe_applied"] = True
+
+    processed, step_details = apply_preprocessing_steps(gray, effective_steps)
     details.update(step_details)
     details["steps"] = [*steps, *step_details.get("steps", [])]
 
-    step_suffix = "_".join(preprocessing_steps)
+    step_suffix = "_".join(effective_steps)
     if ignore_black_border and step_suffix:
         suffix = f"black_border_{step_suffix}"
     elif ignore_black_border:
@@ -198,8 +241,8 @@ def preprocess_image_for_ocr(
     metadata = {
         "enabled": True,
         "preset": preset,
-        "preprocessing_steps": preprocessing_steps,
-        "label": preprocessing_steps_label(preprocessing_steps),
+        "preprocessing_steps": effective_steps,
+        "label": preprocessing_steps_label(effective_steps),
         "ignore_black_border": ignore_black_border,
         "original_input_path": str(image_path),
         "ocr_input_path": str(output_path),
