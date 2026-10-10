@@ -7,3 +7,4 @@ if errorlevel 1 (
   echo Update did not complete cleanly. Please send the message above to support.
   pause
 )
+

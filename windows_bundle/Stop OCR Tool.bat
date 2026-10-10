@@ -7,3 +7,4 @@ if errorlevel 1 (
   echo OCR Tool did not stop cleanly. Please send the message above to support.
   pause
 )
+
