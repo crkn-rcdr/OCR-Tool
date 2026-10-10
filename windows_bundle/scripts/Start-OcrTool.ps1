@@ -199,6 +199,8 @@ $python = Resolve-RepoPython -ProjectRoot $projectRoot
 $env:OCR_TOOL_PROJECT_DIR = $projectRoot
 $env:OCR_TOOL_HOST = "127.0.0.1"
 $env:OCR_TOOL_PORT = [string]$Port
+$env:PADDLE_PDX_CACHE_HOME = Join-Path $projectRoot ".paddlex"
+$env:PADDLE_HOME = Join-Path $projectRoot ".paddlex"
 $env:PADDLE_VL_API_URL = "http://127.0.0.1:8080"
 $env:OLMOCR_API_URL = "http://127.0.0.1:8000/v1"
 if (-not $env:OLMOCR_MODEL) {
