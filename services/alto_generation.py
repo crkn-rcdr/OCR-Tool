@@ -1048,7 +1048,26 @@ def should_insert_sp(left_item, right_item):
     if left in {"$", "£", "#"}:
         return False
 
+    # In CJK scripts, adjacent characters are not separated by whitespace
+    if _is_cjk_char(left[-1]) and _is_cjk_char(right[0]):
+        return False
+
     return True
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """Return whether a character belongs to CJK script ranges."""
+    if not ch:
+        return False
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF
+        or 0x3400 <= cp <= 0x4DBF
+        or 0x20000 <= cp <= 0x2A6DF
+        or 0xF900 <= cp <= 0xFAFF
+        or 0x3040 <= cp <= 0x30FF
+        or 0xAC00 <= cp <= 0xD7AF
+    )
 
 
 def sp_attrs_between(left_item, right_item, line, scale):

@@ -446,3 +446,4 @@ def normalize_historical_orthography(text: str, is_french: bool = False) -> str:
 
     updated = re.sub(r"\b[A-Za-z\u00C0-\u017F]+\b", _replace_word, updated)
     return updated
+

@@ -219,6 +219,12 @@ def preprocess_image_for_ocr(
         steps.append("auto_deskew")
         details["auto_deskew_angle_degrees"] = round(float(skew_angle), 4)
 
+    # Auto-suppress heavy table and form ruling lines that slice into text bounding boxes
+    gray, lines_suppressed = suppress_ruling_lines_if_present(gray)
+    if lines_suppressed:
+        steps.append("suppress_ruling_lines")
+        details["table_ruling_lines_suppressed"] = True
+
     # Auto-detect degraded microfilm and dynamically apply CLAHE + stroke reconnection
     is_microfilm, microfilm_details = detect_microfilm_degradation(gray)
     details["microfilm_detection"] = microfilm_details
@@ -516,3 +522,35 @@ def odd_between(value: int, minimum: int, maximum: int) -> int:
     if value % 2 == 0:
         value += 1
     return min(value, maximum if maximum % 2 == 1 else maximum - 1)
+
+
+
+def suppress_ruling_lines_if_present(gray: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Detect and suppress heavy table/form grid lines that fragment text bounding boxes."""
+    h, w = gray.shape[:2]
+    margin_y = int(h * 0.04)
+    margin_x = int(w * 0.04)
+    inner = gray[margin_y : h - margin_y, margin_x : w - margin_x]
+    if inner.size == 0:
+        return gray, False
+
+    thresh = cv2.adaptiveThreshold(
+        inner, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
+    )
+    h_len = max(30, inner.shape[1] // 25)
+    h_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1)))
+
+    v_len = max(30, inner.shape[0] // 30)
+    v_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
+
+    # Forms and tables have substantial grid intersections (>= 15 grid points)
+    grid_intersections = cv2.bitwise_and(h_lines, v_lines)
+    if cv2.countNonZero(grid_intersections) >= 15:
+        table_grid = cv2.bitwise_or(h_lines, v_lines)
+        dilated = cv2.dilate(table_grid, np.ones((3, 3), np.uint8), iterations=1)
+        inner_cleaned = cv2.inpaint(inner, dilated, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+        result = gray.copy()
+        result[margin_y : h - margin_y, margin_x : w - margin_x] = inner_cleaned
+        return result, True
+
+    return gray, False

@@ -90,6 +90,11 @@ POST_PROCESS_INFO = (
 
 # Define the list of supported languages for the dropdown menu
 LANGUAGE_CHOICES = [
+    ("Auto-detect Script", "auto"),
+    ("English", "en"),
+    ("French", "fr"),
+    ("Traditional Chinese (繁體中文)", "chinese_cht"),
+    ("Simplified Chinese (简体中文)", "ch"),
     ("Abkhazian", "abq"),
     ("Afrikaans", "af"),
     ("Old English", "ang"),
@@ -102,9 +107,7 @@ LANGUAGE_CHOICES = [
     ("Bihari", "bh"),
     ("Bhojpuri", "bho"),
     ("Bosnian", "bs"),
-    ("Simplified Chinese", "ch"),
     ("Chechen", "che"),
-    ("Traditional Chinese", "chinese_cht"),
     ("Czech", "cs"),
     ("Welsh", "cy"),
     ("Danish", "da"),
@@ -443,7 +446,7 @@ with gr.Blocks() as demo:
         language_dropdown = gr.Dropdown(
             choices=LANGUAGE_CHOICES,
             label="Select Language",
-            value=None,
+            value="auto",
         )
 
         generate_text_file = gr.Checkbox(

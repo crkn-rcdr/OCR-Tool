@@ -29,6 +29,7 @@ from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
 from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_RECOGNITION_BATCH_SIZE
+from services.language_detection import resolve_effective_language
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
@@ -301,10 +302,13 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
+                effective_lang = resolve_effective_language(lang, input_path)
+                file_opt = dict(opt, lang=effective_lang)
+
                 final_json, recovery_note = run_ocr_for_image(
                     image_path=input_path,
                     out_dir=out_dir,
-                    opt=opt,
+                    opt=file_opt,
                     select=select,
                 )
 
@@ -313,7 +317,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                     messages.append(f"{input_path.name} {recovery_note}")
                 if tile_source_images and supports_tiled_ocr(method, select):
                     messages.append(
-                        f"{input_path.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                        f"{input_path.name} created from {describe_tiling(file_opt)} and saved in {out_dir}"
                     )
                 else:
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
@@ -329,9 +333,9 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         final_json,
                         input_path,
                         method,
-                        lang,
+                        effective_lang,
                         select,
-                        run_options=opt,
+                        run_options=file_opt,
                     )
                     yield "\n".join(messages)
 
@@ -395,6 +399,9 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                     out_dir = output_base / rel_folder
                 out_dir.mkdir(parents=True, exist_ok=True)
 
+                effective_lang = resolve_effective_language(lang, folder)
+                folder_opt = dict(opt, lang=effective_lang)
+
                 folder_success = 0
                 folder_failure = 0
                 folder_pdf_success = 0
@@ -402,7 +409,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 folder_alto_success = 0
                 folder_alto_fail = 0
 
-                messages.append(f"Start processing folder: {folder}")
+                messages.append(f"Start processing folder: {folder} (Language: {effective_lang})")
                 yield "\n".join(messages)
 
                 # Initialize background workers for this folder:
@@ -413,7 +420,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                     next_prefetch_future = None
                     if len(images) > 0:
                         next_prefetch_future = prefetch_pool.submit(
-                            preprocess_image_for_ocr, images[0], out_dir, opt
+                            preprocess_image_for_ocr, images[0], out_dir, folder_opt
                         )
 
                     for img_idx, img in enumerate(images):
@@ -424,7 +431,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         curr_prefetch = next_prefetch_future
                         if img_idx + 1 < len(images):
                             next_prefetch_future = prefetch_pool.submit(
-                                preprocess_image_for_ocr, images[img_idx + 1], out_dir, opt
+                                preprocess_image_for_ocr, images[img_idx + 1], out_dir, folder_opt
                             )
                         else:
                             next_prefetch_future = None
@@ -443,7 +450,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                             final_json, recovery_note = run_ocr_for_image(
                                 image_path=img,
                                 out_dir=out_dir,
-                                opt=opt,
+                                opt=folder_opt,
                                 select=select,
                                 preprocessed_result=preprocessed_res,
                             )
@@ -455,7 +462,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 messages.append(f"{img.name} {recovery_note}")
                             if tile_source_images and supports_tiled_ocr(method, select):
                                 messages.append(
-                                    f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                                    f"{img.name} created from {describe_tiling(folder_opt)} and saved in {out_dir}"
                                 )
                             else:
                                 messages.append(f"{img.name} created and saved in {out_dir}")
@@ -470,7 +477,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                     final_json,
                                     folder,
                                     method,
-                                    lang,
+                                    effective_lang,
                                     select,
                                 )
                                 pending_post[fut] = ("pdf", img.name, final_json)

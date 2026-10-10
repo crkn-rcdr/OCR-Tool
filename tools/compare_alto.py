@@ -137,6 +137,11 @@ def is_lexically_valid_word(word: str) -> bool:
     if clean.isdigit() or re.match(r"^[\d,.]+$", clean):
         return True
 
+    # CJK characters (Chinese/Japanese/Korean) are natural-language word tokens
+    if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
+        _LEXICAL_CACHE[clean] = True
+        return True
+
     # Single-letter tokens
     if len(clean) == 1:
         return clean in SINGLE_LETTER_VALID
