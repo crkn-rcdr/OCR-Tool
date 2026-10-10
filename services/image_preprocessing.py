@@ -239,6 +239,21 @@ def preprocess_image_for_ocr(
         step_details.setdefault("steps", []).append("stroke_reconnect")
         details["auto_stroke_reconnect_applied"] = True
 
+    # Adaptive micro-print upscaling: if character heights are tiny (< 18px),
+    # upscale 1.5x with bicubic interpolation so DBNet & SVTR see optimal training dimensions
+    median_h = estimate_median_character_height(gray)
+    details["median_character_height_px"] = round(median_h, 1)
+    if median_h < 18.0 and max(original_height, original_width) <= 6000:
+        new_w = int(round(processed.shape[1] * 1.5))
+        new_h = int(round(processed.shape[0] * 1.5))
+        processed = cv2.resize(processed, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        details["coordinate_scale_factor"] = 1.5
+        details["micro_print_upscaling_applied"] = True
+        step_details.setdefault("steps", []).append("micro_print_upscale")
+
+    if lines_suppressed:
+        details["table_unclip_ratio"] = 1.25
+
     details.update(step_details)
     details["steps"] = [*steps, *step_details.get("steps", [])]
 
@@ -554,3 +569,30 @@ def suppress_ruling_lines_if_present(gray: np.ndarray) -> tuple[np.ndarray, bool
         return result, True
 
     return gray, False
+
+
+def estimate_median_character_height(gray: np.ndarray) -> float:
+    """Fast estimation of median text character height on the page in pixels."""
+    h, w = gray.shape[:2]
+    ch = min(1200, h)
+    cw = min(1200, w)
+    cy, cx = h // 2, w // 2
+    crop = gray[cy - ch // 2 : cy + ch // 2, cx - cw // 2 : cx + cw // 2]
+    if crop.size == 0:
+        return 24.0
+
+    _, thresh = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
+
+    heights = []
+    for i in range(1, min(num_labels, 500)):
+        comp_w = stats[i, cv2.CC_STAT_WIDTH]
+        comp_h = stats[i, cv2.CC_STAT_HEIGHT]
+        comp_area = stats[i, cv2.CC_STAT_AREA]
+        if 8 <= comp_h <= 65 and 4 <= comp_w <= 65 and 20 <= comp_area <= 2200:
+            if max(comp_w, comp_h) / max(1, min(comp_w, comp_h)) <= 3.2:
+                heights.append(comp_h)
+
+    if len(heights) >= 20:
+        return float(np.median(heights))
+    return 24.0

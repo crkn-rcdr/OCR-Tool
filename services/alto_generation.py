@@ -12,7 +12,7 @@ from numbers import Number
 
 from PIL import Image
 
-from services.word_box_normalization import merge_apostrophe_word_boxes
+from services.word_box_normalization import merge_apostrophe_word_boxes, merge_word_boxes_advanced
 
 
 ALTO_PROFILE_ABBYY_LIKE = "abbyy_like"
@@ -205,7 +205,7 @@ def extract_word_level_lines(ocr_payload):
                 )
             continue
 
-        words, boxes = merge_apostrophe_word_boxes(
+        words, boxes = merge_word_boxes_advanced(
             words,
             boxes,
             line_text=line_text,

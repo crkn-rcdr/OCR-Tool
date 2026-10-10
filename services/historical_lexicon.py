@@ -124,7 +124,7 @@ CANADIAN_HISTORICAL_ABBREVIATIONS: Set[str] = {
     "inst", "ult", "prox", "viz", "vid", "ibid", "op", "cit", "vol", "vols",
     "cap", "caps", "chap", "chaps", "sec", "secs", "sect", "sects", "art",
     "arts", "sess", "no", "nos", "fol", "fols", "pp", "p", "do", "ditto",
-    "etc", "et", "seq", "vs", "v",
+    "etc", "&c", "&c.", "c", "seq", "vs", "v", "reg", "greeting", "l.s.", "ls",
     # Units of measure & currency
     "lb", "lbs", "oz", "cwt", "qr", "qrs", "bush", "bu", "ft", "in", "yd",
     "yds", "sq", "acre", "acres", "arp", "arps", "sh", "pence", "cent",

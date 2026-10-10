@@ -2464,6 +2464,71 @@ def looks_like_point_sequence(value: Any) -> bool:
     )
 
 
+def scale_nested_geometry(
+    value: Any,
+    scale_x: float,
+    scale_y: float,
+    key: str | None = None,
+) -> Any:
+    """Scale nested geometry values by scale_x and scale_y."""
+    if scale_x == 1.0 and scale_y == 1.0:
+        return value
+
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if should_offset_key(child_key):
+                updated[child_key] = scale_geometry_value(
+                    child_value,
+                    scale_x,
+                    scale_y,
+                )
+            else:
+                updated[child_key] = scale_nested_geometry(
+                    child_value,
+                    scale_x,
+                    scale_y,
+                    key=child_key,
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_offset_key(key):
+            return scale_geometry_value(value, scale_x, scale_y)
+
+        return [
+            scale_nested_geometry(item, scale_x, scale_y, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def scale_geometry_value(value: Any, scale_x: float, scale_y: float) -> Any:
+    """Scale one geometry-shaped value by the supplied scaling factors."""
+    if looks_like_bbox(value):
+        return [
+            round(value[0] * scale_x, 2),
+            round(value[1] * scale_y, 2),
+            round(value[2] * scale_x, 2),
+            round(value[3] * scale_y, 2),
+        ]
+
+    if looks_like_point_sequence(value):
+        return [
+            [round(point[0] * scale_x, 2), round(point[1] * scale_y, 2)]
+            for point in value
+        ]
+
+    if isinstance(value, dict):
+        return scale_nested_geometry(value, scale_x, scale_y)
+
+    if isinstance(value, list):
+        return [scale_geometry_value(item, scale_x, scale_y) for item in value]
+
+    return value
+
+
 def geometry_to_bbox(geometry: Any) -> list[float]:
     """Convert supported geometry shapes into a plain bounding box."""
     bounds = geometry_bounds(geometry)

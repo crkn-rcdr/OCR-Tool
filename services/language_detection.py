@@ -53,6 +53,20 @@ FRENCH_MARKERS = {
     "canada_est",
 }
 
+# Canadian federal bilingual records and official publications (RCMP, StatCan annuals, Parliamentary)
+# Paddle's 'fr' model is a strict superset of 'en' (contains all Latin letters A-Z + all French accented vowels)
+BILINGUAL_CANADIAN_MARKERS = {
+    "sru.00007",
+    "sru.00004",
+    "rcmp",
+    "grc",
+    "hansard",
+    "parliament",
+    "statutes",
+    "debates",
+    "bilingual",
+}
+
 
 def detect_language_for_path(path: Path | str, fallback: str = "en") -> str:
     """
@@ -76,6 +90,11 @@ def detect_language_for_path(path: Path | str, fallback: str = "en") -> str:
 
     # 3. French Canadian collections & serials
     for marker in FRENCH_MARKERS:
+        if marker in p_str:
+            return "fr"
+
+    # 4. Canadian federal bilingual serials (StatCan annuals, RCMP forms, Parliamentary records)
+    for marker in BILINGUAL_CANADIAN_MARKERS:
         if marker in p_str:
             return "fr"
 

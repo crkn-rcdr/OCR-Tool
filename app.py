@@ -75,17 +75,15 @@ BEST_PREPROCESSING_STEPS = list(DEFAULT_PREPROCESSING_STEPS)
 BEST_TILE_STRATEGY = "grid_3x2_doclayout_v3"
 
 PRE_PROCESS_INFO = (
-    "Crops the detected black scan border, runs OCR on that page crop, "
-    "offsets OCR geometry back to the original image coordinates, and applies "
-    "background flattening to even newspaper page shading. The OCR-facing PNG "
-    "is saved under _preprocessed/."
+    "Crops detected scan borders, auto-deskews, and flattens uneven lighting. "
+    "Automatically detects degraded microfilm to apply adaptive CLAHE and stroke reconnection, "
+    "suppresses table grid borders to preserve tabular cell text, and applies adaptive upscaling "
+    "for micro-print when needed."
 )
 POST_PROCESS_INFO = (
-    "Cleans conservative punctuation artifacts in the saved OCR JSON. For "
-    "PP-OCRv6, it also sends suspicious word crops to PaddleVL at "
-    f"{DEFAULT_PADDLE_VL_API_URL}, applies only accepted corrections, and "
-    "writes the post-OCR review artifacts beside the OCR output. This is "
-    "disabled for standalone PaddleVL and OLM OCR."
+    "Cleans conservative punctuation artifacts, consolidates legal abbreviations (&c.), "
+    "fixes archaic long-s print, and verifies suspicious text or faded lines against "
+    "Dots OCR VLM and historical Canadian dictionaries."
 )
 
 # Define the list of supported languages for the dropdown menu

@@ -21,6 +21,7 @@ from services.tile_ocr import (
     DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_STRATEGY,
     offset_nested_geometry,
+    scale_nested_geometry,
     tile_grid_for_strategy,
     run_tiled_local_ocr,
     supports_tiled_ocr,
@@ -623,19 +624,23 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None, preprocessed_result
             opt=opt,
         )
 
-    if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
-        merged_json = run_tiled_local_ocr(ocr_image_path, opt, select=select)
+    current_opt = dict(opt)
+    if preprocess_metadata and preprocess_metadata.get("table_unclip_ratio"):
+        current_opt["text_det_unclip_ratio"] = float(preprocess_metadata["table_unclip_ratio"])
+
+    if current_opt.get("tile_source_images", False) and supports_tiled_ocr(current_opt.get("method"), select):
+        merged_json = run_tiled_local_ocr(ocr_image_path, current_opt, select=select)
         normalize_ocr_word_boxes_in_payload(merged_json)
         annotate_preprocessing_payload(merged_json, preprocess_metadata)
         final_json.write_text(
             json.dumps(merged_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
-        maybe_apply_output_text_cleanup(final_json, opt)
+        maybe_apply_post_ocr_vl_check(final_json, out_dir, current_opt, select)
+        maybe_apply_output_text_cleanup(final_json, current_opt)
         return final_json, None
 
-    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, opt)
+    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, current_opt)
 
     json_file = out_dir / f"{ocr_image_path.stem}_res.json"
     if not json_file.exists():
@@ -704,6 +709,13 @@ def annotate_preprocessing_payload(
         return False
 
     metadata = dict(preprocess_metadata)
+
+    scale_factor = float(metadata.get("coordinate_scale_factor") or 1.0)
+    if scale_factor != 1.0 and scale_factor > 0:
+        inv_scale = 1.0 / scale_factor
+        scaled_payload = scale_nested_geometry(payload, inv_scale, inv_scale)
+        payload.clear()
+        payload.update(scaled_payload)
 
     offset_x = int(metadata.get("coordinate_offset_x") or 0)
     offset_y = int(metadata.get("coordinate_offset_y") or 0)

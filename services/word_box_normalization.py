@@ -10,13 +10,22 @@ from typing import Any
 
 APOSTROPHE_CHARS = {"'", "`", "’", "‘", "ʼ", "´"}
 
+COMMON_ABBREVIATIONS = {
+    "no", "co", "mr", "mrs", "ms", "dr", "st", "hon", "rev", "esq", "messrs",
+    "viz", "inst", "ult", "do", "vol", "vols", "cap", "sec", "art", "vic",
+    "geo", "edw", "wm", "chas", "thos", "jas", "reg", "dept", "inc", "ltd",
+    "gen", "col", "maj", "capt", "lieut", "sgt", "corp", "pvt", "prof",
+}
+
+ORPHAN_PUNCTUATION_RE = re.compile(r"^[.,;:!?—–\-]+$")
+
 
 def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
-    """Merge apostrophe-split word-box metadata in supported OCR payloads.
+    """Merge split word-box metadata (apostrophes, abbreviations, orphan punctuation).
 
-    PaddleX treats apostrophes as symbols when building `text_word`, so words
-    such as `queen's` can arrive as `["queen", "'", "s"]`. The recognizer line
-    text normally preserves the word, so use that line text as the guardrail.
+    PaddleX treats punctuation as standalone symbols when building `text_word`.
+    Downstream consumers (ALTO XML, dictionary QA, and Searchable PDFs) require
+    proper word tokens such as `queen's`, `&c.`, and `King,`.
     """
     changed = False
 
@@ -34,7 +43,7 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
 
         for index in range(min(len(text_word), len(text_word_boxes))):
             line_text = rec_texts[index] if index < len(rec_texts) else None
-            merged_words, merged_boxes = merge_apostrophe_word_boxes(
+            merged_words, merged_boxes = merge_word_boxes_advanced(
                 text_word[index],
                 text_word_boxes[index],
                 line_text=line_text,
@@ -47,24 +56,34 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
     return changed
 
 
+def merge_word_boxes_advanced(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Execute complete token consolidation pipeline."""
+    # 1. Merge apostrophes (queen's, o'clock, etc.)
+    words, boxes = merge_apostrophe_word_boxes(words, boxes, line_text=line_text)
+    # 2. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
+    words, boxes = merge_abbreviation_word_boxes(words, boxes, line_text=line_text)
+    # 3. Attach orphan trailing punctuation to preceding word tokens
+    words, boxes = merge_orphan_punctuation_word_boxes(words, boxes, line_text=line_text)
+    return words, boxes
+
+
 def merge_apostrophe_word_boxes(
     words: Any,
     boxes: Any,
     line_text: Any = None,
 ) -> tuple[Any, Any]:
     """Merge apostrophe-split OCR tokens back into single word-box entries."""
-    if not isinstance(words, list) or not isinstance(boxes, list):
-        return words, boxes
-
-    if len(words) != len(boxes):
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
         return words, boxes
 
     items = [
         {"text": str(word), "box": deepcopy(box)}
         for word, box in zip(words, boxes)
     ]
-    if not items:
-        return words, boxes
 
     merged: list[dict[str, Any]] = []
     i = 0
@@ -117,6 +136,104 @@ def merge_apostrophe_word_boxes(
         i += 1
 
     return [item["text"] for item in merged], [item["box"] for item in merged]
+
+
+def merge_abbreviation_word_boxes(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Merge split historical ligatures like '&c.' and standard abbreviations."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    items = [{"text": str(w), "box": deepcopy(b)} for w, b in zip(words, boxes)]
+    merged: list[dict[str, Any]] = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+
+        # 1. Historical &c. / &c pattern
+        if item["text"] == "&" and i + 1 < len(items):
+            next_item = items[i + 1]
+            next_clean = next_item["text"].lower().rstrip(".,;:")
+            if next_clean == "c":
+                parts = [item, next_item]
+                if i + 2 < len(items) and items[i + 2]["text"] in {".", ".,", ".;", ".:"}:
+                    parts.append(items[i + 2])
+                    merged.append(combine_word_items(parts))
+                    i += 3
+                    continue
+                else:
+                    merged.append(combine_word_items(parts))
+                    i += 2
+                    continue
+
+        # 2. Standard historical abbreviations followed by dot
+        clean_cand = item["text"].lower().rstrip(".")
+        if clean_cand in COMMON_ABBREVIATIONS and i + 1 < len(items):
+            next_item = items[i + 1]
+            if next_item["text"] in {".", ".,", ".:", ".;"} and boxes_are_close_for_punctuation(item, next_item):
+                merged.append(combine_word_items([item, next_item]))
+                i += 2
+                continue
+
+        merged.append(deepcopy(item))
+        i += 1
+
+    return [item["text"] for item in merged], [item["box"] for item in merged]
+
+
+def merge_orphan_punctuation_word_boxes(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Attach trailing orphan punctuation marks back into the preceding word box."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    items = [{"text": str(w), "box": deepcopy(b)} for w, b in zip(words, boxes)]
+    merged: list[dict[str, Any]] = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        t = item["text"].strip()
+
+        # Check if this token is pure punctuation following a word
+        if ORPHAN_PUNCTUATION_RE.match(t) and merged and is_wordish(merged[-1]["text"]):
+            prev = merged[-1]
+            if boxes_are_close_for_punctuation(prev, item):
+                merged[-1] = combine_word_items([prev, item])
+                i += 1
+                continue
+
+        merged.append(deepcopy(item))
+        i += 1
+
+    return [item["text"] for item in merged], [item["box"] for item in merged]
+
+
+def boxes_are_close_for_punctuation(left_item: dict[str, Any], right_item: dict[str, Any]) -> bool:
+    """Check if punctuation token is positioned immediately after the word."""
+    try:
+        left_rect = box_to_rect(left_item["box"])
+        right_rect = box_to_rect(right_item["box"])
+    except Exception:
+        return False
+
+    left_h = max(1.0, left_rect[3] - left_rect[1])
+    gap = right_rect[0] - left_rect[2]
+
+    # Gap shouldn't exceed half the character height
+    if gap > max(4.0, left_h * 0.65) or gap < -4.0:
+        return False
+
+    # Vertical baseline alignment check
+    if right_rect[1] > left_rect[3] + 5 or right_rect[3] < left_rect[1] - 5:
+        return False
+
+    return True
 
 
 def should_join_apostrophe_parts(parts: list[dict[str, Any]], line_text: Any = None) -> bool:

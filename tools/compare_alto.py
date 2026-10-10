@@ -129,9 +129,11 @@ def is_lexically_valid_word(word: str) -> bool:
     if not word:
         return False
 
-    clean = re.sub(r"^[^\w\d]+|[^\w\d]+$", "", word.lower().strip())
+    clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", word.lower().strip())
     if not clean:
         return False
+    if clean in {"&c", "&c.", "c.", "c"}:
+        return True
 
     # Numeric tokens (dates, pages, currency amounts) are valid historical data
     if clean.isdigit() or re.match(r"^[\d,.]+$", clean):
