@@ -68,9 +68,11 @@ def parse_args():
     )
     parser.add_argument(
         "--collection",
-        type=str,
+        "--collections",
+        nargs="+",
         default=None,
-        help="Optional collection subfolder name to process (e.g. 'Newspapers', 'Annuals', 'Heritage')",
+        dest="collection",
+        help="Optional collection subfolder name(s) to process (e.g. 'Newspapers', 'Heritage')",
     )
     parser.add_argument(
         "--language",
@@ -116,58 +118,63 @@ def build_pipeline_options():
 
 def main():
     args = parse_args()
-    input_path = args.input
+    base_input = args.input
     output_root = args.output
 
-    if args.collection:
-        input_path = input_path / args.collection
+    collections = args.collection or [None]
+    total_start = time.perf_counter()
 
-    if not input_path.exists():
-        print(f"[ERROR] Input path does not exist: {input_path}", file=sys.stderr)
-        return 1
+    for coll in collections:
+        cur_input = base_input / coll if coll else base_input
+        if not cur_input.exists():
+            print(f"[ERROR] Input path does not exist: {cur_input}", file=sys.stderr)
+            continue
 
-    print("=" * 70)
-    print(" CRKN DIGITAL COLLECTIONS - PADDLEOCR ULTRA-FAST BENCHMARK RUNNER")
-    print("=" * 70)
-    print(f" • Input Path:  {input_path}")
-    print(f" • Output Root: {output_root}")
-    print(f" • Hardware:    NVIDIA RTX 5090 (32GB VRAM)")
-    print(f" • Local OCR:   PP-OCRv6 (batch_size=64, limit=9984)")
-    print(f" • Post-OCR VL: Active (Dots OCR / vLLM, concurrency=16, batch=32)")
-    print(f" • Preprocess:  Black-border cropping + Background flattening")
-    print(f" • Overlap:     CPU prefetch + async multithreaded PDF/ALTO generation")
-    print(f" • QA Dashboard: Auto-updating at c:\\CRKN Projects\\paddle_pipeline\\compare\\index.html")
-    print("=" * 70)
+        print("=" * 70)
+        print(" CRKN DIGITAL COLLECTIONS - PADDLEOCR ULTRA-FAST BENCHMARK RUNNER")
+        print("=" * 70)
+        print(f" • Input Path:  {cur_input}")
+        print(f" • Output Root: {output_root}")
+        print(f" • Hardware:    NVIDIA RTX 5090 (32GB VRAM)")
+        print(f" • Local OCR:   PP-OCRv6 (batch_size=64, limit=9984)")
+        print(f" • Post-OCR VL: Active (Dots OCR / vLLM, concurrency=16, batch=32)")
+        print(f" • Preprocess:  Black-border cropping + Background flattening")
+        print(f" • Overlap:     CPU prefetch + async multithreaded PDF/ALTO generation")
+        print(f" • QA Dashboard: Auto-updating at c:\\CRKN Projects\\paddle_pipeline\\compare\\index.html")
+        print("=" * 70)
 
-    opt = build_pipeline_options()
-    if args.language:
-        opt["lang"] = args.language
+        opt = build_pipeline_options()
+        if args.language:
+            opt["lang"] = args.language
 
-    start_time = time.perf_counter()
-    prev_message_count = 0
+        coll_start = time.perf_counter()
+        prev_message_count = 0
 
-    try:
-        iterator = run_ocr_job(input_path, output_root, opt)
-        for raw_output in iterator:
-            lines = [line.strip() for line in raw_output.split("\n") if line.strip()]
-            if len(lines) > prev_message_count:
-                for line in lines[prev_message_count:]:
-                    timestamp = time.strftime("%H:%M:%S")
-                    print(f"[{timestamp}] {line}", flush=True)
-                prev_message_count = len(lines)
+        try:
+            iterator = run_ocr_job(cur_input, output_root, opt)
+            for raw_output in iterator:
+                lines = [line.strip() for line in raw_output.split("\n") if line.strip()]
+                if len(lines) > prev_message_count:
+                    for line in lines[prev_message_count:]:
+                        timestamp = time.strftime("%H:%M:%S")
+                        print(f"[{timestamp}] {line}", flush=True)
+                    prev_message_count = len(lines)
 
-    except KeyboardInterrupt:
-        print("\n[INFO] Benchmark interrupted by user.")
-        return 130
-    except Exception as exc:
-        print(f"\n[FATAL ERROR] Pipeline failed: {exc}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 1
+        except KeyboardInterrupt:
+            print(f"\n[INFO] Benchmark interrupted by user during {coll or 'run'}.")
+            return 130
+        except Exception as exc:
+            print(f"\n[FATAL ERROR] Pipeline failed during {coll or 'run'}: {exc}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            return 1
 
-    elapsed = time.perf_counter() - start_time
+        coll_elapsed = time.perf_counter() - coll_start
+        print(f"\n[INFO] Collection '{coll or 'all'}' finished in {coll_elapsed:.1f}s ({coll_elapsed / 60:.1f} min)")
+
+    total_elapsed = time.perf_counter() - total_start
     print("\n" + "=" * 70)
-    print(f" BENCHMARK RUN COMPLETED in {elapsed:.1f}s ({elapsed / 60:.1f} min)")
+    print(f" BENCHMARK RUN COMPLETED in {total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)")
     print("=" * 70)
     print(f" Output files: {output_root}")
     print(" Comparison Dashboard: c:\\CRKN Projects\\paddle_pipeline\\compare\\index.html")
