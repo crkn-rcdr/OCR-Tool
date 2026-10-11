@@ -517,6 +517,9 @@ def is_valid_historical_word(word: str) -> bool:
     """Check if a word token is recognized in historical Canadian vocabulary or standard EN/FR dictionaries."""
     if not word:
         return False
+    subwords = str(word).strip().split()
+    if len(subwords) > 1:
+        return all(is_valid_historical_word(sw) for sw in subwords)
     clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", str(word).lower().strip())
     if not clean:
         return False

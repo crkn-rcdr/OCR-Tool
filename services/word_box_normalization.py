@@ -208,6 +208,61 @@ def merge_accent_split_tokens(
     return [m["text"] for m in merged], [m["box"] for m in merged]
 
 
+def partition_box_horizontal(box: Any, subwords: list[str]) -> list[Any]:
+    """Partition a bounding box or polygon horizontally into N sub-boxes proportional to subword lengths."""
+    if not subwords or len(subwords) <= 1:
+        return [box]
+
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+
+    weights = [max(1, len(str(w))) for w in subwords]
+    total_w = sum(weights)
+    cum_ratios = [0.0]
+    curr = 0.0
+    for w in weights:
+        curr += w / total_w
+        cum_ratios.append(curr)
+    cum_ratios[-1] = 1.0
+
+    is_polygon = (
+        isinstance(box, (list, tuple))
+        and len(box) == 4
+        and isinstance(box[0], (list, tuple))
+        and len(box[0]) == 2
+    )
+    is_rect = (
+        isinstance(box, (list, tuple))
+        and len(box) == 4
+        and all(isinstance(v, (int, float)) for v in box)
+    )
+
+    if is_polygon:
+        p0, p1, p2, p3 = box[0], box[1], box[2], box[3]
+        out_boxes = []
+        for i in range(len(subwords)):
+            r_start = cum_ratios[i]
+            r_end = cum_ratios[i + 1]
+            tl = [p0[0] + (p1[0] - p0[0]) * r_start, p0[1] + (p1[1] - p0[1]) * r_start]
+            tr = [p0[0] + (p1[0] - p0[0]) * r_end, p0[1] + (p1[1] - p0[1]) * r_end]
+            br = [p3[0] + (p2[0] - p3[0]) * r_end, p3[1] + (p2[1] - p3[1]) * r_end]
+            bl = [p3[0] + (p2[0] - p3[0]) * r_start, p3[1] + (p2[1] - p3[1]) * r_start]
+            out_boxes.append([tl, tr, br, bl])
+        return out_boxes
+    elif is_rect:
+        x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+        out_boxes = []
+        for i in range(len(subwords)):
+            r_start = cum_ratios[i]
+            r_end = cum_ratios[i + 1]
+            sx1 = x1 + (x2 - x1) * r_start
+            sx2 = x1 + (x2 - x1) * r_end
+            out_boxes.append([sx1, y1, sx2, y2])
+        return out_boxes
+
+    return [deepcopy(box) for _ in subwords]
+
+
 def split_box_horizontally(box: Any, ratio: float) -> tuple[Any, Any]:
     """Split a bounding box or polygon horizontally by a fraction ratio (0.05 to 0.95)."""
     ratio = max(0.05, min(0.95, float(ratio)))
@@ -321,6 +376,32 @@ def decompound_fused_display_tokens(
     return out_words, out_boxes
 
 
+def split_whitespace_word_tokens(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Auto-split tokens with spaces into separate word items with proportionally partitioned bounding boxes."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    out_words = []
+    out_boxes = []
+
+    for w, b in zip(words, boxes):
+        text = str(w).strip()
+        subwords = text.split()
+        if len(subwords) > 1:
+            part_boxes = partition_box_horizontal(b, subwords)
+            out_words.extend(subwords)
+            out_boxes.extend(part_boxes)
+        else:
+            out_words.append(w)
+            out_boxes.append(b)
+
+    return out_words, out_boxes
+
+
 def merge_word_boxes_advanced(
     words: Any,
     boxes: Any,
@@ -335,14 +416,18 @@ def merge_word_boxes_advanced(
     words, boxes = split_punctuation_bound_tokens(words, boxes, line_text=line_text)
     # 3. Decompound display-ad words fused across condensed typography (e.g. ESTPERMANENT -> EST + PERMANENT)
     words, boxes = decompound_fused_display_tokens(words, boxes, line_text=line_text)
-    # 4. Merge apostrophes (queen's, o'clock, etc.)
+    # 4. Auto-split any recognized tokens containing whitespace into separate words
+    words, boxes = split_whitespace_word_tokens(words, boxes, line_text=line_text)
+    # 5. Merge apostrophes (queen's, o'clock, etc.)
     words, boxes = merge_apostrophe_word_boxes(words, boxes, line_text=line_text)
-    # 5. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
+    # 6. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
     words, boxes = merge_abbreviation_word_boxes(words, boxes, line_text=line_text)
-    # 6. Attach orphan trailing punctuation to preceding word tokens
+    # 7. Attach orphan trailing punctuation to preceding word tokens
     words, boxes = merge_orphan_punctuation_word_boxes(words, boxes, line_text=line_text)
-    # 7. Regularize broken microfilm words and French dropouts (e.g. qualit -> qualité, resering -> reserving)
+    # 8. Regularize broken microfilm words and French dropouts (e.g. qualit -> qualité, resering -> reserving)
     words = regularize_word_tokens(words, line_score=line_score)
+    # 9. Final safeguard: ensure no compound whitespace tokens remain
+    words, boxes = split_whitespace_word_tokens(words, boxes, line_text=line_text)
     return words, boxes
 
 
