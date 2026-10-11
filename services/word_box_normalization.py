@@ -41,12 +41,16 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
         text_word = payload.get("text_word") or []
         text_word_boxes = payload.get("text_word_boxes") or []
 
+        rec_scores = payload.get("rec_scores") or []
+
         for index in range(min(len(text_word), len(text_word_boxes))):
             line_text = rec_texts[index] if index < len(rec_texts) else None
+            line_score = rec_scores[index] if index < len(rec_scores) else None
             merged_words, merged_boxes = merge_word_boxes_advanced(
                 text_word[index],
                 text_word_boxes[index],
                 line_text=line_text,
+                line_score=line_score,
             )
             if merged_words != text_word[index] or merged_boxes != text_word_boxes[index]:
                 text_word[index] = merged_words
@@ -60,15 +64,99 @@ def merge_word_boxes_advanced(
     words: Any,
     boxes: Any,
     line_text: Any = None,
+    line_score: Any = None,
 ) -> tuple[Any, Any]:
     """Execute complete token consolidation pipeline."""
-    # 1. Merge apostrophes (queen's, o'clock, etc.)
+    # 1. Recombine accented French and line words that Paddle split across tokens
+    words, boxes = consolidate_words_to_line_text(words, boxes, line_text=line_text)
+    # 2. Merge apostrophes (queen's, o'clock, etc.)
     words, boxes = merge_apostrophe_word_boxes(words, boxes, line_text=line_text)
-    # 2. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
+    # 3. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
     words, boxes = merge_abbreviation_word_boxes(words, boxes, line_text=line_text)
-    # 3. Attach orphan trailing punctuation to preceding word tokens
+    # 4. Attach orphan trailing punctuation to preceding word tokens
     words, boxes = merge_orphan_punctuation_word_boxes(words, boxes, line_text=line_text)
+    # 5. Regularize broken microfilm words (e.g. resering -> reserving, paage -> page)
+    words = regularize_word_tokens(words, line_score=line_score)
     return words, boxes
+
+
+def regularize_word_tokens(words: Any, line_score: Any = None) -> Any:
+    """Apply 1-edit historical dictionary regularizer to low-confidence or broken tokens."""
+    if not isinstance(words, list) or not words:
+        return words
+
+    try:
+        from services.historical_lexicon import regularize_broken_historical_word
+    except ImportError:
+        return words
+
+    score = 0.75
+    if isinstance(line_score, (int, float)):
+        score = float(line_score)
+
+    return [regularize_broken_historical_word(str(w), confidence=score) if w else w for w in words]
+
+
+def consolidate_words_to_line_text(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Recombine accented French words and letterforms that Paddle split across individual tokens.
+    
+    PaddleX frequently segments accented French words like 'étalage' into ['é', 'talage'] or
+    'intéressant' into ['int', 'é', 'ressant'] inside `text_word`. This routine checks the line text
+    and greedily merges neighboring character/accent fragments that form exact words in `line_text`.
+    """
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+    if not line_text or not isinstance(line_text, str):
+        return words, boxes
+
+    expected_words = line_text.split()
+    if not expected_words:
+        return words, boxes
+
+    raw_items = [{"text": str(w), "box": deepcopy(b)} for w, b in zip(words, boxes) if str(w).strip()]
+    if not raw_items:
+        return words, boxes
+
+    merged: list[dict[str, Any]] = []
+    item_idx = 0
+    num_items = len(raw_items)
+
+    for exp_w in expected_words:
+        if item_idx >= num_items:
+            break
+
+        accum_parts = []
+        accum_text = ""
+        matched = False
+
+        probe_idx = item_idx
+        while probe_idx < num_items:
+            curr = raw_items[probe_idx]
+            accum_parts.append(curr)
+            accum_text += curr["text"].strip()
+            probe_idx += 1
+
+            if accum_text == exp_w:
+                merged.append(combine_word_items(accum_parts))
+                item_idx = probe_idx
+                matched = True
+                break
+            elif len(accum_text) > len(exp_w) and not exp_w.startswith(accum_text):
+                break
+
+        if not matched:
+            merged.append(deepcopy(raw_items[item_idx]))
+            item_idx += 1
+
+    while item_idx < num_items:
+        merged.append(deepcopy(raw_items[item_idx]))
+        item_idx += 1
+
+    return [m["text"] for m in merged], [m["box"] for m in merged]
 
 
 def merge_apostrophe_word_boxes(

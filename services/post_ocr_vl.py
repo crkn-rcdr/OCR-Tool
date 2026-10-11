@@ -668,13 +668,13 @@ def collect_word_candidates(
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
     rec_scores = ocr_payload.get("rec_scores") or []
     candidates: list[WordCandidate] = []
-    mode = mode if mode in {"suspicious", "low_confidence", "all"} else "suspicious"
+    mode = mode if mode in {"suspicious", "low_confidence", "invalid_lexical", "all"} else "suspicious"
     if word_profile is None:
         word_profile = build_word_profile(ocr_payload, low_confidence_threshold)
 
     continuation_words = (
         find_hyphen_continuation_words(ocr_payload, word_profile, low_confidence_threshold)
-        if mode in {"suspicious", "low_confidence"}
+        if mode in {"suspicious", "low_confidence", "invalid_lexical"}
         else set()
     )
 
@@ -747,13 +747,23 @@ def collect_word_candidates(
                 line_score is not None and line_score < low_confidence_threshold
             )
 
+            # In invalid_lexical mode: target words that fail lexical dictionary validation
+            if mode == "invalid_lexical":
+                try:
+                    from tools.compare_alto import is_lexically_valid_word
+                    is_valid = is_lexically_valid_word(text)
+                except Exception:
+                    is_valid = True
+                if is_valid and not (low_confidence and weirdness >= 0.75):
+                    continue
+
             if mode == "suspicious" and weirdness < 0.5:
                 continue
             if mode == "low_confidence" and not low_confidence:
                 continue
 
             # Smart-Skip: Avoid sending already-clean, high-confidence words to the VLM
-            if mode in {"suspicious", "low_confidence"}:
+            if mode in {"suspicious", "low_confidence", "invalid_lexical"}:
                 clean_text = text.strip(".,:;!?()[]{}\"'")
                 is_proper_name = (
                     (clean_text[:1].isupper() and clean_text[1:].islower())

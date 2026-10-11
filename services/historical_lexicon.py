@@ -447,3 +447,86 @@ def normalize_historical_orthography(text: str, is_french: bool = False) -> str:
     updated = re.sub(r"\b[A-Za-z\u00C0-\u017F]+\b", _replace_word, updated)
     return updated
 
+
+_SP_EN_INSTANCE = None
+_SP_FR_INSTANCE = None
+
+def _get_shared_spellcheckers():
+    global _SP_EN_INSTANCE, _SP_FR_INSTANCE
+    if _SP_EN_INSTANCE is None:
+        try:
+            from spellchecker import SpellChecker
+            _SP_EN_INSTANCE = SpellChecker(language="en")
+        except Exception:
+            pass
+    if _SP_FR_INSTANCE is None:
+        try:
+            from spellchecker import SpellChecker
+            _SP_FR_INSTANCE = SpellChecker(language="fr")
+        except Exception:
+            pass
+    return _SP_EN_INSTANCE, _SP_FR_INSTANCE
+
+
+def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_confidence: float = 0.88) -> str:
+    """1-edit Levenshtein dictionary regularizer for broken microfilm letterforms.
+    
+    When a word is recognized with confidence below `max_confidence` and is not already a valid
+    lexical word or proper name, snaps single-character split or broken strokes (e.g., 'resering' -> 'reserving',
+    'paage' -> 'page', 'heeb' -> 'hereby') to known Canadian historical and standard dictionary words.
+    """
+    if not word or len(word) < 4:
+        return word
+    if confidence > max_confidence:
+        return word
+
+    clean = word.lower().strip(".,:;!?()[]{}\"'`")
+    if not clean.isalpha():
+        return word
+
+    # If already a valid canonical Canadian historical word, do not change
+    if clean in ALL_CANADIAN_LEXICON_TOKENS:
+        return word
+
+    sp_en, sp_fr = _get_shared_spellcheckers()
+    if sp_en and clean in sp_en:
+        return word
+    if sp_fr and clean in sp_fr:
+        return word
+
+    import difflib
+    candidates = []
+    if sp_en:
+        candidates.extend(list(sp_en.candidates(clean) or []))
+    if sp_fr and len(candidates) < 3:
+        candidates.extend(list(sp_fr.candidates(clean) or []))
+
+    scored = []
+    for c in candidates:
+        if abs(len(c) - len(clean)) <= 1:
+            ratio = difflib.SequenceMatcher(None, clean, c).ratio()
+            # Require tight 1-edit similarity (>0.78)
+            if ratio >= 0.78:
+                freq = 0
+                if sp_en:
+                    freq = max(freq, sp_en.word_frequency[c] or 0)
+                if sp_fr:
+                    freq = max(freq, sp_fr.word_frequency[c] or 0)
+                if c in ALL_CANADIAN_LEXICON_TOKENS:
+                    freq += 1000000
+                if freq > 0:
+                    scored.append((freq, c))
+
+    if scored:
+        scored.sort(reverse=True)
+        best = scored[0][1]
+        # Preserve original capitalization
+        if word.istitle():
+            return best.capitalize()
+        elif word.isupper():
+            return best.upper()
+        return best
+
+    return word
+
+

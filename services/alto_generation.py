@@ -209,6 +209,7 @@ def extract_word_level_lines(ocr_payload):
             words,
             boxes,
             line_text=line_text,
+            line_score=line_score,
         )
         string_items = []
 
