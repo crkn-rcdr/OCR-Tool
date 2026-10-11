@@ -500,6 +500,18 @@ HISTORICAL_OPTICAL_CORRECTIONS: Dict[str, str] = {
     "vvith": "with",
     "vvhen": "when",
     "vvhere": "where",
+    # High-frequency historical OCR optical confusions & broken letterforms
+    "desirel": "desired",
+    "sesion": "session",
+    "muffer": "muffler",
+    "suoh": "such",
+    "slah": "slab",
+    "traffe": "traffic",
+    "lhad": "had",
+    "doso": "do",
+    "tha": "that",
+    "carryin": "carrying",
+    "senching": "searching",
     # French historical dropouts & faint terminal accents
     "qualit": "qualité",
     "societ": "société",
@@ -525,7 +537,9 @@ def is_valid_historical_word(word: str) -> bool:
         return False
     if clean in {"&c", "&c.", "c.", "c"}:
         return True
-    if clean.isdigit() or re.match(r"^[\d,.]+$", clean):
+    if clean.isdigit() or (re.match(r"^[\d,.\-/:#]+$", clean) and any(ch.isdigit() for ch in clean)):
+        return True
+    if re.match(r"^\d+(st|nd|rd|th)$", clean):
         return True
     if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
         return True
@@ -581,8 +595,11 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
     if len(clean) < 4:
         return word
 
-    # 3. Fuzzy 1-edit Levenshtein regularizer only triggers on lower-confidence words
-    if confidence > max_confidence:
+    # 3. Fuzzy 1-edit Levenshtein regularizer:
+    # On lower-confidence words, allows ratio >= 0.78.
+    # On high-confidence words (where OCR was overconfident about a non-dictionary typo), require strict 1-substitution (ratio >= 0.85 and len >= 5).
+    min_ratio = 0.78 if confidence <= max_confidence else 0.85
+    if confidence > max_confidence and len(clean) < 5:
         return word
 
     import difflib
@@ -596,8 +613,8 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
     for c in candidates:
         if abs(len(c) - len(clean)) <= 1:
             ratio = difflib.SequenceMatcher(None, clean, c).ratio()
-            # Require tight 1-edit similarity (>0.78)
-            if ratio >= 0.78:
+            # Require tight 1-edit similarity
+            if ratio >= min_ratio:
                 freq = 0
                 if sp_en:
                     freq = max(freq, sp_en.word_frequency[c] or 0)

@@ -428,6 +428,50 @@ def detect_page_bbox_from_black_border(gray: np.ndarray) -> tuple[int, int, int,
     right = min(width, x1 + 1 + padding)
     bottom = min(height, y1 + 1 + padding)
 
+    # Safety safeguard: Verify that cropped margins are genuinely dark scan/carrier borders,
+    # preventing internal column gutters, tables, or ruling lines from cutting off text columns.
+    if right < width:
+        margin_right = gray[:, right:width]
+        if margin_right.size > 0 and (margin_right.mean() > 70 or (margin_right > 80).mean() > 0.15):
+            outer_w = max(5, int(width * 0.015))
+            outer_right = gray[:, width - outer_w:width]
+            if outer_right.mean() > 70 or (outer_right > 80).mean() > 0.15:
+                right = width
+            else:
+                col_bright = (gray > 80).mean(axis=0)
+                new_right = width
+                for x in range(width - 1, right, -1):
+                    if col_bright[x] >= 0.20:
+                        new_right = min(width, x + padding)
+                        break
+                right = max(right, new_right)
+
+    if left > 0:
+        margin_left = gray[:, 0:left]
+        if margin_left.size > 0 and (margin_left.mean() > 70 or (margin_left > 80).mean() > 0.15):
+            outer_w = max(5, int(width * 0.015))
+            outer_left = gray[:, 0:outer_w]
+            if outer_left.mean() > 70 or (outer_left > 80).mean() > 0.15:
+                left = 0
+            else:
+                col_bright = (gray > 80).mean(axis=0)
+                new_left = 0
+                for x in range(0, left):
+                    if col_bright[x] >= 0.20:
+                        new_left = max(0, x - padding)
+                        break
+                left = min(left, new_left)
+
+    if top > 0:
+        margin_top = gray[0:top, :]
+        if margin_top.size > 0 and (margin_top.mean() > 70 or (margin_top > 80).mean() > 0.15):
+            top = 0
+
+    if bottom < height:
+        margin_bot = gray[bottom:height, :]
+        if margin_bot.size > 0 and (margin_bot.mean() > 70 or (margin_bot > 80).mean() > 0.15):
+            bottom = height
+
     if (right - left) < width * 0.4 or (bottom - top) < height * 0.4:
         return None
 

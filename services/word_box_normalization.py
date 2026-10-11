@@ -287,7 +287,9 @@ def split_box_horizontally(box: Any, ratio: float) -> tuple[Any, Any]:
     return deepcopy(box), deepcopy(box)
 
 
-PUNCT_SPLIT_RE = re.compile(r"^([A-Za-zÀ-ÿ0-9]+)([,;:!?&\.])([A-Za-zÀ-ÿ0-9]+[.,;:!?]?)$")
+PUNCT_SPLIT_RE = re.compile(r"^([A-Za-zÀ-ÿ0-9]+)([,;:!?&\.\-\"'\(\)]+)([A-Za-zÀ-ÿ0-9]+[.,;:!?\"'\)]*)$")
+CAMEL_SPLIT_RE = re.compile(r"^([A-Za-zÀ-ÿ0-9\-]+[a-z])([A-Z][a-z0-9]+)$")
+VALID_SHORT_WORDS = {'in', 'to', 'of', 'he', 'we', 'is', 'as', 'at', 'on', 'by', 'so', 'no', 'or', 'do', 'an', 'am', 'if', 'up', 'my', 'and', 'the', 'not'}
 
 
 def split_punctuation_bound_tokens(
@@ -295,7 +297,7 @@ def split_punctuation_bound_tokens(
     boxes: Any,
     line_text: Any = None,
 ) -> tuple[Any, Any]:
-    """Split tokens fused together across punctuation without whitespace (e.g. 'Montréal,Avril', 'situé,la')."""
+    """Split tokens fused together across punctuation without whitespace (e.g. 'Montréal,Avril', 'situé,la', 'of-currants', 'Fifty-TonDinosaur')."""
     if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
         return words, boxes
 
@@ -309,14 +311,28 @@ def split_punctuation_bound_tokens(
 
     for w, b in zip(words, boxes):
         text = str(w).strip()
+
+        # Check CamelCase split first (e.g. Fifty-TonDinosaur -> Fifty-Ton and Dinosaur)
+        m_camel = CAMEL_SPLIT_RE.match(text)
+        if m_camel:
+            w1, w2 = m_camel.groups()
+            c1 = w1.strip(".,:;!?()[]{}\"'`-").lower()
+            c2 = w2.strip(".,:;!?()[]{}\"'`-").lower()
+            if is_valid_historical_word(c1) and is_valid_historical_word(c2):
+                ratio = len(w1) / max(1, len(text))
+                b1, b2 = split_box_horizontally(b, ratio)
+                out_words.extend([w1, w2])
+                out_boxes.extend([b1, b2])
+                continue
+
         m = PUNCT_SPLIT_RE.match(text)
         if m:
             w1, punct, w2 = m.groups()
-            clean1 = w1.strip(".,:;!?()[]{}\"'`").lower()
-            clean2 = w2.strip(".,:;!?()[]{}\"'`").lower()
+            clean1 = w1.strip(".,:;!?()[]{}\"'`-").lower()
+            clean2 = w2.strip(".,:;!?()[]{}\"'`-").lower()
 
             if is_valid_historical_word(clean1) or is_valid_historical_word(clean2):
-                token1 = f"{w1}{punct}"
+                token1 = f"{w1}{punct}" if punct in ".,;:!?" else w1
                 token2 = w2
                 total_len = len(token1) + len(token2)
                 ratio = len(token1) / max(1, total_len)
@@ -336,7 +352,7 @@ def decompound_fused_display_tokens(
     boxes: Any,
     line_text: Any = None,
 ) -> tuple[Any, Any]:
-    """Decompound display-ad words fused across condensed typography (e.g. 'ESTPERMANENT', 'Commodepour')."""
+    """Decompound display-ad words and fused conjunctions (e.g. 'ESTPERMANENT', 'Commodepour', 'andthe', 'Hadnot', 'goodthingthe')."""
     if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
         return words, boxes
 
@@ -352,21 +368,46 @@ def decompound_fused_display_tokens(
         text = str(w).strip()
         clean = text.strip(".,:;!?()[]{}\"'`")
 
-        # Only consider tokens of length >= 8 that are not already valid dictionary words
-        if len(clean) >= 8 and clean.isalpha() and not is_valid_historical_word(clean.lower()):
+        # Consider tokens of length >= 5 that are not already valid dictionary words
+        if len(clean) >= 5 and clean.isalpha() and not is_valid_historical_word(clean.lower()):
             found_split = False
-            for k in range(3, len(clean) - 2):
+            for k in range(2, len(clean) - 1):
                 p1 = clean[:k].lower()
                 p2 = clean[k:].lower()
-                if is_valid_historical_word(p1) and is_valid_historical_word(p2):
-                    token1 = text[:k]
-                    token2 = text[k:]
-                    ratio = len(token1) / max(1, len(text))
-                    b1, b2 = split_box_horizontally(b, ratio)
-                    out_words.extend([token1, token2])
-                    out_boxes.extend([b1, b2])
-                    found_split = True
-                    break
+                if len(p1) == 2 and p1 not in VALID_SHORT_WORDS:
+                    continue
+                if len(p2) == 2 and p2 not in VALID_SHORT_WORDS:
+                    continue
+                if is_valid_historical_word(p1):
+                    # 2-word split (e.g. andthe -> and + the, Hadnot -> Had + not, WASOIL -> WAS + OIL, Landsof -> Lands + of)
+                    if is_valid_historical_word(p2):
+                        token1 = text[:k]
+                        token2 = text[k:]
+                        ratio = len(token1) / max(1, len(text))
+                        b1, b2 = split_box_horizontally(b, ratio)
+                        out_words.extend([token1, token2])
+                        out_boxes.extend([b1, b2])
+                        found_split = True
+                        break
+                    # 3-word split (e.g. goodthingthe -> good + thing + the)
+                    for j in range(2, len(p2) - 1):
+                        p2a = p2[:j]
+                        p2b = p2[j:]
+                        if len(p2a) == 2 and p2a not in VALID_SHORT_WORDS:
+                            continue
+                        if len(p2b) == 2 and p2b not in VALID_SHORT_WORDS:
+                            continue
+                        if is_valid_historical_word(p2a) and is_valid_historical_word(p2b):
+                            token1 = text[:k]
+                            token2 = text[k:k+j]
+                            token3 = text[k+j:]
+                            part_boxes = partition_box_horizontal(b, [token1, token2, token3])
+                            out_words.extend([token1, token2, token3])
+                            out_boxes.extend(part_boxes)
+                            found_split = True
+                            break
+                    if found_split:
+                        break
             if found_split:
                 continue
 

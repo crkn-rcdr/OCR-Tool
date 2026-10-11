@@ -144,8 +144,13 @@ def is_lexically_valid_word(word: str) -> bool:
     if clean in {"&c", "&c.", "c.", "c"}:
         return True
 
-    # Numeric tokens (dates, pages, currency amounts) are valid historical data
-    if clean.isdigit() or re.match(r"^[\d,.]+$", clean):
+    # Numeric tokens, date ranges, page spans, currency amounts, section numbers
+    # e.g., "1-20", "1914-1918", "25-30", "1/2", "3:15", "$10.50", "no.1", "1st", "2nd"
+    if clean.isdigit() or (re.match(r"^[\d,.\-/:#]+$", clean) and any(ch.isdigit() for ch in clean)):
+        _LEXICAL_CACHE[clean] = True
+        return True
+    if re.match(r"^\d+(st|nd|rd|th)$", clean):
+        _LEXICAL_CACHE[clean] = True
         return True
 
     # CJK characters (Chinese/Japanese/Korean) are natural-language word tokens
@@ -546,10 +551,11 @@ def compare_pages(
         bin_k = int(bb.norm_y / 0.04)
         b_bins[bin_k].append((b_idx, bb))
 
-    candidates: List[Tuple[float, int, int, float, float]] = []  # (-iou, p_idx, b_idx, iou, dist)
+    candidates: List[Tuple[float, float, float, int, int, float, float]] = []  # (-priority, -iou, cdist, p_idx, b_idx, iou, dist)
 
     for p_idx, pb in enumerate(p_boxes):
         p_bin = int(pb.norm_y / 0.04)
+        clean_p = clean_text_for_comparison(pb.content)
         # Check current bin and adjacent vertical bins
         for b_cand_bin in (p_bin - 1, p_bin, p_bin + 1):
             for b_idx, bb in b_bins.get(b_cand_bin, []):
@@ -558,12 +564,25 @@ def compare_pages(
 
                 # Match criteria: either decent IoU OR very close center distance with overlapping vertical band
                 if iou_val >= min_iou or (cdist <= max_center_dist and iou_val > 0.05):
-                    candidates.append((-iou_val, p_idx, b_idx, iou_val, cdist))
+                    clean_b = clean_text_for_comparison(bb.content)
+                    if pb.content == bb.content:
+                        prio = 4.0 + iou_val
+                    elif clean_p == clean_b and clean_p != "":
+                        prio = 3.0 + iou_val
+                    else:
+                        sim = levenshtein_similarity(pb.content, bb.content)
+                        if sim >= 0.70:
+                            prio = 1.5 + sim + iou_val
+                        elif sim >= 0.40:
+                            prio = 0.5 + sim + iou_val
+                        else:
+                            prio = iou_val
+                    candidates.append((-prio, -iou_val, cdist, p_idx, b_idx, iou_val, cdist))
 
-    # Sort candidates by highest IoU first
+    # Sort candidates by highest priority score first, then highest IoU
     candidates.sort()
 
-    for _, p_idx, b_idx, iou_val, cdist in candidates:
+    for _, _, _, p_idx, b_idx, iou_val, cdist in candidates:
         if p_idx in matched_p_indices or b_idx in matched_b_indices:
             continue
 
