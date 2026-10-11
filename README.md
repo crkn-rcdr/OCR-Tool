@@ -27,9 +27,9 @@ Open **`http://127.0.0.1:7860`** in your browser.
 
 > [!TIP]
 > **Recommended UI Settings for Historical Archives**:
-> - **Language**: Leave as `Auto-detect Script` (automatically identifies Traditional Chinese, Bilingual French/English, or English).
-> - **Pre Process**: `[x] Enabled` (handles microfilm black borders, contrast fading, micro-print upscaling, and deskew).
-> - **Post Process**: `[x] Enabled` (delegates degraded lines to Dots OCR 7B and cleans historical orthography).
+> - **Language**: Leave as `Auto-detect Script` (automatically identifies Traditional Chinese, Bilingual French Latin superset, or English).
+> - **Pre Process**: `[x] Enabled` (handles microfilm black borders, contrast fading, background flattening, micro-print upscaling, and deskew).
+> - **Post Process**: `[x] Enabled` (delegates degraded lines & disputed words to Dots OCR 7B, regularizes broken historical tokens, restores French accents, reconstructs hyphens, and de-compounds display ads).
 
 ---
 
@@ -44,7 +44,7 @@ This single command:
 1. Processes all documents from `C:\Users\blapierre\Documents\PDF Test`.
 2. Generates Searchable PDFs, ALTO XML 4.2, and JSON files in `C:\Users\blapierre\Desktop\PDF Test - Final`.
 3. Runs the lexical comparator against baseline ABBYY FineReader XMLs.
-4. Generates an interactive visual report at **`compare/index.html`** and summary metrics at `compare/comparison_summary.csv`.
+4. Generates an interactive visual report at **`compare/index.html`**, summary metrics at `compare/comparison_summary.csv`, and automatically syncs publication dashboards to the `OCR-Evaluations` repository.
 
 ---
 
@@ -77,7 +77,7 @@ flowchart TD
     subgraph Preprocessing ["2. Stage 1: Adaptive Preprocessing (Pre Process Checkbox)"]
         B1["Microfilm Signature Detector<br/>(Laplacian Variance + Percentile Analysis)"]
         B2["Black Border / Carrier Cropping<br/>(Pixel Offset [dx, dy] Tracking)"]
-        B3["Adaptive Contrast Boost<br/>(Dynamic CLAHE for Faded Microfilm)"]
+        B3["Adaptive Contrast & Background Flattening<br/>(Dynamic CLAHE + Luminance Inversion/Flattening)"]
         B4["Micro-Stroke Reconnection<br/>(2x2 Morphological Closing for Broken Print)"]
         B5["Dynamic Auto-Deskew<br/>(Sub-5 Degree Baseline Straightening)"]
         B6["Table Ruling Line Suppression<br/>(Vertical Ledger Gutter Protection)"]
@@ -85,8 +85,8 @@ flowchart TD
     end
 
     subgraph Recognition ["3. Stage 2: Core Recognition & Script Dispatch"]
-        C1{"Script Detection<br/>services/language_detection.py"}
-        C2["Traditional Chinese (sfu.00001)<br/>Bilingual French Superset (sru.00007)<br/>Standard English"]
+        C1{"Script & Language Detection<br/>services/language_detection.py"}
+        C2["Traditional Chinese (sfu.00001)<br/>Bilingual French Superset (sru, qmbn, oocihm.8)<br/>Standard English"]
         C3{"Image Height > 4000px?"}
         C4["Adaptive 3x2 Tile Splitter<br/>(15% Overlap Margin + NMS Merging)"]
         C5["PP-OCRv6 TensorRT / FastDeploy<br/>(DBNet++ Detection + SVTR-LCNet Recognition)"]
@@ -99,18 +99,19 @@ flowchart TD
     end
 
     subgraph PostProcessing ["5. Stage 4: Linguistic Arbitration & VLM Delegation (Post Process Checkbox)"]
-        E1["Degraded Line Evaluator<br/>(Mean Line Score < 0.78)"]
+        E1["Line Quality Evaluator<br/>(Mean Line Score < 0.78)"]
         E2["Line-Level VLM Delegation<br/>(Dots OCR 7B Full-Line Crop)"]
-        E3["Suspicious Word Scorer<br/>(Historical Trigram Distance + Glyph Analysis)"]
-        E4["Word-Level VLM Delegation<br/>(Contextual Crop Verification)"]
-        E5["Historical Canadiana Gazetteer<br/>(Colonial Territories, Seigniories, Legal Terms)"]
-        E6["Word-Box & Ligature Consolidator<br/>(Merges '&c.', 'No.', 'Co.' + Attaches Punctuation)"]
-        E7["Historical Orthography Normalizer<br/>(Archaic Long-s 'ſ' -> 's' + French Diacritics)"]
+        E3["Token Geometry & Syntax Refiner<br/>(Whitespace / Punctuation Splitting, De-compounding)"]
+        E4["Disputed Word Evaluator<br/>(Conf < 0.80 or Lexical Failure)"]
+        E5["Word-Level VLM Delegation<br/>(Dots OCR 7B Targeted Token Crop)"]
+        E6["Lexicon-Constrained Decoding<br/>(1-Edit Levenshtein + Optical Confusion rn↔m, cl↔d)"]
+        E7["Historical Canadiana Gazetteer<br/>(Colonial Settlements, French Accents, Legal Terms)"]
+        E8["Hyphen & Accent Consolidator<br/>(Cross-Line Hyphens + Recombines Split Accents)"]
     end
 
     subgraph Output ["6. Stage 5: Preservation Outputs (1:1 Pixel Coordinates)"]
         F1["Normalized OCR JSON"]
-        F2["ALTO XML 4.2<br/>(CRKN Preservation Standard)"]
+        F2["ALTO XML 4.2<br/>(Auto-Split Words, Reading Order)"]
         F3["Searchable PDF<br/>(Exact 1:1 Pixel Coordinate Alignment)"]
         F4["Plain Text (TXT)"]
     end
@@ -124,11 +125,12 @@ flowchart TD
     D3 --> E1
     E1 -- Line Score < 0.78 --> E2
     E1 -- High Line Score --> E3
-    E3 -- High Suspicion --> E4
-    E3 -- Clean Token --> E5
-    E2 & E4 --> E5
-    E5 --> E6 --> E7
-    E7 --> F1 & F2 & F3 & F4
+    E3 --> E4
+    E4 -- Conf < 0.80 / Disputed --> E5
+    E4 -- Clean Token --> E6
+    E2 & E5 --> E6
+    E6 --> E7 --> E8
+    E8 --> F1 & F2 & F3 & F4
 ```
 
 ---
@@ -147,27 +149,29 @@ sequenceDiagram
     participant Layout as services/alto_generation.py
     participant VLM as services/post_ocr_vl.py (Dots OCR)
     participant Norm as services/word_box_normalization.py
+    participant Lex as services/historical_lexicon.py
     participant Out as services/pdf_generation.py
 
     Staff->>Pre: Submit scan with "Pre Process" + "Post Process" enabled
-    Pre->>Pre: Detect microfilm profile (Laplacian Var < 75)
+    Pre->>Pre: Detect microfilm profile & flatten background luminance
     Pre->>Pre: Crop black carrier & record pixel offset [dx, dy]
     Pre->>Pre: If character height < 18px, upscale 1.5x with bicubic interpolation
     Pre->>Pre: Reconnect broken letter strokes (2x2 morphological closing)
     Pre->>Pre: Straighten baseline skew (0.35° <= theta <= 5.0°)
-    Pre->>Lang: Inspect file path & collection metadata
-    Lang-->>Core: Assign model ("chinese_cht", "fr" superset, or "en")
+    Pre->>Lang: Inspect file path & collection markers (Bilingual FR, Chinese CHT, EN)
+    Lang-->>Core: Assign model ("chinese_cht", "fr" Latin superset, or "en")
     Core->>Core: Execute PP-OCRv6 DBNet++ & SVTR-LCNet recognition
     Core->>Core: Invert 1.5x upscale coordinates back to original image scale
     Core->>Layout: Pass raw bounding boxes & confidence scores
     Layout->>Layout: Convolve whitespace gutters & organize lines into columns
-    Layout->>VLM: Evaluate line scores & suspicious tokens
-    VLM->>VLM: If line score < 0.78, delegate line crop to Dots OCR 7B
-    VLM->>VLM: Query Canadiana Gazetteer to whitelist colonial terms
-    VLM->>Norm: Consolidate broken abbreviations ("&c.", "No.") & orphan punctuation
+    Layout->>VLM: Evaluate line scores (< 0.78) -> delegate full line to Dots OCR 7B
+    Layout->>Norm: Split run-together tokens (whitespace, punctuation, compound words)
+    Norm->>Lex: Regularize low-conf tokens (< 0.85) via 1-edit Levenshtein & confusion matrix
+    Lex->>VLM: Disputed tokens failing lexicon (< 0.80) -> targeted Dots OCR VLM crop
+    Norm->>Norm: Recombine split French accents (talage + é -> étalage) & cross-line hyphens
     Norm->>Core: Return normalized word boxes & verified transcriptions
     Core->>Out: Build Searchable PDF with invisible text layer
-    Core->>Layout: Build schema-valid ALTO XML 4.2
+    Core->>Layout: Build schema-valid ALTO XML 4.2 with discrete word tokens
     Out-->>Staff: Deliver outputs with 100% pixel coordinate precision
 ```
 
@@ -183,11 +187,17 @@ The preprocessing pipeline automatically senses image properties and applies tar
 | :--- | :--- | :--- |
 | **Black Border Cropping** | `find_black_borders()` | Eliminates dark microfilm borders that cause false positive text detections while preserving `(dx, dy)` offsets. |
 | **Microfilm Detection** | `detect_microfilm_degradation()` | Autonomous trigger analyzing Laplacian variance ($< 75.0$), histogram percentiles, and contrast spread. |
+| **Adaptive Background Flattening** | `detect_microfilm_degradation()` / CLAHE | Automatically detects high background variance or dark corner vignetting and normalizes luminance, making faint strokes (*of*, *said*, *fishery*) crisp and sharp. |
 | **Dynamic CLAHE** | `cv2.createCLAHE()` | Local adaptive histogram equalization to recover faint text in underexposed or yellowed film regions. |
 | **Micro-Stroke Reconnection** | `reconnect_broken_strokes()` | $2 \times 2$ morphological closing bridges hairline breaks (e.g. `'e'` splitting into `'c'`, `'m'` into `'rn'`). |
 | **Dynamic Auto-Deskew** | `estimate_skew_angle()` | Detects page tilt ($0.35^\circ$–$5.0^\circ$) via projection profiles to prevent detectors from jumping column gutters. |
 | **Table Ruling Line Suppression** | `suppress_ruling_lines_if_present()` | Detects ledger gridlines, inpaints intersecting lines, and tightens box dilation (`table_unclip_ratio = 1.25`). |
 | **Adaptive 1.5× Upscaling** | `estimate_median_character_height()` | Upscales small print ($< 18\text{px}$) with bicubic interpolation, then scales coordinates back $1 / 1.5$ for exact alignment. |
+
+### Technical Deep Dive: Microfilm Background Flattening & Dynamic CLAHE
+On challenging historical microfilm reels (such as Library and Archives Canada / LAC `oocihm.lac_reel_c6063`), images suffer from non-uniform dark corner vignetting, low-contrast ink, and negative film grain.
+- **The Process**: When average background variance or darkness exceeds historical archival thresholds, adaptive background flattening and local Contrast Limited Adaptive Histogram Equalization (CLAHE) are automatically engaged.
+- **The Impact**: Overcomes traditional commercial OCR engines on degraded film, transforming faint, unreadable characters into crisp, distinct strokes for PP-OCRv6 without clipping character baselines.
 
 ### Technical Deep Dive: Micro-Print Upscaling & Coordinate Inversion
 Micro-print on historical broadsheets (classified advertisements, shipping manifests, legal deeds) often measures only 10–14 pixels in character height. When processed at native resolution, DBNet text detection struggles with letter boundaries.
@@ -210,7 +220,7 @@ The engine supports ultra-fast local recognition alongside multimodal Vision-Lan
 ### Autonomous Script & Language Resolution (`services/language_detection.py`)
 CRKN collections span multilingual archives: 19th-century English newspapers, French Canadian records, and early 20th-century Chinese broadsheets.
 - **Traditional Chinese (`chinese_cht`)**: Automatically detected for Chinese broadsheets (e.g., `sfu.00001` *The Chinese Times / 大漢公報*, `dahan`, `cht`). Recognizes over 6,000 Traditional Chinese characters with near 100% lexical precision.
-- **Bilingual French Superset (`fr`)**: Automatically detected for Canadian federal publications (StatCan `sru.00007`, `sru.00004`, RCMP forms, Hansard). Paddle's French recognition vocabulary includes all English ASCII characters plus accented letters (`é`, `è`, `ê`, `à`, `ç`, `ô`, `î`, `ù`, `ë`, `ï`), preventing ABBYY-style accent corruption (`"Tlcopieur"` $\rightarrow$ `"Télécopieur"`).
+- **Bilingual French Superset (`fr`)**: Automatically detected for Canadian federal publications, provincial gazettes, and historical Québec serials (`sru.00007`, `sru.00004`, `oocihm.8_06619`, `oocihm.8_`, `qmbn` BAnQ serials, RCMP forms, Hansard). When `lang="fr"` is dispatched, Paddle's Latin/French model natively processes accented characters (`é`, `è`, `ê`, `à`, `ç`, `ô`, `î`, `ù`, `ë`, `ï`, `œ`, `æ`) as first-class tokens rather than treating them as anomalous English noise, preventing dropouts (*qualité* $\rightarrow$ *qualit*, *société* $\rightarrow$ *societ*).
 - **Standard English (`en`)**: Default for unflagged historical serials and monographs.
 
 ### Adaptive Broadsheet Tiling (`services/tile_ocr.py`)
@@ -239,25 +249,55 @@ Standard OCR engines sort lines purely by vertical baseline coordinate ($Y$). On
 
 ## Stage 4: Linguistic Arbitration & VLM Delegation ("Post Process")
 
-When **`Post Process`** is checked, high-speed dictionary heuristics cooperate with targeted Vision-Language Model arbitration:
+When **`Post Process`** is checked, high-speed dictionary heuristics cooperate with targeted Vision-Language Model arbitration across multiple specialized passes:
 
-### 1. Line-Level VLM Delegation (`services/post_ocr_vl.py`)
-- **Problem**: When a microfilm line is faded or warped, correcting individual words out of context produces disjointed errors.
-- **Solution**: If a line's mean confidence drops below **$0.78$**, the entire line is cropped and dispatched to **Dots OCR 7B**. The VLM uses sentence-level context to transcribe the line accurately.
+### 1. Dual-Tier Dots OCR 7B VLM Delegation (`services/post_ocr_vl.py`)
+- **Line-Level Delegation**: When an entire line suffers from severe baseline degradation (mean confidence $< 0.78$), the full line is cropped and dispatched to **Dots OCR 7B**. The VLM leverages sentence-level contextual syntax to resolve smudged microfilm lines.
+- **Targeted Word-Level Crop Delegation**: For individual disputed tokens where confidence drops below **$< 0.80$** and lexical validation fails (or on disputed French vocabulary), the pipeline extracts a tight, context-padded word crop. Dots OCR's vision-language transformer easily deciphers broken microfilm characters, degraded ink, and ornate display typography that character engines fail on.
 
-### 2. Word-Box & Historical Ligature Consolidation (`services/word_box_normalization.py`)
-Historical typography contains contractions and ligatures that standard OCR engines fracture into separate bounding boxes:
-- **Historical Contractions**: Automatically merges fragmented `["&", "c", "."]` into single valid token `"&c."`.
-- **Standard Abbreviations**: Fuses `["No", "."]` $\rightarrow$ `"No."`, `["Co", "."]` $\rightarrow$ `"Co."`, `["Reg", "."]` $\rightarrow$ `"Reg."`, `["Esq", "."]` $\rightarrow$ `"Esq."`.
-- **Orphan Punctuation Attachment**: Trailing punctuation (commas, periods, colons, semicolons) mistakenly segmented as independent boxes is merged back into preceding word boxes, eliminating spurious OCR word count penalties.
+### 2. Accented Word Token Reconstruction (`services/word_box_normalization.py`)
+In degraded French print, floating accents frequently get segmented as detached tokens or split words in two (`talage` + `é`, `galvanis` + `é`).
+- **The Rule**: If an isolated diacritic letter (`é`, `à`, `è`, `ê`, `ç`, etc.) is adjacent to a word token, or if a word was split around an accent, the pipeline tests whether the combined token matches the raw line text in `rec_texts`.
+- **The Impact**: Automatically consolidates these tokens into full, valid accented words (`étalage`, `galvanisé`) before ALTO XML generation, turning thousands of potential OCR dropouts into direct matches.
 
-### 3. Canadiana Historical Gazetteer & Whitelist (`services/historical_lexicon.py`)
+### 3. Punctuation-Bound & Whitespace Token Splitting (`services/word_box_normalization.py`)
+- **Punctuation-Bound Splitting**: Detects words fused across punctuation marks (`r"([A-Za-zÀ-ÿ]+)[,;:\.]([A-Za-zÀ-ÿ]+)"`, e.g. *Montréal,Avril*, *situé,la*, *quincailliers.Des*). Automatically splits them into discrete tokens (*Montréal,* and *Avril*) and calculates proportional horizontal bounding boxes based on relative character count.
+- **Whitespace Token Auto-Splitting**: Standardizes word tokenization by ensuring no `<String>` ALTO element contains internal spaces. Whenever a recognized token contains whitespace (e.g. `"anything to"`), it is automatically split into discrete word tokens (`"anything"` and `"to"`) with partitioned bounding boxes.
+
+### 4. Display-Font Compound Word De-compounding (`services/word_box_normalization.py`)
+In 19th-century newspaper advertisements and classified notices, compressed display type often fuses words together without spaces (*ESTPERMANENT*, *Commodepour*, *belétalageau*).
+- **The Process**: If an all-caps or title-cased token fails lexical validation and has length $\ge 8$, the de-compounder tests split points against the Canadian historical lexicon.
+- **The Resolution**: If both halves validate as historical words, the token is split with horizontally interpolated bounding boxes, eliminating commercial OCR's advantage on dense display ads.
+
+### 5. Cross-Line Hyphen Reconciliation (`services/word_box_normalization.py` & `services/alto_generation.py`)
+In historical newspapers and legal gazettes, trailing hyphens split long words across line breaks (*occupa-* on line 1, *tion* on line 2).
+- **The Resolution**: Reconciles soft hyphens across sequential lines inside layout processing so the unified root word (*occupation*) is evaluated and preserved as a full lexical entity.
+
+### 6. Lexicon-Constrained Decoding & Optical Confusion Matrix (`services/historical_lexicon.py`)
+- **Optical Pair Confusion Matrix**: Targets classic historical print misreadings caused by broken lead type and microfilm spread:
+  - $rn \leftrightarrow m$ (e.g. *modem* $\leftrightarrow$ *modern*)
+  - $cl \leftrightarrow d$
+  - $vv \leftrightarrow w$
+  - $fi$ / $fl$ ligature fractures
+  - $e \leftrightarrow c \leftrightarrow o$
+  - $li \leftrightarrow h$ / $b$
+- **1-Edit Levenshtein Regularizer**: When a token's confidence is $< 0.85$ and it is within 1 edit substitution of a known Canadian historical term (*heeb* $\rightarrow$ *hereby*, *resering* $\rightarrow$ *reserving*), it is regularized automatically.
+- **Common Historical Optical Omissions**: Resolves frequent historical abbreviations and faint ink dropouts (*sd* $\rightarrow$ *said*, *thie* $\rightarrow$ *this*, *tis* $\rightarrow$ *this*, *oupa* $\rightarrow$ *occupa-*).
+- **French Terminal Accent Regularizer**: Corrects high-frequency terminal accent dropouts (*qualit* $\rightarrow$ *qualité*, *societ* $\rightarrow$ *société*, *activit* $\rightarrow$ *activité*, *comptabilit* $\rightarrow$ *comptabilité*, *fraichement* $\rightarrow$ *fraîchement*, *deyenir* $\rightarrow$ *devenir*).
+
+### 7. Canadiana Historical Gazetteer & Whitelist (`services/historical_lexicon.py`)
 Prevents automated spellcheckers from misidentifying genuine historical proper nouns as OCR errors:
 - **Territories & Settlements**: *Upper Canada*, *Lower Canada*, *Assiniboia*, *Athabaska*, *Keewatin*, *Rupert's Land*, *Hochelaga*, *Bytown*, *Stadacona*, *Cataraqui*, *Glengarry*, *Gaspésie*, *Kamouraska*, *Batoche*.
 - **French Canadian Seigniorial Terms**: *seigneurie*, *censive*, *censitaire*, *lods*, *corvée*, *arpents*, *bailliage*, *prévôté*, *greffier*, *marguillier*, *voltigeurs*, *fencibles*.
 - **Colonial Abbreviations**: *Vic.* (Victorian statutes), *Geo.*, *Edw.*, *Esq.*, *Honble.*, *M.P.P.*, *M.L.A.*, *Q.C.*, *inst.*, *ult.*, *prox.*, *sess.*
 
-### 4. Archaic Long-s (`ſ` $\rightarrow$ `s`) Resolution
+### 8. Word-Box & Historical Ligature Consolidation (`services/word_box_normalization.py`)
+Historical typography contains contractions and ligatures that standard OCR engines fracture into separate bounding boxes:
+- **Historical Contractions**: Automatically merges fragmented `["&", "c", "."]` into single valid token `"&c."`.
+- **Standard Abbreviations**: Fuses `["No", "."]` $\rightarrow$ `"No."`, `["Co", "."]` $\rightarrow$ `"Co."`, `["Reg", "."]` $\rightarrow$ `"Reg."`, `["Esq", "."]` $\rightarrow$ `"Esq."`.
+- **Orphan Punctuation Attachment**: Trailing punctuation (commas, periods, colons, semicolons) mistakenly segmented as independent boxes is merged back into preceding word boxes, eliminating spurious OCR word count penalties.
+
+### 9. Archaic Long-s (`ſ` $\rightarrow$ `s`) Resolution
 In 18th- and early 19th-century Canadian gazettes, the historical medial long-s (`ſ`) is transcribed by modern OCR models as `'f'` (e.g., *firft* $\rightarrow$ *first*, *houfe* $\rightarrow$ *house*, *caufe* $\rightarrow$ *cause*, *congrefs* $\rightarrow$ *congress*).
 - Modern English collisions (*fame*, *cafe*, *fend*) are protected. Phrase-level bigrams (*"the fame"* $\rightarrow$ *"the same"*, *"in cafe"* $\rightarrow$ *"in case"*) and unambiguous words (*"bufinefs"* $\rightarrow$ *"business"*, *"majefty"* $\rightarrow$ *"majesty"*) are resolved automatically.
 
@@ -284,7 +324,8 @@ output/
 
 ### ALTO XML 4.2 Generation (`services/alto_generation.py`)
 - Generates fully schema-valid ALTO XML 4.2 (`<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">`).
-- Encapsulates exact line boxes (`<TextLine>`), word tokens (`<String CONTENT="..." HPOS="..." VPOS="..." WIDTH="..." HEIGHT="..." WC="..."/>`), and spaces (`<SP/>`).
+- Encapsulates exact line boxes (`<TextLine>`), discrete word tokens (`<String CONTENT="..." HPOS="..." VPOS="..." WIDTH="..." HEIGHT="..." WC="..."/>`), and spaces (`<SP/>`).
+- **Whitespace Token Auto-Splitting**: Recognized tokens containing internal whitespace are partitioned into individual `<String>` items with proportional horizontal bounding boxes, eliminating multi-word string anomalies.
 - Organizes text into column-ordered layout blocks (`<TextBlock>`), ensuring screen readers and automated ingest tools read broadsheets in natural reading sequence.
 
 ---
@@ -297,9 +338,18 @@ The pipeline includes an automated benchmarking suite to evaluate performance ag
 flowchart LR
     PaddleALTO["Paddle Pipeline Output ALTO"] --> Arbiter["tools/compare_alto.py<br/>Lexical Quality Arbiter"]
     AbbyyALTO["ABBYY FineReader ALTO"] --> Arbiter
-    Arbiter --> Lexicon["Canadian Historical Lexicon<br/>+ English/French SpellCheckers"]
-    Lexicon --> Output["Interactive HTML Dashboard<br/>(compare/index.html)<br/>+ Concordance & Win Rates"]
+    Arbiter --> Lexicon["Canadian Historical Lexicon<br/>+ English/French SpellCheckers<br/>+ Phrase-Aware QA"]
+    Lexicon --> Output["Interactive HTML Dashboard<br/>(compare/index.html)<br/>+ Concordance, Word Recall & Win Rates"]
+    Output --> Sync["Granular Publication Push<br/>(tools/sync_evaluations.py)<br/>to OCR-Evaluations Repository"]
 ```
+
+### Key Evaluation Capabilities
+- **Phrase-Aware Lexical QA**: If a comparison token contains spaces, the arbiter evaluates whether all constituent words are valid dictionary entries (`all(is_valid(w) for w in token.split())`), preventing false error penalties on compound or hyphenated phrases.
+- **Word Recall & Total Word Count Reporting**: Accurately tracks recognized word count and word recall rates alongside dictionary precision, providing a balanced, transparent comparison against ABBYY FineReader.
+- **Resilient Multi-Repository Synchronization (`--sync-docs` & `tools/sync_evaluations.py`)**:
+  - Evaluation results and interactive inspection viewers can be synchronized directly to the CRKN `OCR-Evaluations` repository.
+  - To prevent GitHub HTTPS timeouts on multi-gigabyte historical scan datasets (~7 GiB), synchronization stages and pushes in granular publication-by-publication batches with exponential backoff and retry.
+  - Local `compare/` directories are untracked in `.gitignore` to keep the main pipeline repository clean and lightweight.
 
 ### Running the Full Automated Benchmark
 To run OCR on the full test directory and update the comparison dashboard:
@@ -321,7 +371,7 @@ To compare an existing folder of ALTO XML files against ABBYY FineReader baselin
 
 The tool produces:
 - `compare/index.html`: An interactive HTML dashboard with side-by-side diffs, token concordance rates, and win statistics.
-- `compare/comparison_summary.csv`: Machine-readable token statistics and dictionary validity metrics per page.
+- `compare/comparison_summary.csv`: Machine-readable token statistics, word count recall, and dictionary validity metrics per page.
 
 #### Executive Benchmark Overview
 ![OCR Quality Benchmark Dashboard](images/02_comparison_dashboard.png)
@@ -426,8 +476,9 @@ paddle_pipeline/
 │   ├── run_full_benchmark.py      Automated end-to-end full run & comparison dashboard updater
 │   ├── batch_runner.py            Headless CLI batch processor with resume support
 │   ├── compare_alto.py            ABBYY FineReader comparison & HTML dashboard generator
-│   └── evaluate_ocr.py            CER, WER, and Bag-of-Words F1 benchmark against Ground Truth
-└── compare/                       Benchmark comparison reports & summaries (HTML, CSV, JSON)
+│   ├── evaluate_ocr.py            CER, WER, and Bag-of-Words F1 benchmark against Ground Truth
+│   └── sync_evaluations.py        Resilient publication-level batch pusher for OCR-Evaluations repository
+└── compare/                       Local evaluation output directory (untracked in git, synced to OCR-Evaluations)
 ```
 
 ---

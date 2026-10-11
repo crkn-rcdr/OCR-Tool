@@ -58,7 +58,7 @@ Once initialization completes, your web browser will automatically open **`http:
 * **`Auto-detect Script (Recommended)` (Default)**:
   * **Leave this on `Auto-detect Script` for most jobs!** The engine automatically examines your folder and files:
     * Dispatches **Traditional Chinese (`chinese_cht`)** for Chinese-Canadian broadsheets (e.g. *The Chinese Times* / 《大漢公報》).
-    * Dispatches **Bilingual French superset (`fr`)** for Canadian federal records (StatCan annuals, RCMP forms, Parliamentary Hansard, Québec archives), preventing accent mangling (`"Tlcopieur"` $\rightarrow$ `"Télécopieur"`).
+    * Dispatches **Bilingual French superset (`fr`)** for Canadian federal records, provincial serials, and historical publications (`sru`, `oocihm.8`, `qmbn`, BAnQ, StatCan, Hansard), preventing accent mangling (`"Tlcopieur"` $\rightarrow$ `"Télécopieur"`).
     * Defaults to **English (`en`)** for standard serials and monographs.
 * **Manual Language Selection**:
   * If digitizing a specific historical diaspora run, key Canadiana historical languages are pinned right at the top of the dropdown:
@@ -72,8 +72,8 @@ Once initialization completes, your web browser will automatically open **`http:
 #### Master Processing Toggles
 | Toggle | What It Does | When to Check It |
 | :--- | :--- | :--- |
-| **`pre process`** | **Adaptive Archival Enhancement**: Crops black microfilm borders (preserving pixel offsets), boosts dynamic contrast (CLAHE), reconnects broken letter strokes ($2\times 2$ morphological closing), straightens tilt (deskew), suppresses table ruling lines, and dynamically upscales micro-print ($< 18\text{px}$) by $1.5\times$ with coordinate inversion. | **Recommended ON** for all historical microfilms, yellowed broadsheets, and newspaper scans. |
-| **`post process`** | **Visual & Linguistic Arbitration**: Evaluates degraded text lines ($< 0.78$ score) and delegates them to **Dots OCR 7B**. Merges split contractions (`&c.`) and abbreviations (`No.`, `Co.`), re-attaches orphan punctuation, fixes archaic long-s (`ſ` $\rightarrow$ `s`), and restores French accents against the Canadiana Historical Gazetteer. | **Recommended ON** for production preservation output. Turn off only for quick test drafts. |
+| **`pre process`** | **Adaptive Archival Enhancement**: Crops black microfilm borders (preserving pixel offsets), flattens background luminance and boosts dynamic contrast (CLAHE), reconnects broken letter strokes ($2\times 2$ morphological closing), straightens tilt (deskew), suppresses table ruling lines, and dynamically upscales micro-print ($< 18\text{px}$) by $1.5\times$ with coordinate inversion. | **Recommended ON** for all historical microfilms, yellowed broadsheets, and newspaper scans. |
+| **`post process`** | **Visual & Linguistic Arbitration**: Evaluates degraded text lines ($< 0.78$) and low-confidence disputed words ($< 0.80$) via **Dots OCR 7B**. Splits punctuation-bound tokens and spaces, de-compounds display advertisements, reconciles cross-line hyphens, regularizes optical confusions ($rn \leftrightarrow m$, $cl \leftrightarrow d$), reconstructs split French accents, and verifies against the Canadiana Historical Gazetteer. | **Recommended ON** for production preservation output. Turn off only for quick test drafts. |
 
 ---
 
