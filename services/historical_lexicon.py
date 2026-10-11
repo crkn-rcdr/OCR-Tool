@@ -500,6 +500,16 @@ HISTORICAL_OPTICAL_CORRECTIONS: Dict[str, str] = {
     "vvith": "with",
     "vvhen": "when",
     "vvhere": "where",
+    # French historical dropouts & faint terminal accents
+    "qualit": "qualité",
+    "societ": "société",
+    "activit": "activité",
+    "comptabilit": "comptabilité",
+    "capacit": "capacité",
+    "propriet": "propriété",
+    "fraichement": "fraîchement",
+    "deyenir": "devenir",
+    "deyenant": "devenant",
 }
 
 

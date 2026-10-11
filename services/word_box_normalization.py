@@ -208,6 +208,119 @@ def merge_accent_split_tokens(
     return [m["text"] for m in merged], [m["box"] for m in merged]
 
 
+def split_box_horizontally(box: Any, ratio: float) -> tuple[Any, Any]:
+    """Split a bounding box or polygon horizontally by a fraction ratio (0.05 to 0.95)."""
+    ratio = max(0.05, min(0.95, float(ratio)))
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+
+    if isinstance(box, (list, tuple)):
+        # 4-point polygon [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+        if len(box) == 4 and isinstance(box[0], (list, tuple)) and len(box[0]) == 2:
+            p0, p1, p2, p3 = box[0], box[1], box[2], box[3]
+            split_top = [p0[0] + (p1[0] - p0[0]) * ratio, p0[1] + (p1[1] - p0[1]) * ratio]
+            split_bot = [p3[0] + (p2[0] - p3[0]) * ratio, p3[1] + (p2[1] - p3[1]) * ratio]
+            box_left = [p0, split_top, split_bot, p3]
+            box_right = [split_top, p1, p2, split_bot]
+            return box_left, box_right
+        # [x1, y1, x2, y2] rectangle
+        elif len(box) == 4 and all(isinstance(v, (int, float)) for v in box):
+            x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+            split_x = x1 + (x2 - x1) * ratio
+            return [x1, y1, split_x, y2], [split_x, y1, x2, y2]
+
+    return deepcopy(box), deepcopy(box)
+
+
+PUNCT_SPLIT_RE = re.compile(r"^([A-Za-zÀ-ÿ0-9]+)([,;:!?&\.])([A-Za-zÀ-ÿ0-9]+[.,;:!?]?)$")
+
+
+def split_punctuation_bound_tokens(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Split tokens fused together across punctuation without whitespace (e.g. 'Montréal,Avril', 'situé,la')."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    try:
+        from services.historical_lexicon import is_valid_historical_word
+    except ImportError:
+        return words, boxes
+
+    out_words = []
+    out_boxes = []
+
+    for w, b in zip(words, boxes):
+        text = str(w).strip()
+        m = PUNCT_SPLIT_RE.match(text)
+        if m:
+            w1, punct, w2 = m.groups()
+            clean1 = w1.strip(".,:;!?()[]{}\"'`").lower()
+            clean2 = w2.strip(".,:;!?()[]{}\"'`").lower()
+
+            if is_valid_historical_word(clean1) or is_valid_historical_word(clean2):
+                token1 = f"{w1}{punct}"
+                token2 = w2
+                total_len = len(token1) + len(token2)
+                ratio = len(token1) / max(1, total_len)
+                b1, b2 = split_box_horizontally(b, ratio)
+                out_words.extend([token1, token2])
+                out_boxes.extend([b1, b2])
+                continue
+
+        out_words.append(w)
+        out_boxes.append(b)
+
+    return out_words, out_boxes
+
+
+def decompound_fused_display_tokens(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Decompound display-ad words fused across condensed typography (e.g. 'ESTPERMANENT', 'Commodepour')."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    try:
+        from services.historical_lexicon import is_valid_historical_word
+    except ImportError:
+        return words, boxes
+
+    out_words = []
+    out_boxes = []
+
+    for w, b in zip(words, boxes):
+        text = str(w).strip()
+        clean = text.strip(".,:;!?()[]{}\"'`")
+
+        # Only consider tokens of length >= 8 that are not already valid dictionary words
+        if len(clean) >= 8 and clean.isalpha() and not is_valid_historical_word(clean.lower()):
+            found_split = False
+            for k in range(3, len(clean) - 2):
+                p1 = clean[:k].lower()
+                p2 = clean[k:].lower()
+                if is_valid_historical_word(p1) and is_valid_historical_word(p2):
+                    token1 = text[:k]
+                    token2 = text[k:]
+                    ratio = len(token1) / max(1, len(text))
+                    b1, b2 = split_box_horizontally(b, ratio)
+                    out_words.extend([token1, token2])
+                    out_boxes.extend([b1, b2])
+                    found_split = True
+                    break
+            if found_split:
+                continue
+
+        out_words.append(w)
+        out_boxes.append(b)
+
+    return out_words, out_boxes
+
+
 def merge_word_boxes_advanced(
     words: Any,
     boxes: Any,
@@ -218,13 +331,17 @@ def merge_word_boxes_advanced(
     # 1. Recombine accented French and line words that Paddle split across tokens
     words, boxes = merge_accent_split_tokens(words, boxes, line_text=line_text)
     words, boxes = consolidate_words_to_line_text(words, boxes, line_text=line_text)
-    # 2. Merge apostrophes (queen's, o'clock, etc.)
+    # 2. Split punctuation-bound fused words (e.g. Montréal,Avril -> Montréal, + Avril, situé,la -> situé, + la)
+    words, boxes = split_punctuation_bound_tokens(words, boxes, line_text=line_text)
+    # 3. Decompound display-ad words fused across condensed typography (e.g. ESTPERMANENT -> EST + PERMANENT)
+    words, boxes = decompound_fused_display_tokens(words, boxes, line_text=line_text)
+    # 4. Merge apostrophes (queen's, o'clock, etc.)
     words, boxes = merge_apostrophe_word_boxes(words, boxes, line_text=line_text)
-    # 3. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
+    # 5. Merge historical abbreviations & ligatures (&c., No., Co., etc.)
     words, boxes = merge_abbreviation_word_boxes(words, boxes, line_text=line_text)
-    # 4. Attach orphan trailing punctuation to preceding word tokens
+    # 6. Attach orphan trailing punctuation to preceding word tokens
     words, boxes = merge_orphan_punctuation_word_boxes(words, boxes, line_text=line_text)
-    # 5. Regularize broken microfilm words (e.g. resering -> reserving, paage -> page)
+    # 7. Regularize broken microfilm words and French dropouts (e.g. qualit -> qualité, resering -> reserving)
     words = regularize_word_tokens(words, line_score=line_score)
     return words, boxes
 

@@ -758,7 +758,17 @@ def collect_word_candidates(
                     continue
 
             if mode == "suspicious" and weirdness < 0.5:
-                continue
+                # Disputed words failing lexical validation qualify for VLM review
+                try:
+                    from services.historical_lexicon import is_valid_historical_word
+                    if not is_valid_historical_word(text) and (line_score is None or line_score < 0.88):
+                        weirdness = 0.8
+                        reasons.append("non-lexical disputed word")
+                    else:
+                        continue
+                except Exception:
+                    continue
+
             if mode == "low_confidence" and not low_confidence:
                 continue
 

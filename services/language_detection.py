@@ -48,9 +48,15 @@ FRENCH_MARKERS = {
     "quebec",
     "québec",
     "banq",
+    "qmbn",
+    "oocihm.8_06619",
+    "oocihm.8_",
+    "prix_courant",
     "canadiana_fr",
     "bas_canada",
     "canada_est",
+    "devoir",
+    "la_presse",
 }
 
 # Canadian federal bilingual records and official publications (RCMP, StatCan annuals, Parliamentary)
