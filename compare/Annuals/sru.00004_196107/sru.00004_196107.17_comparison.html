@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRKN OCR Comparison: sru.00004_196107.17</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1a1e24; color: #e1e4e8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { background: #24292e; border-bottom: 1px solid #30363d; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; z-index: 10; gap: 12px; }
+  
+  .nav-left { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+  .nav-btn-back { background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.82rem; transition: all 0.15s ease; }
+  .nav-btn-back:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+  .nav-sep { color: #484f58; }
+  .nav-coll { color: #8b949e; font-weight: 500; font-size: 0.84rem; }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #f0f6fc; }
+  
+  .nav-center { display: flex; align-items: center; gap: 6px; }
+  .nav-page-btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; font-weight: 500; }
+  .nav-page-btn:hover:not(.disabled) { background: #30363d; color: #58a6ff; border-color: #58a6ff; }
+  .nav-page-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .page-current { font-size: 0.82rem; color: #8b949e; padding: 0 4px; }
+  
+  .badges { display: flex; gap: 8px; font-size: 0.8rem; align-items: center; }
+  .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; background: #30363d; }
+  .badge.success { background: #198754; color: #fff; }
+  .badge.warning { background: #d97706; color: #fff; }
+  .badge.info { background: #0284c7; color: #fff; }
+  .badge.qa-win { background: #238636; color: #fff; }
+  .badge.qa-loss { background: #8957e5; color: #fff; }
+  
+  .controls { background: #212529; border-bottom: 1px solid #30363d; padding: 8px 18px; display: flex; gap: 14px; align-items: center; font-size: 0.84rem; flex-wrap: wrap; }
+  .controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .controls select, .controls input[type="range"] { vertical-align: middle; }
+  .slider-group { display: flex; align-items: center; gap: 6px; }
+  
+  .main-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  .viewers-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  
+  .panel { flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; }
+  .panel:active { cursor: grabbing; }
+  .panel-header { position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }
+  
+  .canvas-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 1877.0px; height: 2979.0px; }
+  .page-image { position: absolute; top: 0; left: 0; width: 1877.0px; height: 2979.0px; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }
+  .overlay-svg { position: absolute; top: 0; left: 0; width: 1877.0px; height: 2979.0px; pointer-events: auto; }
+  
+  rect.agree { fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }
+  rect.discrepancy { fill: rgba(245, 158, 11, 0.35); stroke: #f59e0b; stroke-width: 2; cursor: pointer; }
+  rect.p-only { fill: rgba(56, 189, 248, 0.35); stroke: #38bdf8; stroke-width: 1.5; cursor: pointer; }
+  rect.b-only { fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }
+  rect:hover { fill-opacity: 0.7; stroke-width: 2.5; }
+  
+  /* Selected / Highlighted active word - completely transparent interior (fill: none) */
+  rect.highlighted {
+    stroke: #00ffff !important;
+    stroke-width: 4 !important;
+    fill: none !important;
+    filter: drop-shadow(0 0 6px #00ffff);
+    vector-effect: non-scaling-stroke;
+  }
+  
+  .sidebar { width: 360px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }
+  .sidebar-header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.88rem; background: #24292e; display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-filter-bar { padding: 8px 12px; background: #181b20; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+  .filter-dropdown { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; width: 100%; }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  
+  .card { background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s ease; }
+  .card:hover { border-color: #60a5fa; background: #2d3542; }
+  .card.active {
+    border-color: #00ffff !important;
+    background: #1e3a4f !important;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+  }
+  .card-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .card-diff { font-weight: bold; color: #f59e0b; word-break: break-all; }
+  .card-label { color: #9ca3af; font-size: 0.75rem; }
+  
+  .verdict-tag { font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+  .verdict-tag.paddle-win { background: rgba(35, 134, 54, 0.25); color: #3fb950; border: 1px solid #238636; }
+  .verdict-tag.abbyy-win { background: rgba(218, 54, 51, 0.25); color: #f85149; border: 1px solid #da3633; }
+  .verdict-tag.both-valid { background: rgba(56, 139, 253, 0.2); color: #58a6ff; border: 1px solid #1f6feb; }
+  .verdict-tag.neither-valid { background: rgba(110, 118, 129, 0.2); color: #8b949e; border: 1px solid #484f58; }
+  
+  .legend { display: flex; gap: 12px; font-size: 0.78rem; align-items: center; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav-left">
+    <a href="../../index.html" class="nav-btn-back">← Master Dashboard</a>
+    <span class="nav-sep">/</span>
+    <span class="nav-coll">Annuals/sru.00004_196107</span>
+    <span class="nav-sep">/</span>
+    <h1>sru.00004_196107.17</h1>
+  </div>
+  <div class="nav-center">
+    <a href="sru.00004_196107.16_comparison.html" class="nav-page-btn">‹ Previous</a>
+    <span class="page-current">sru.00004_196107.17</span>
+    <a href="sru.00004_196107.18_comparison.html" class="nav-page-btn">Next ›</a>
+  </div>
+  <div class="badges">
+    <div class="badge success" title="Text Concordance (Cleaned)">Concordance: 98.8%</div>
+    <div class="badge qa-win" title="Paddle 1 wins vs ABBYY 0 wins on disputed words">Paddle QA Win Rate: 100.0%</div>
+    <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: 91.21%</div>
+    <div class="badge warning" title="Discrepant words count">Diffs: 1</div>
+  </div>
+</header>
+
+<div class="controls">
+  <label><input type="checkbox" id="chkAgree" checked> Concordant (Green)</label>
+  <label><input type="checkbox" id="chkDiff" checked> Discrepancies (Orange)</label>
+  <label><input type="checkbox" id="chkOnly" checked> Engine-Only (Blue/Red)</label>
+  
+  <span style="border-left: 1px solid #444c56; height: 18px; margin: 0 4px;"></span>
+  
+  <label><input type="checkbox" id="chkBgImage" checked> Background Image</label>
+  <div class="slider-group">
+    <span style="color:#9ca3af;font-size:0.8rem;">Opacity:</span>
+    <input type="range" id="rngOpacity" min="0" max="100" value="85" style="width: 90px; cursor: pointer;">
+    <span id="lblOpacity" style="font-size:0.8rem; width: 32px;">85%</span>
+  </div>
+  
+  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;">Reset View</button>
+  <span style="flex:1;"></span>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#28a745;"></div> Agreed</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Discrepancy</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Pipeline Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> ABBYY Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ffff;"></div> Selected</div>
+  </div>
+</div>
+
+<div class="main-container">
+  <div class="viewers-container">
+    <!-- Pipeline Panel (Left) -->
+    <div class="panel" id="panelLeft">
+      <div class="panel-header">Pipeline (PaddleOCR + VLM) - 91 words</div>
+      <div class="canvas-stage" id="stageLeft">
+        <img class='page-image' id='imgLeft' src='sru.00004_196107.17.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgLeft" viewBox="0 0 1877.0 2979.0"></svg>
+      </div>
+    </div>
+    
+    <!-- Benchmark Panel (Right) -->
+    <div class="panel" id="panelRight">
+      <div class="panel-header">Benchmark (ABBYY FineReader) - 93 words</div>
+      <div class="canvas-stage" id="stageRight">
+        <img class='page-image' id='imgRight' src='sru.00004_196107.17.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgRight" viewBox="0 0 1877.0 2979.0"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discrepancy Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div>
+        <span>Discrepancies</span>
+        <span class="badge warning" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">1</span>
+      </div>
+      <span style="font-size:0.75rem;color:#9ca3af;">Click card to inspect</span>
+    </div>
+    <div class="sidebar-filter-bar">
+      <select id="selFilterDiscrepancies" class="filter-dropdown">
+        <option value="all">All Discrepancies (1)</option>
+        <option value="PADDLE_WIN">Paddle Wins (1)</option>
+        <option value="ABBYY_WIN">ABBYY Wins (0)</option>
+        <option value="BOTH_VALID">Both Valid (0)</option>
+        <option value="NEITHER_VALID">Neither Valid (0)</option>
+      </select>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </div>
+</div>
+
+<script>
+  const matchedData = [{"p_text": "charge", "b_text": "charge", "p_box": [0.14420351624933406, 0.12196374622356496, 0.05434203516249334, 0.012755958375293723], "b_box": [0.14064997336174748, 0.12420275260154415, 0.0580713905167821, 0.009734810339039947], "iou": 0.725, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "grounds.", "b_text": "grounds.", "p_box": [0.7004102290889718, 0.39028868747901985, 0.07778369738945125, 0.0143202416918429], "b_box": [0.6973894512519979, 0.3924135615978516, 0.07671816728822589, 0.010406176569318564], "iou": 0.67, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Kennedy", "b_text": "Kennedy", "p_box": [0.6286627597229622, 0.8743437395099026, 0.08346830047948854, 0.014098690835850957], "b_box": [0.62226957911561, 0.8774756629741524, 0.09270111880660628, 0.010070493454179255], "iou": 0.662, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999985, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Kennedy", "b_text": "Kennedy", "p_box": [0.6730580713905168, 0.3766364551863041, 0.06925945657964838, 0.014098690835850957], "b_box": [0.6659563132658498, 0.3793219201074186, 0.07831646244006393, 0.010070493454179255], "iou": 0.653, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Downey,", "b_text": "Downey,", "p_box": [0.031965903036760786, 0.12196374622356496, 0.07494405966968566, 0.012755958375293723], "b_box": [0.02557272242940863, 0.12520980194696207, 0.07458710708577518, 0.009734810339039947], "iou": 0.627, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "barracks", "b_text": "barracks", "p_box": [0.828273841236015, 0.3766364551863041, 0.06925945657964838, 0.014098690835850957], "b_box": [0.8225892381459776, 0.37831487076200065, 0.07511987213638785, 0.00906344410876133], "iou": 0.61, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "(Left)", "b_text": "(Left)", "p_box": [0.6201385189131593, 0.8034004699563612, 0.05647309536494406, 0.016112789526686808], "b_box": [0.6249334043686734, 0.8069822087948976, 0.0527437400106553, 0.010741859684457872], "iou": 0.602, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Musical", "b_text": "Musical", "p_box": [0.2859190197123069, 0.12196374622356496, 0.06250932338838572, 0.012755958375293723], "b_box": [0.2797016515716569, 0.1228600201409869, 0.06659563132658497, 0.008392077878482713], "iou": 0.596, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Diefenbaker.", "b_text": "Diefenbaker.", "p_box": [0.6290197123068727, 0.887771064115475, 0.10868407032498668, 0.013648875461564283], "b_box": [0.62226957911561, 0.8905673044645854, 0.11507725093233884, 0.008392077878482713], "iou": 0.59, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999993, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Kennedy", "b_text": "Kennedy", "p_box": [0.7554608417687799, 0.9293957703927492, 0.07991475759190197, 0.016784155756965426], "b_box": [0.7549280767181673, 0.9335347432024169, 0.07884922749067662, 0.010070493454179255], "iou": 0.586, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.984803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Vanier,", "b_text": "Vanier,", "p_box": [0.7934629728289824, 0.8611379657603222, 0.06819392647842301, 0.014323598522994294], "b_box": [0.7884922749067661, 0.8640483383685801, 0.06499733617474694, 0.009734810339039947], "iou": 0.57, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.985297, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "President", "b_text": "President", "p_box": [0.8655673947789025, 0.8611379657603222, 0.07955780500799148, 0.014323598522994294], "b_box": [0.862013851891316, 0.8637126552534408, 0.08257858284496537, 0.008392077878482713], "iou": 0.567, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.985297, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Commissioner", "b_text": "Commissioner", "p_box": [0.580713905167821, 0.36298422289358845, 0.1189824187533298, 0.014323598522994294], "b_box": [0.5737879595098562, 0.36656596173212486, 0.1262653169952051, 0.008392077878482713], "iou": 0.566, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999965, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Barracks.", "b_text": "Barracks.", "p_box": [0.8570431539690997, 0.9439409197717354, 0.09163558870538092, 0.014098690835850957], "b_box": [0.862013851891316, 0.9462907015777107, 0.08311134789557804, 0.00872776099362202], "iou": 0.561, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995999, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Minister", "b_text": "Minister", "p_box": [0.8641449120937666, 0.8743437395099026, 0.07955780500799148, 0.014098690835850957], "b_box": [0.8556206712839638, 0.8768042967438738, 0.08897176345231753, 0.008392077878482713], "iou": 0.556, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999985, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "General", "b_text": "General", "p_box": [0.7174587107085776, 0.8611379657603222, 0.06428343100692595, 0.014323598522994294], "b_box": [0.7128396377197656, 0.8640483383685801, 0.06819392647842301, 0.008392077878482713], "iou": 0.556, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.985297, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "the", "b_text": "the", "p_box": [0.24436334576451785, 0.12196374622356496, 0.020953649440596696, 0.012755958375293723], "b_box": [0.24134256792754397, 0.12353138637126553, 0.02557272242940863, 0.008056394763343404], "iou": 0.554, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Rockcliffe", "b_text": "Rockcliffe", "p_box": [0.7565263718700054, 0.9439409197717354, 0.09127863612147044, 0.014098690835850957], "b_box": [0.7629195524773574, 0.94662638469285, 0.09163558870538092, 0.00872776099362202], "iou": 0.55, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995999, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "around", "b_text": "around", "p_box": [0.7547522642514651, 0.3766364551863041, 0.05718167288225892, 0.014098690835850957], "b_box": [0.7517314864144912, 0.3793219201074186, 0.06233351092168354, 0.008056394763343404], "iou": 0.543, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Governor", "b_text": "Governor", "p_box": [0.630085242408098, 0.8611379657603222, 0.07209909429941397, 0.014323598522994294], "b_box": [0.62226957911561, 0.8643840214837194, 0.08204581779435269, 0.008392077878482713], "iou": 0.542, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.985297, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "lawns", "b_text": "lawns", "p_box": [0.8982418753329782, 0.8342833165491775, 0.04617474693660096, 0.01499496475327291], "b_box": [0.8961108151305275, 0.8371936891574354, 0.04794885455514118, 0.008392077878482713], "iou": 0.541, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "show", "b_text": "show", "p_box": [0.5750293020777837, 0.3766364551863041, 0.03694192860948322, 0.014098690835850957], "b_box": [0.5727224294086308, 0.3799932863376972, 0.041022908897176344, 0.008056394763343404], "iou": 0.537, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Centre", "b_text": "(Centre)", "p_box": [0.6368300479488546, 0.8342833165491775, 0.05469898774640384, 0.01499496475327291], "b_box": [0.6249334043686734, 0.837865055387714, 0.07511987213638785, 0.010070493454179255], "iou": 0.537, "clean_match": true, "exact_match": false, "sim": 0.75, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "the", "b_text": "the", "p_box": [0.8602397442727757, 0.8342833165491775, 0.025215769845498136, 0.01499496475327291], "b_box": [0.8582844965370272, 0.8371936891574354, 0.02717101758124667, 0.008392077878482713], "iou": 0.536, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Prime", "b_text": "Prime", "p_box": [0.7842301545018647, 0.8743437395099026, 0.05718167288225892, 0.014098690835850957], "b_box": [0.7789025039957379, 0.8774756629741524, 0.06180074587107086, 0.008056394763343404], "iou": 0.536, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999985, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Harvison", "b_text": "Harvison", "p_box": [0.8264944059669685, 0.36298422289358845, 0.06712839637719765, 0.014323598522994294], "b_box": [0.8183271177410761, 0.3658945955018463, 0.07884922749067662, 0.008392077878482713], "iou": 0.532, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999965, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "and", "b_text": "and", "p_box": [0.7192328183271177, 0.36298422289358845, 0.02770378263185935, 0.014323598522994294], "b_box": [0.7160362280234417, 0.36623027861698554, 0.03090037293553543, 0.008056394763343404], "iou": 0.528, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999965, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Diefenbaker", "b_text": "Diefenbaker", "p_box": [0.619072988811934, 0.9439409197717354, 0.10086840703249868, 0.014098690835850957], "b_box": [0.6233351092168353, 0.9469620678079893, 0.11028236547682473, 0.008392077878482713], "iou": 0.528, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995999, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "in", "b_text": "in", "p_box": [0.11507725093233884, 0.12196374622356496, 0.01242940863079382, 0.012755958375293723], "b_box": [0.11188066062866275, 0.12487411883182276, 0.015982951518380393, 0.007720711648204095], "iou": 0.516, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Right", "b_text": "(Right)", "p_box": [0.6386094832179009, 0.9166398120174556, 0.04439531166755461, 0.015216515609264854], "b_box": [0.6254661694192861, 0.9207787848271232, 0.0660628662759723, 0.010406176569318564], "iou": 0.513, "clean_match": true, "exact_match": false, "sim": 0.714, "p_conf": 0.982375, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Harvison", "b_text": "Harvison", "p_box": [0.8744432605221097, 0.9166398120174556, 0.0713905167820991, 0.015216515609264854], "b_box": [0.8657432072456047, 0.9204431017119838, 0.07884922749067662, 0.008392077878482713], "iou": 0.508, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.982375, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "and", "b_text": "and", "p_box": [0.7348588172615876, 0.8743437395099026, 0.030548748002131063, 0.014098690835850957], "b_box": [0.728822589238146, 0.8774756629741524, 0.036228023441662226, 0.008056394763343404], "iou": 0.507, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999985, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "stroll", "b_text": "stroll", "p_box": [0.7423175279701651, 0.8342833165491775, 0.04191262653169952, 0.01499496475327291], "b_box": [0.7378795950985615, 0.8375293722725747, 0.04421949920085243, 0.008392077878482713], "iou": 0.501, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "of", "b_text": "of", "p_box": [0.21523708044752266, 0.12196374622356496, 0.01242940863079382, 0.012755958375293723], "b_box": [0.2109749600426212, 0.12386706948640483, 0.017581246670218435, 0.008056394763343404], "iou": 0.501, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999747, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Rideau", "b_text": "Rideau", "p_box": [0.6620511454448589, 0.847489090298758, 0.05327650506126798, 0.01544142329640819], "b_box": [0.6568993074054342, 0.850956696878147, 0.06180074587107086, 0.008392077878482713], "iou": 0.5, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Ride.", "b_text": "Ride.", "p_box": [0.16906233351092168, 0.1342732460557234, 0.042621204049014386, 0.014545149378986237], "b_box": [0.1635588705380927, 0.13729439409197716, 0.044752264251465106, 0.008056394763343404], "iou": 0.476, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999992, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "From", "b_text": "From", "p_box": [0.8055407565263719, 0.847489090298758, 0.03693660095897709, 0.01544142329640819], "b_box": [0.7980820458177944, 0.8506210137630077, 0.047416089504528504, 0.008392077878482713], "iou": 0.471, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "their", "b_text": "their", "p_box": [0.8367980820458178, 0.8034004699563612, 0.046883324453915826, 0.016112789526686808], "b_box": [0.8428343100692595, 0.8066465256797583, 0.04208843899840171, 0.00872776099362202], "iou": 0.465, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Commr.", "b_text": "Commr.", "p_box": [0.7142621204049014, 0.9166398120174556, 0.07565263718700053, 0.015216515609264854], "b_box": [0.7085775173148642, 0.9207787848271232, 0.07085775173148641, 0.008392077878482713], "iou": 0.456, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.982375, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "point", "b_text": "point", "p_box": [0.1719072988811934, 0.6313091641490434, 0.045460841768779965, 0.01633434038267875], "b_box": [0.18007458710708577, 0.6354481369587109, 0.044752264251465106, 0.009734810339039947], "iou": 0.445, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Rockcliffe.", "b_text": "Rockcliffe.", "p_box": [0.19463505594033031, 0.09309499832158442, 0.1001598295151838, 0.01745552198724404], "b_box": [0.2035162493340437, 0.09667673716012085, 0.09643047416089505, 0.00872776099362202], "iou": 0.444, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999974, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "leaders", "b_text": "leaders", "p_box": [0.7238518913159298, 0.8034004699563612, 0.0657059136920618, 0.016112789526686808], "b_box": [0.732019179541822, 0.8069822087948976, 0.06126798082045818, 0.008392077878482713], "iou": 0.443, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Winning", "b_text": "Winning", "p_box": [0.021310602024507193, 0.09309499832158442, 0.06393180607352157, 0.01745552198724404], "b_box": [0.02557272242940863, 0.0986908358509567, 0.07565263718700053, 0.009399127223900638], "iou": 0.443, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999974, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Mrs.", "b_text": "Mrs.", "p_box": [0.6283058071390516, 0.3766364551863041, 0.03658497602557272, 0.014098690835850957], "b_box": [0.6217368140649974, 0.3796576032225579, 0.036760788492274904, 0.008056394763343404], "iou": 0.428, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999972, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Kennedy", "b_text": "Kennedy", "p_box": [0.019179541822056473, 0.1056294058408862, 0.0664198188598828, 0.018798254447801276], "b_box": [0.02557272242940863, 0.11144679422625042, 0.07725093233883858, 0.010070493454179255], "iou": 0.425, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "sioner", "b_text": "sioner", "p_box": [0.035519445924347366, 0.6313091641490434, 0.054693660095897705, 0.01633434038267875], "b_box": [0.04155567394778902, 0.6351124538435716, 0.0527437400106553, 0.008056394763343404], "iou": 0.423, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "Commis", "b_text": "Commis", "p_box": [0.27313265849760254, 0.6140751930177912, 0.08346297282898242, 0.017905337361530715], "b_box": [0.2743740010655301, 0.6186639812017456, 0.07085775173148641, 0.00872776099362202], "iou": 0.414, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.997189, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "cites", "b_text": "cites", "p_box": [0.09909429941395845, 0.6313091641490434, 0.045460841768779965, 0.01633434038267875], "b_box": [0.10655301012253596, 0.6354481369587109, 0.03782631859350027, 0.008056394763343404], "iou": 0.41, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "stables,", "b_text": "stables,", "p_box": [0.1378103356419819, 0.6140751930177912, 0.08346297282898242, 0.017905337361530715], "b_box": [0.14757591901971231, 0.6189996643168849, 0.06286627597229622, 0.009734810339039947], "iou": 0.41, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.997189, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Hall.", "b_text": "Hall.", "p_box": [0.7440969632392116, 0.847489090298758, 0.04510388918486947, 0.01544142329640819], "b_box": [0.7373468300479489, 0.8506210137630077, 0.04208843899840171, 0.00872776099362202], "iou": 0.408, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "and", "b_text": "and", "p_box": [0.7991475759190197, 0.8034004699563612, 0.028060735215769846, 0.016112789526686808], "b_box": [0.8023441662226958, 0.8069822087948976, 0.031965903036760786, 0.008392077878482713], "iou": 0.408, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Mrs.", "b_text": "Mrs.", "p_box": [0.7707352157698455, 0.36298422289358845, 0.03977623867874267, 0.014323598522994294], "b_box": [0.7645178476291955, 0.36623027861698554, 0.03729355354288759, 0.008056394763343404], "iou": 0.404, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999965, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "The", "b_text": "The", "p_box": [0.6862013851891315, 0.8034004699563612, 0.028060735215769846, 0.016112789526686808], "b_box": [0.6893979754928077, 0.8073178919100369, 0.03303143313798615, 0.008392077878482713], "iou": 0.401, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Inside", "b_text": "Inside", "p_box": [0.023084709643047416, 0.6140751930177912, 0.06251465103889185, 0.017905337361530715], "b_box": [0.030367607884922748, 0.6189996643168849, 0.0527437400106553, 0.008392077878482713], "iou": 0.395, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.997189, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Mrs.", "b_text": "Mrs.", "p_box": [0.304033031433138, 0.09309499832158442, 0.045460841768779965, 0.01745552198724404], "b_box": [0.3090037293553543, 0.09667673716012085, 0.03729355354288759, 0.008392077878482713], "iou": 0.394, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999974, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Inspr.", "b_text": "Inspr.", "p_box": [0.19961108151305276, 0.1056294058408862, 0.056824720298348425, 0.018798254447801276], "b_box": [0.21310602024507191, 0.11010406176569319, 0.05221097496004262, 0.010406176569318564], "iou": 0.388, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "wives.", "b_text": "wives.", "p_box": [0.8929142248268513, 0.8034004699563612, 0.0660628662759723, 0.016112789526686808], "b_box": [0.8929142248268513, 0.8069822087948976, 0.05114544485881726, 0.008056394763343404], "iou": 0.387, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999761, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "at", "b_text": "at", "p_box": [0.6254661694192861, 0.847489090298758, 0.012077783697389452, 0.01544142329640819], "b_box": [0.62226957911561, 0.8529707955689829, 0.015450186467767715, 0.006377979187646861], "iou": 0.37, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "and", "b_text": "and", "p_box": [0.8467394778902504, 0.9293957703927492, 0.034096963239211506, 0.016784155756965426], "b_box": [0.8540223761321257, 0.9335347432024169, 0.03143313798614811, 0.008392077878482713], "iou": 0.368, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.984803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Mrs.", "b_text": "Mrs.", "p_box": [0.6982791688865211, 0.9293957703927492, 0.04581779435269046, 0.016784155756965426], "b_box": [0.6947256259989345, 0.9338704263175562, 0.038359083644112946, 0.008392077878482713], "iou": 0.366, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.984803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "interest.", "b_text": "interest.", "p_box": [0.2539531166755461, 0.6313091641490434, 0.09092168353755993, 0.01633434038267875], "b_box": [0.2690463505594033, 0.6351124538435716, 0.07032498668087374, 0.007720711648204095], "iou": 0.366, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "to", "b_text": "to", "p_box": [0.8957538625466169, 0.847489090298758, 0.012077783697389452, 0.01544142329640819], "b_box": [0.8913159296750133, 0.8522994293387043, 0.016515716568993075, 0.006377979187646861], "iou": 0.359, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "the", "b_text": "the", "p_box": [0.09589770911028236, 0.6140751930177912, 0.031257325519445926, 0.017905337361530715], "b_box": [0.1028236547682472, 0.6189996643168849, 0.02557272242940863, 0.008392077878482713], "iou": 0.358, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.997189, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "greets", "b_text": "greets", "p_box": [0.6183644112946192, 0.9293957703927492, 0.06854555141182739, 0.016784155756965426], "b_box": [0.6233351092168353, 0.935884525008392, 0.05114544485881726, 0.008056394763343404], "iou": 0.358, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.984803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "the", "b_text": "the", "p_box": [0.23157698454981354, 0.6140751930177912, 0.0312519978689398, 0.017905337361530715], "b_box": [0.229621736814065, 0.6189996643168849, 0.02610548748002131, 0.008392077878482713], "iou": 0.352, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.997189, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "across", "b_text": "across", "p_box": [0.797016515716569, 0.8342833165491775, 0.0504368673415024, 0.01499496475327291], "b_box": [0.7938199254128929, 0.8405505203088285, 0.0527437400106553, 0.005370929842228936], "iou": 0.344, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "r.,", "b_text": "r.,", "p_box": [0.9284336707511988, 0.847489090298758, 0.0205966968566862, 0.01544142329640819], "b_box": [0.9259456579648375, 0.8533064786841222, 0.018646776771443795, 0.007049345417925478], "iou": 0.339, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "friends", "b_text": "friends", "p_box": [0.09412360149174213, 0.09309499832158442, 0.06393180607352157, 0.01745552198724404], "b_box": [0.11028236547682473, 0.09768378650553877, 0.060735215769845495, 0.008392077878482713], "iou": 0.327, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999974, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Mrs.", "b_text": "Mrs.", "p_box": [0.8922056473095366, 0.9293957703927492, 0.05718167288225892, 0.016784155756965426], "b_box": [0.9072988811933937, 0.9335347432024169, 0.03729355354288759, 0.008392077878482713], "iou": 0.326, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.984803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "W.", "b_text": "W.", "p_box": [0.8343100692594566, 0.9166398120174556, 0.02663825253063399, 0.015216515609264854], "b_box": [0.8263185935002664, 0.9204431017119838, 0.02397442727757059, 0.008392077878482713], "iou": 0.284, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.982375, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "\u4e00", "b_text": "N", "p_box": [0.5214011720831113, 0.016784155756965426, 0.12466702184336707, 0.05482712319570326], "b_box": [0.5316995205114544, 0.041289023162134945, 0.15343633457645178, 0.018462571332661968], "iou": 0.279, "clean_match": false, "exact_match": false, "sim": 0.0, "p_conf": 0.193192, "b_conf": null, "p_valid": true, "b_valid": false, "lexical_verdict": "PADDLE_WIN"}, {"p_text": "G.", "b_text": "G.", "p_box": [0.29444326052210973, 0.1056294058408862, 0.018822589238145976, 0.018798254447801276], "b_box": [0.3004794885455514, 0.10976837865055387, 0.017581246670218435, 0.008392077878482713], "iou": 0.272, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "A", "b_text": "A", "p_box": [0.721006925945658, 0.8342833165491775, 0.004262120404901438, 0.01499496475327291], "b_box": [0.7139051678209909, 0.8375293722725747, 0.012786361214704315, 0.008392077878482713], "iou": 0.264, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995173, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "C.", "b_text": "C.", "p_box": [0.322855620671284, 0.1056294058408862, 0.028412360149174212, 0.018798254447801276], "b_box": [0.3292488012786361, 0.10976837865055387, 0.016515716568993075, 0.008392077878482713], "iou": 0.26, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "chats", "b_text": "chats", "p_box": [0.09518913159296749, 0.1056294058408862, 0.04723494938732019, 0.018798254447801276], "b_box": [0.11294619072988812, 0.1111111111111111, 0.04368673415023974, 0.008392077878482713], "iou": 0.246, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "with", "b_text": "with", "p_box": [0.15201385189131592, 0.1056294058408862, 0.038007458710708576, 0.018798254447801276], "b_box": [0.16728822589238146, 0.1104397448808325, 0.036228023441662226, 0.008392077878482713], "iou": 0.23, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "C.", "b_text": "C.", "p_box": [0.8030527437400106, 0.9166398120174556, 0.018114011720831113, 0.015216515609264854], "b_box": [0.795418220564731, 0.9204431017119838, 0.016515716568993075, 0.008392077878482713], "iou": 0.219, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.982375, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "J.", "b_text": "J.", "p_box": [0.2660255727224294, 0.1056294058408862, 0.018827916888652107, 0.018798254447801276], "b_box": [0.27597229621736813, 0.11010406176569319, 0.013851891315929675, 0.009399127223900638], "iou": 0.208, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.992803, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "1.", "b_text": "1.", "p_box": [0.8669845498135322, 0.847489090298758, 0.01633990410229089, 0.01544142329640819], "b_box": [0.8625466169419286, 0.8506210137630077, 0.010655301012253596, 0.008056394763343404], "iou": 0.174, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.987027, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "a", "b_text": "a", "p_box": [0.15379328716036228, 0.6313091641490434, 0.00923281832711774, 0.01633434038267875], "b_box": [0.15769845498135324, 0.6381336018798255, 0.007991475759190196, 0.005035246727089627], "iou": 0.163, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "at", "b_text": "at", "p_box": [0.728822589238146, 0.9439409197717354, 0.01847096430474161, 0.014098690835850957], "b_box": [0.7400106553010123, 0.9486404833836858, 0.015982951518380393, 0.006377979187646861], "iou": 0.147, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995999, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "of", "b_text": "of", "p_box": [0.2266009589770911, 0.6313091641490434, 0.018114011720831113, 0.01633434038267875], "b_box": [0.23814597762386788, 0.6347767707284323, 0.018114011720831113, 0.008392077878482713], "iou": 0.14, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999934, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "at", "b_text": "at", "p_box": [0.16728822589238146, 0.09309499832158442, 0.018114011720831113, 0.01745552198724404], "b_box": [0.1795418220564731, 0.09936220208123532, 0.014384656366542355, 0.006377979187646861], "iou": 0.101, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999974, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}];
+  const pOnlyData = [{"text": "1", "box": [0.5615343633457646, 0.02685464921114468, 0.002131060202450719, 0.008056394763343404], "conf": 0.295029}, {"text": "0", "box": [0.7874267448055408, 0.11457871769050017, 0.002131060202450719, 0.010295401141322592], "conf": 0.971942}, {"text": "11", "box": [0.4244379328716036, 0.7277609936220208, 0.02557272242940863, 0.027526015441423298], "conf": 0.670448}, {"text": "(", "box": [0.6297282898241875, 0.9166398120174556, 0.004262120404901438, 0.015216515609264854], "conf": 0.982375}, {"text": ")", "box": [0.6876238678742674, 0.9166398120174556, 0.013137986148108684, 0.015216515609264854], "conf": 0.982375}, {"text": "4", "box": [0.8982418753329782, 0.6603994629070158, 0.004970697922216303, 0.018576703591809334], "conf": 0.469004}, {"text": "(", "box": [0.6283058071390516, 0.8342833165491775, 0.004262120404901438, 0.01499496475327291], "conf": 0.995173}, {"text": ")", "box": [0.6957911561001598, 0.8342833165491775, 0.012786361214704315, 0.01499496475327291], "conf": 0.995173}];
+  const bOnlyData = [{"text": "-ran", "box": [0.5316995205114544, 0.019469620678079894, 0.0740543420351625, 0.01342732460557234], "conf": null}, {"text": "IVY", "box": [0.6505061267980821, 0.02014098690835851, 0.02930207778369739, 0.015105740181268883], "conf": null}, {"text": "**R", "box": [0.5391582312200319, 0.03390399462907016, 0.08044752264251465, 0.00906344410876133], "conf": null}, {"text": "HF", "box": [0.48428343100692595, 0.03088284659281638, 0.02077783697389451, 0.014434373950990266], "conf": null}, {"text": "*r", "box": [0.8332445391582313, 0.0634441087613293, 0.038359083644112946, 0.0157771064115475], "conf": null}, {"text": "1.", "box": [0.45711241342567926, 0.09331990600872776, 0.018646776771443795, 0.016112789526686808], "conf": null}, {"text": "^", "box": [0.7266915290356952, 0.09331990600872776, 0.034096963239211506, 0.014770057066129574], "conf": null}, {"text": "-Eq", "box": [0.10868407032498668, 0.28667338032896944, 0.03090037293553543, 0.014434373950990266], "conf": null}, {"text": "O", "box": [0.4368673415023974, 0.40080563947633435, 0.023441662226957913, 0.014434373950990266], "conf": null}, {"text": "1", "box": [0.9323388385721897, 0.5548841893252769, 0.023441662226957913, 0.0157771064115475], "conf": null}];
+  const pageWidth = 1877.0;
+  const pageHeight = 2979.0;
+
+  // SVGs & Sidebar
+  const svgLeft = document.getElementById("svgLeft");
+  const svgRight = document.getElementById("svgRight");
+  const sidebarList = document.getElementById("sidebarList");
+  const cards = [];
+
+  // Populate SVGs and Sidebar
+  matchedData.forEach((m, idx) => {
+    const isAgree = m.clean_match;
+    const cls = isAgree ? "agree" : "discrepancy";
+
+    // Left SVG
+    const rectL = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectL.setAttribute("x", m.p_box[0] * pageWidth);
+    rectL.setAttribute("y", m.p_box[1] * pageHeight);
+    rectL.setAttribute("width", m.p_box[2] * pageWidth);
+    rectL.setAttribute("height", m.p_box[3] * pageHeight);
+    rectL.setAttribute("class", cls);
+    rectL.id = "p-rect-" + idx;
+    rectL.dataset.idx = idx;
+    rectL.innerHTML = `<title>Pipeline: "${m.p_text}" | ABBYY: "${m.b_text}" (IoU: ${m.iou})</title>`;
+    rectL.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgLeft.appendChild(rectL);
+
+    // Right SVG
+    const rectR = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectR.setAttribute("x", m.b_box[0] * pageWidth);
+    rectR.setAttribute("y", m.b_box[1] * pageHeight);
+    rectR.setAttribute("width", m.b_box[2] * pageWidth);
+    rectR.setAttribute("height", m.b_box[3] * pageHeight);
+    rectR.setAttribute("class", cls);
+    rectR.id = "b-rect-" + idx;
+    rectR.dataset.idx = idx;
+    rectR.innerHTML = `<title>ABBYY: "${m.b_text}" | Pipeline: "${m.p_text}" (IoU: ${m.iou})</title>`;
+    rectR.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgRight.appendChild(rectR);
+
+    // Sidebar items for discrepancies
+    if (!isAgree) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = "card-" + idx;
+      card.dataset.verdict = m.lexical_verdict || "NONE";
+
+      let verdictBadge = "";
+      if (m.lexical_verdict === "PADDLE_WIN") {
+        verdictBadge = '<span class="verdict-tag paddle-win">Paddle Win</span>';
+      } else if (m.lexical_verdict === "ABBYY_WIN") {
+        verdictBadge = '<span class="verdict-tag abbyy-win">ABBYY Win</span>';
+      } else if (m.lexical_verdict === "BOTH_VALID") {
+        verdictBadge = '<span class="verdict-tag both-valid">Both Valid</span>';
+      } else if (m.lexical_verdict === "NEITHER_VALID") {
+        verdictBadge = '<span class="verdict-tag neither-valid">Neither</span>';
+      }
+
+      const pCheck = m.p_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+      const bCheck = m.b_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+
+      card.innerHTML = `
+        <div class="card-row">
+          <span class="card-diff">P: ${escapeHtml(m.p_text)}${pCheck}</span>
+          ${verdictBadge}
+        </div>
+        <div class="card-row">
+          <span style="color:#ef4444;">B: ${escapeHtml(m.b_text)}${bCheck}</span>
+          <span class="card-label">IoU: ${m.iou} | Sim: ${Math.round(m.sim * 100)}%</span>
+        </div>
+      `;
+      card.onclick = () => selectWord(idx);
+      sidebarList.appendChild(card);
+      cards.push({ idx: idx, el: card, verdict: m.lexical_verdict });
+    }
+  });
+
+  // Discrepancy filter
+  const selFilter = document.getElementById("selFilterDiscrepancies");
+  if (selFilter) {
+    selFilter.onchange = (e) => {
+      const val = e.target.value;
+      cards.forEach(c => {
+        if (val === "all" || c.verdict === val) {
+          c.el.style.display = "";
+        } else {
+          c.el.style.display = "none";
+        }
+      });
+    };
+  }
+
+  // Pipeline-only boxes
+  pOnlyData.forEach((p, pIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", p.box[0] * pageWidth);
+    rect.setAttribute("y", p.box[1] * pageHeight);
+    rect.setAttribute("width", p.box[2] * pageWidth);
+    rect.setAttribute("height", p.box[3] * pageHeight);
+    rect.setAttribute("class", "p-only");
+    rect.innerHTML = `<title>Pipeline Only: "${p.text}"</title>`;
+    svgLeft.appendChild(rect);
+  });
+
+  // Benchmark-only boxes
+  bOnlyData.forEach((b, bIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", b.box[0] * pageWidth);
+    rect.setAttribute("y", b.box[1] * pageHeight);
+    rect.setAttribute("width", b.box[2] * pageWidth);
+    rect.setAttribute("height", b.box[3] * pageHeight);
+    rect.setAttribute("class", "b-only");
+    rect.innerHTML = `<title>ABBYY Only: "${b.text}"</title>`;
+    svgRight.appendChild(rect);
+  });
+
+  function escapeHtml(str) {
+    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Active word selection and highlighting
+  let activeIdx = null;
+
+  function selectWord(idx) {
+    // Clear previously highlighted elements
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+
+    activeIdx = idx;
+    const m = matchedData[idx];
+    if (!m) return;
+
+    // Highlight rects on both left and right canvases
+    const rL = document.getElementById("p-rect-" + idx);
+    const rR = document.getElementById("b-rect-" + idx);
+    if (rL) rL.classList.add("highlighted");
+    if (rR) rR.classList.add("highlighted");
+
+    // Highlight and scroll into view sidebar card if present
+    const cardEl = document.getElementById("card-" + idx);
+    if (cardEl) {
+      cardEl.classList.add("active");
+      cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Zoom and center into the box
+    zoomToNormBox(m.p_box);
+  }
+
+  // Synchronized Pan & Zoom
+  let scale = 1.0;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const stageLeft = document.getElementById("stageLeft");
+  const stageRight = document.getElementById("stageRight");
+  const panelLeft = document.getElementById("panelLeft");
+  const panelRight = document.getElementById("panelRight");
+
+  function updateTransform() {
+    const transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    stageLeft.style.transform = transform;
+    stageRight.style.transform = transform;
+  }
+
+  function attachPanZoom(panel) {
+    panel.addEventListener("mousedown", e => {
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+    });
+
+    window.addEventListener("mousemove", e => {
+      if (!isDragging) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      updateTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    panel.addEventListener("wheel", e => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 10.0);
+      
+      const rect = panel.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+      updateTransform();
+    }, { passive: false });
+  }
+
+  attachPanZoom(panelLeft);
+  attachPanZoom(panelRight);
+
+  function fitToView() {
+    const panelW = panelLeft.clientWidth || 800;
+    const panelH = panelLeft.clientHeight || 900;
+    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    panX = (panelW - pageWidth * scale) / 2;
+    panY = 10;
+    updateTransform();
+  }
+
+  // Initial fit on load
+  fitToView();
+  window.addEventListener("resize", fitToView);
+
+  document.getElementById("btnResetView").onclick = () => {
+    fitToView();
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+  };
+
+  function zoomToNormBox(box) {
+    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
+    scale = 3.5;
+    const panelW = panelLeft.clientWidth;
+    const panelH = panelLeft.clientHeight;
+    const boxCenterX = (box[0] + (box[2] / 2.0)) * pageWidth;
+    const boxCenterY = (box[1] + (box[3] / 2.0)) * pageHeight;
+
+    panX = (panelW / 2.0) - (boxCenterX * scale);
+    panY = (panelH / 2.0) - (boxCenterY * scale);
+    updateTransform();
+  }
+
+  // Layer Toggles
+  document.getElementById("chkAgree").onchange = (e) => {
+    document.querySelectorAll(".agree").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkDiff").onchange = (e) => {
+    document.querySelectorAll(".discrepancy").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkOnly").onchange = (e) => {
+    document.querySelectorAll(".p-only, .b-only").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+
+  // Background Image Toggle & Opacity Slider
+  const chkBgImage = document.getElementById("chkBgImage");
+  const rngOpacity = document.getElementById("rngOpacity");
+  const lblOpacity = document.getElementById("lblOpacity");
+
+  function updateBgImageStyle() {
+    const show = chkBgImage.checked;
+    const op = rngOpacity.value / 100.0;
+    lblOpacity.textContent = rngOpacity.value + "%";
+
+    document.querySelectorAll(".page-image").forEach(img => {
+      img.style.display = show ? "block" : "none";
+      img.style.opacity = op;
+    });
+  }
+
+  chkBgImage.onchange = updateBgImageStyle;
+  rngOpacity.oninput = updateBgImageStyle;
+</script>
+</body>
+</html>

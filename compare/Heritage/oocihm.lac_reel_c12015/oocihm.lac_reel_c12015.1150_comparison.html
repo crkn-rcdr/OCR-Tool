@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRKN OCR Comparison: oocihm.lac_reel_c12015.1150</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1a1e24; color: #e1e4e8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { background: #24292e; border-bottom: 1px solid #30363d; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; z-index: 10; gap: 12px; }
+  
+  .nav-left { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+  .nav-btn-back { background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.82rem; transition: all 0.15s ease; }
+  .nav-btn-back:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+  .nav-sep { color: #484f58; }
+  .nav-coll { color: #8b949e; font-weight: 500; font-size: 0.84rem; }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #f0f6fc; }
+  
+  .nav-center { display: flex; align-items: center; gap: 6px; }
+  .nav-page-btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; font-weight: 500; }
+  .nav-page-btn:hover:not(.disabled) { background: #30363d; color: #58a6ff; border-color: #58a6ff; }
+  .nav-page-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .page-current { font-size: 0.82rem; color: #8b949e; padding: 0 4px; }
+  
+  .badges { display: flex; gap: 8px; font-size: 0.8rem; align-items: center; }
+  .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; background: #30363d; }
+  .badge.success { background: #198754; color: #fff; }
+  .badge.warning { background: #d97706; color: #fff; }
+  .badge.info { background: #0284c7; color: #fff; }
+  .badge.qa-win { background: #238636; color: #fff; }
+  .badge.qa-loss { background: #8957e5; color: #fff; }
+  
+  .controls { background: #212529; border-bottom: 1px solid #30363d; padding: 8px 18px; display: flex; gap: 14px; align-items: center; font-size: 0.84rem; flex-wrap: wrap; }
+  .controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .controls select, .controls input[type="range"] { vertical-align: middle; }
+  .slider-group { display: flex; align-items: center; gap: 6px; }
+  
+  .main-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  .viewers-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  
+  .panel { flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; }
+  .panel:active { cursor: grabbing; }
+  .panel-header { position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }
+  
+  .canvas-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 2048.0px; height: 3752.0px; }
+  .page-image { position: absolute; top: 0; left: 0; width: 2048.0px; height: 3752.0px; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }
+  .overlay-svg { position: absolute; top: 0; left: 0; width: 2048.0px; height: 3752.0px; pointer-events: auto; }
+  
+  rect.agree { fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }
+  rect.discrepancy { fill: rgba(245, 158, 11, 0.35); stroke: #f59e0b; stroke-width: 2; cursor: pointer; }
+  rect.p-only { fill: rgba(56, 189, 248, 0.35); stroke: #38bdf8; stroke-width: 1.5; cursor: pointer; }
+  rect.b-only { fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }
+  rect:hover { fill-opacity: 0.7; stroke-width: 2.5; }
+  
+  /* Selected / Highlighted active word - completely transparent interior (fill: none) */
+  rect.highlighted {
+    stroke: #00ffff !important;
+    stroke-width: 4 !important;
+    fill: none !important;
+    filter: drop-shadow(0 0 6px #00ffff);
+    vector-effect: non-scaling-stroke;
+  }
+  
+  .sidebar { width: 360px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }
+  .sidebar-header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.88rem; background: #24292e; display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-filter-bar { padding: 8px 12px; background: #181b20; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+  .filter-dropdown { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; width: 100%; }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  
+  .card { background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s ease; }
+  .card:hover { border-color: #60a5fa; background: #2d3542; }
+  .card.active {
+    border-color: #00ffff !important;
+    background: #1e3a4f !important;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+  }
+  .card-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .card-diff { font-weight: bold; color: #f59e0b; word-break: break-all; }
+  .card-label { color: #9ca3af; font-size: 0.75rem; }
+  
+  .verdict-tag { font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+  .verdict-tag.paddle-win { background: rgba(35, 134, 54, 0.25); color: #3fb950; border: 1px solid #238636; }
+  .verdict-tag.abbyy-win { background: rgba(218, 54, 51, 0.25); color: #f85149; border: 1px solid #da3633; }
+  .verdict-tag.both-valid { background: rgba(56, 139, 253, 0.2); color: #58a6ff; border: 1px solid #1f6feb; }
+  .verdict-tag.neither-valid { background: rgba(110, 118, 129, 0.2); color: #8b949e; border: 1px solid #484f58; }
+  
+  .legend { display: flex; gap: 12px; font-size: 0.78rem; align-items: center; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav-left">
+    <a href="../../index.html" class="nav-btn-back">← Master Dashboard</a>
+    <span class="nav-sep">/</span>
+    <span class="nav-coll">Heritage/oocihm.lac_reel_c12015</span>
+    <span class="nav-sep">/</span>
+    <h1>oocihm.lac_reel_c12015.1150</h1>
+  </div>
+  <div class="nav-center">
+    <a href="oocihm.lac_reel_c12015.1149_comparison.html" class="nav-page-btn">‹ Previous</a>
+    <span class="page-current">oocihm.lac_reel_c12015.1150</span>
+    <a href="oocihm.lac_reel_c12015.1151_comparison.html" class="nav-page-btn">Next ›</a>
+  </div>
+  <div class="badges">
+    <div class="badge success" title="Text Concordance (Cleaned)">Concordance: 0.0%</div>
+    <div class="badge qa-win" title="Paddle 0 wins vs ABBYY 0 wins on disputed words">Paddle QA Win Rate: 50.0%</div>
+    <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: 1.57%</div>
+    <div class="badge warning" title="Discrepant words count">Diffs: 2</div>
+  </div>
+</header>
+
+<div class="controls">
+  <label><input type="checkbox" id="chkAgree" checked> Concordant (Green)</label>
+  <label><input type="checkbox" id="chkDiff" checked> Discrepancies (Orange)</label>
+  <label><input type="checkbox" id="chkOnly" checked> Engine-Only (Blue/Red)</label>
+  
+  <span style="border-left: 1px solid #444c56; height: 18px; margin: 0 4px;"></span>
+  
+  <label><input type="checkbox" id="chkBgImage" checked> Background Image</label>
+  <div class="slider-group">
+    <span style="color:#9ca3af;font-size:0.8rem;">Opacity:</span>
+    <input type="range" id="rngOpacity" min="0" max="100" value="85" style="width: 90px; cursor: pointer;">
+    <span id="lblOpacity" style="font-size:0.8rem; width: 32px;">85%</span>
+  </div>
+  
+  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;">Reset View</button>
+  <span style="flex:1;"></span>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#28a745;"></div> Agreed</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Discrepancy</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Pipeline Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> ABBYY Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ffff;"></div> Selected</div>
+  </div>
+</div>
+
+<div class="main-container">
+  <div class="viewers-container">
+    <!-- Pipeline Panel (Left) -->
+    <div class="panel" id="panelLeft">
+      <div class="panel-header">Pipeline (PaddleOCR + VLM) - 127 words</div>
+      <div class="canvas-stage" id="stageLeft">
+        <img class='page-image' id='imgLeft' src='oocihm.lac_reel_c12015.1150.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgLeft" viewBox="0 0 2048.0 3752.0"></svg>
+      </div>
+    </div>
+    
+    <!-- Benchmark Panel (Right) -->
+    <div class="panel" id="panelRight">
+      <div class="panel-header">Benchmark (ABBYY FineReader) - 17 words</div>
+      <div class="canvas-stage" id="stageRight">
+        <img class='page-image' id='imgRight' src='oocihm.lac_reel_c12015.1150.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgRight" viewBox="0 0 2048.0 3752.0"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discrepancy Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div>
+        <span>Discrepancies</span>
+        <span class="badge warning" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">2</span>
+      </div>
+      <span style="font-size:0.75rem;color:#9ca3af;">Click card to inspect</span>
+    </div>
+    <div class="sidebar-filter-bar">
+      <select id="selFilterDiscrepancies" class="filter-dropdown">
+        <option value="all">All Discrepancies (2)</option>
+        <option value="PADDLE_WIN">Paddle Wins (0)</option>
+        <option value="ABBYY_WIN">ABBYY Wins (0)</option>
+        <option value="BOTH_VALID">Both Valid (1)</option>
+        <option value="NEITHER_VALID">Neither Valid (1)</option>
+      </select>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </div>
+</div>
+
+<script>
+  const matchedData = [{"p_text": "49392", "b_text": "19392", "p_box": [0.6481103515625, 0.1427691897654584, 0.100263671875, 0.045130597014925375], "b_box": [0.64990234375, 0.15911513859275053, 0.1767578125, 0.02185501066098081], "iou": 0.345, "clean_match": false, "exact_match": false, "sim": 0.8, "p_conf": 0.995628, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": "BOTH_VALID"}, {"p_text": "0E", "b_text": "%", "p_box": [0.7347021484375, 0.17937100213219617, 0.029619140625, 0.02931769722814499], "b_box": [0.734375, 0.1849680170575693, 0.0556640625, 0.014125799573560768], "iou": 0.338, "clean_match": false, "exact_match": false, "sim": 0.0, "p_conf": 0.610521, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": "NEITHER_VALID"}];
+  const pOnlyData = [{"text": "82", "box": [0.458984375, 0.0843097014925373, 0.0556640625, 0.03553837953091685], "conf": 0.516297}, {"text": "Ai", "box": [0.4287109375, 0.17137526652452026, 0.0485009765625, 0.03980010660980811], "conf": 0.796409}, {"text": "accounts", "box": [0.2467431640625, 0.2236140724946695, 0.2600927734375, 0.07391524520255863], "conf": 0.745827}, {"text": "J.C.", "box": [0.5325537109375, 0.31156716417910446, 0.551103515625, 0.04211087420042644], "conf": 0.445575}, {"text": "Houghand", "box": [0.5325537109375, 0.31156716417910446, 0.697587890625, 0.04211087420042644], "conf": 0.445575}, {"text": "ui", "box": [0.6451806640625, 0.08253464818763327, 0.046875, 0.03713486140724947], "conf": 0.414848}, {"text": "Gruil", "box": [0.5524072265625, 0.0818230277185501, 0.164716796875, 0.0390911513859275], "conf": 0.422}, {"text": "qt", "box": [0.5240869140625, 0.1941178038379531, 0.1829443359375, 0.05419509594882729], "conf": 0.48765}, {"text": "through", "box": [0.5237646484375, 0.19500799573560768, 0.09765625, 0.05650319829424307], "conf": 0.502489}, {"text": "the", "box": [0.6998681640625, 0.19500799573560768, 0.01953125, 0.05650319829424307], "conf": 0.502489}, {"text": "030", "box": [0.7434912109375, 0.18239072494669512, 0.0221337890625, 0.022745202558635394], "conf": 0.433293}, {"text": "y2", "box": [0.794921875, 0.1999813432835821, 0.0169287109375, 0.005154584221748401], "conf": 0.534341}, {"text": "hsic", "box": [0.5315771484375, 0.243158315565032, 0.1080712890625, 0.02363272921108742], "conf": 0.570343}, {"text": "s", "box": [0.5904931640625, 0.24404850746268655, 0.0149755859375, 0.026652452025586353], "conf": 0.385861}, {"text": "I", "box": [0.6298828125, 0.24475746268656717, 0.0237646484375, 0.033406183368869934], "conf": 0.319644}, {"text": "sent", "box": [0.6536474609375, 0.24475746268656717, 0.0240869140625, 0.033406183368869934], "conf": 0.319644}, {"text": "in", "box": [0.892578125, 0.24475746268656717, 0.0237646484375, 0.033406183368869934], "conf": 0.319644}, {"text": "south", "box": [0.9163427734375, 0.24475746268656717, 0.0478515625, 0.033406183368869934], "conf": 0.319644}, {"text": "I", "box": [0.5817041015625, 0.24138326226012793, 0.080732421875, 0.04371002132196162], "conf": 0.525533}, {"text": "sent", "box": [0.7630224609375, 0.24138326226012793, 0.0201806640625, 0.04371002132196162], "conf": 0.525533}, {"text": "84", "box": [0.841796875, 0.22468017057569295, 0.052734375, 0.028430170575692963], "conf": 0.886988}, {"text": "through", "box": [0.6311865234375, 0.3195628997867804, 0.111328125, 0.03411513859275053], "conf": 0.70857}, {"text": "the", "box": [0.7646484375, 0.3195628997867804, 0.033203125, 0.03411513859275053], "conf": 0.70857}, {"text": "Bt", "box": [0.6080712890625, 0.10421108742004265, 0.1341162109375, 0.0646775053304904], "conf": 0.567627}, {"text": "applied", "box": [0.7587890625, 0.10421108742004265, 0.0169287109375, 0.0646775053304904], "conf": 0.567627}, {"text": "in", "box": [0.7923193359375, 0.10421108742004265, 0.134111328125, 0.0646775053304904], "conf": 0.567627}, {"text": "XF", "box": [0.0921240234375, 0.3195628997867804, 0.0595703125, 0.05135127931769722], "conf": 0.430688}, {"text": "X", "box": [0.0774755859375, 0.3195628997867804, 0.016923828125, 0.04246535181236674], "conf": 0.4275}, {"text": "J.C.", "box": [0.1920556640625, 0.35705490405117274, 0.0947265625, 0.04548507462686567], "conf": 0.654188}, {"text": "Hougham", "box": [0.2867822265625, 0.35705490405117274, 0.013671875, 0.04548507462686567], "conf": 0.654188}, {"text": "&", "box": [0.3138037109375, 0.35705490405117274, 0.0543603515625, 0.04548507462686567], "conf": 0.654188}, {"text": "Co.'s/c", "box": [0.3681640625, 0.35705490405117274, 0.013671875, 0.04548507462686567], "conf": 0.654188}, {"text": "was", "box": [0.3951806640625, 0.35705490405117274, 0.0950537109375, 0.04548507462686567], "conf": 0.654188}, {"text": "for", "box": [0.5035791015625, 0.35705490405117274, 0.013671875, 0.04548507462686567], "conf": 0.654188}, {"text": "for", "box": [0.181640625, 0.3801519189765458, 0.0602197265625, 0.08138059701492537], "conf": 0.482514}, {"text": "nails", "box": [0.3421240234375, 0.3801519189765458, 0.0201806640625, 0.08138059701492537], "conf": 0.482514}, {"text": "&", "box": [0.6634130859375, 0.3801519189765458, 0.0201806640625, 0.08138059701492537], "conf": 0.482514}, {"text": "picks", "box": [0.8040380859375, 0.3801519189765458, 0.0602197265625, 0.08138059701492537], "conf": 0.482514}, {"text": "for", "box": [0.1793603515625, 0.3801519189765458, 0.0198583984375, 0.08120202558635395], "conf": 0.462011}, {"text": "nails", "box": [0.2389306640625, 0.3801519189765458, 0.1787109375, 0.08120202558635395], "conf": 0.462011}, {"text": "&", "box": [0.6559228515625, 0.3801519189765458, 0.0198583984375, 0.08120202558635395], "conf": 0.462011}, {"text": "picks", "box": [0.6956396484375, 0.3801519189765458, 0.1588525390625, 0.08120202558635395], "conf": 0.462011}, {"text": "J.B.", "box": [0.1481103515625, 0.43967750533049044, 0.116865234375, 0.045130597014925375], "conf": 0.602836}, {"text": "Haysman", "box": [0.2649755859375, 0.43967750533049044, 0.087890625, 0.045130597014925375], "conf": 0.602836}, {"text": "&", "box": [0.3528662109375, 0.43967750533049044, 0.1315087890625, 0.045130597014925375], "conf": 0.602836}, {"text": "for", "box": [0.146484375, 0.43949893390191896, 0.2106103515625, 0.04548773987206823], "conf": 0.605269}, {"text": "nails", "box": [0.3570947265625, 0.43949893390191896, 0.1653662109375, 0.04548773987206823], "conf": 0.605269}, {"text": "for", "box": [0.15234375, 0.47787846481876334, 0.0618505859375, 0.051705756929637525], "conf": 0.799746}, {"text": "mail", "box": [0.2454443359375, 0.47787846481876334, 0.061845703125, 0.051705756929637525], "conf": 0.799746}, {"text": "I", "box": [0.3229150390625, 0.47787846481876334, 0.015302734375, 0.051705756929637525], "conf": 0.799746}, {"text": "pricks", "box": [0.3538427734375, 0.47787846481876334, 0.093095703125, 0.051705756929637525], "conf": 0.799746}, {"text": "which", "box": [0.4622412109375, 0.47787846481876334, 0.093095703125, 0.051705756929637525], "conf": 0.799746}, {"text": "2", "box": [0.09375, 0.5079077825159914, 0.0084619140625, 0.03127132196162047], "conf": 0.70204}, {"text": "Thr", "box": [0.1650390625, 0.5199893390191898, 0.0400390625, 0.043355543710021316], "conf": 0.858515}, {"text": "ditch.", "box": [0.2451171875, 0.5199893390191898, 0.1201171875, 0.043355543710021316], "conf": 0.858515}, {"text": "Yom", "box": [0.3785791015625, 0.5199893390191898, 0.0400390625, 0.043355543710021316], "conf": 0.858515}, {"text": "will", "box": [0.4586572265625, 0.5199893390191898, 0.080078125, 0.043355543710021316], "conf": 0.858515}, {"text": "coon", "box": [0.1725244140625, 0.5621002132196162, 0.076826171875, 0.041044776119402986], "conf": 0.782129}, {"text": "as", "box": [0.2750634765625, 0.5621002132196162, 0.0384130859375, 0.041044776119402986], "conf": 0.782129}, {"text": "convenient", "box": [0.3391943359375, 0.5621002132196162, 0.1920556640625, 0.041044776119402986], "conf": 0.782129}, {"text": "the", "box": [0.1728515625, 0.5624546908315565, 0.0758447265625, 0.04051172707889126], "conf": 0.732248}, {"text": "ditch.", "box": [0.2613916015625, 0.5624546908315565, 0.0126953125, 0.04051172707889126], "conf": 0.732248}, {"text": "You", "box": [0.2740869140625, 0.5624546908315565, 0.037763671875, 0.04051172707889126], "conf": 0.732248}, {"text": "will", "box": [0.3118505859375, 0.5624546908315565, 0.0126953125, 0.04051172707889126], "conf": 0.732248}, {"text": "do", "box": [0.3372412109375, 0.5624546908315565, 0.189775390625, 0.04051172707889126], "conf": 0.732248}, {"text": "through", "box": [0.486328125, 0.3195628997867804, 0.1321630859375, 0.05401652452025586], "conf": 0.5008}, {"text": "the", "box": [0.634765625, 0.3195628997867804, 0.0166015625, 0.05401652452025586], "conf": 0.5008}, {"text": "last", "box": [0.66796875, 0.3195628997867804, 0.0657568359375, 0.05401652452025586], "conf": 0.5008}, {"text": "fall.", "box": [0.9977197265625, 0.3195628997867804, 0.0166015625, 0.05401652452025586], "conf": 0.5008}, {"text": "I", "box": [1.0306005859375, 0.3195628997867804, 0.0826806640625, 0.05401652452025586], "conf": 0.5008}, {"text": "through", "box": [0.4700537109375, 0.3195628997867804, 0.0172509765625, 0.056681769722814496], "conf": 0.554225}, {"text": "the", "box": [0.5045556640625, 0.3195628997867804, 0.017255859375, 0.056681769722814496], "conf": 0.554225}, {"text": "last", "box": [0.5393896484375, 0.3195628997867804, 0.0865869140625, 0.056681769722814496], "conf": 0.554225}, {"text": "fall.", "box": [0.6432275390625, 0.3195628997867804, 0.017255859375, 0.056681769722814496], "conf": 0.554225}, {"text": "Had", "box": [0.6953125, 0.3195628997867804, 0.3118505859375, 0.056681769722814496], "conf": 0.554225}, {"text": "about", "box": [1.0247412109375, 0.3195628997867804, 0.0172509765625, 0.056681769722814496], "conf": 0.554225}, {"text": "Nov", "box": [1.0592431640625, 0.3195628997867804, 0.104169921875, 0.056681769722814496], "conf": 0.554225}, {"text": "about", "box": [0.5159521484375, 0.36131929637526655, 0.080078125, 0.03624733475479744], "conf": 0.811229}, {"text": "dowrsoth", "box": [0.6305322265625, 0.36131929637526655, 0.114912109375, 0.03624733475479744], "conf": 0.811229}, {"text": "1853", "box": [0.7568359375, 0.36131929637526655, 0.0690087890625, 0.03624733475479744], "conf": 0.811229}, {"text": "Miller", "box": [0.4905615234375, 0.4055623667377399, 0.010087890625, 0.031804371002132195], "conf": 0.765476}, {"text": "&", "box": [0.5006494140625, 0.4055623667377399, 0.0413427734375, 0.031804371002132195], "conf": 0.765476}, {"text": "Co's", "box": [0.5419921875, 0.4055623667377399, 0.0100927734375, 0.031804371002132195], "conf": 0.765476}, {"text": "was", "box": [0.5625, 0.4055623667377399, 0.0927734375, 0.031804371002132195], "conf": 0.765476}, {"text": "which", "box": [0.4700537109375, 0.4451839019189765, 0.0104150390625, 0.033582089552238806], "conf": 0.635926}, {"text": "were", "box": [0.5123681640625, 0.4451839019189765, 0.0107421875, 0.033582089552238806], "conf": 0.635926}, {"text": "regarded", "box": [0.5335302734375, 0.4451839019189765, 0.074541015625, 0.033582089552238806], "conf": 0.635926}, {"text": "for", "box": [0.6080712890625, 0.4451839019189765, 0.010419921875, 0.033582089552238806], "conf": 0.635926}, {"text": "Miss", "box": [0.4700537109375, 0.48374200426439234, 0.0654296875, 0.03802505330490405], "conf": 0.625552}, {"text": "Miller", "box": [0.5354833984375, 0.48374200426439234, 0.0107421875, 0.03802505330490405], "conf": 0.625552}, {"text": "&", "box": [0.5572900390625, 0.48374200426439234, 0.043623046875, 0.03802505330490405], "conf": 0.625552}, {"text": "Co.", "box": [0.6116552734375, 0.48374200426439234, 0.011064453125, 0.03802505330490405], "conf": 0.625552}, {"text": "etc.", "box": [0.6227197265625, 0.48374200426439234, 0.130859375, 0.03802505330490405], "conf": 0.625552}, {"text": "was", "box": [0.7643212890625, 0.48374200426439234, 0.0110693359375, 0.03802505330490405], "conf": 0.625552}, {"text": "which", "box": [0.7861328125, 0.48374200426439234, 0.0328759765625, 0.03802505330490405], "conf": 0.625552}, {"text": "ent.", "box": [0.4700537109375, 0.5235421108742004, 0.0514306640625, 0.04157782515991471], "conf": 0.675311}, {"text": "I", "box": [0.521484375, 0.5235421108742004, 0.0130224609375, 0.04157782515991471], "conf": 0.675311}, {"text": "there", "box": [0.5472021484375, 0.5235421108742004, 0.1162109375, 0.04157782515991471], "conf": 0.675311}, {"text": "with", "box": [0.6634130859375, 0.5235421108742004, 0.013017578125, 0.04157782515991471], "conf": 0.675311}, {"text": "enclose", "box": [0.6764306640625, 0.5235421108742004, 0.0901708984375, 0.04157782515991471], "conf": 0.675311}, {"text": "of", "box": [0.4928369140625, 0.5638779317697228, 0.0341796875, 0.041932302771855015], "conf": 0.603761}, {"text": "the", "box": [0.5270166015625, 0.5638779317697228, 0.01171875, 0.041932302771855015], "conf": 0.603761}, {"text": "said", "box": [0.5501318359375, 0.5638779317697228, 0.0113916015625, 0.041932302771855015], "conf": 0.603761}, {"text": "firms.", "box": [0.5615234375, 0.5638779317697228, 0.1373681640625, 0.041932302771855015], "conf": 0.603761}, {"text": "affairs", "box": [0.1223974609375, 0.6457889125799574, 0.07421875, 0.03802505330490405], "conf": 0.692951}, {"text": "affairs", "box": [0.1018896484375, 0.6978491471215351, 0.1142578125, 0.020613006396588487], "conf": 0.712679}, {"text": "Ottawa", "box": [0.166015625, 0.710820895522388, 0.1048193359375, 0.02753997867803838], "conf": 0.724562}, {"text": "soon", "box": [0.1663427734375, 0.6045655650319829, 0.15234375, 0.04300106609808103], "conf": 0.594594}, {"text": "as", "box": [0.3313818359375, 0.6045655650319829, 0.0126953125, 0.04300106609808103], "conf": 0.594594}, {"text": "convenient,", "box": [0.3567724609375, 0.6045655650319829, 0.1266259765625, 0.04300106609808103], "conf": 0.594594}, {"text": "I", "box": [0.4833984375, 0.6045655650319829, 0.0126953125, 0.04300106609808103], "conf": 0.594594}, {"text": "shall", "box": [0.49609375, 0.6045655650319829, 0.0380859375, 0.04300106609808103], "conf": 0.594594}, {"text": "Ottawa", "box": [0.0833349609375, 0.6273107675906183, 0.030595703125, 0.09825692963752666], "conf": 0.579585}, {"text": "9a", "box": [0.47265625, 0.6486327292110874, 0.0208349609375, 0.031804371002132195], "conf": 0.62539}, {"text": "Ottawa", "box": [0.1116552734375, 0.6816817697228145, 0.0787744140625, 0.07053837953091685], "conf": 0.457435}, {"text": "of", "box": [0.4947900390625, 0.6056316631130064, 0.0247412109375, 0.04211087420042644], "conf": 0.856221}, {"text": "the", "box": [0.5318994140625, 0.6056316631130064, 0.049482421875, 0.04211087420042644], "conf": 0.856221}, {"text": "said", "box": [0.6061181640625, 0.6056316631130064, 0.07421875, 0.04211087420042644], "conf": 0.856221}, {"text": "forms", "box": [0.705078125, 0.6056316631130064, 0.0865869140625, 0.04211087420042644], "conf": 0.856221}, {"text": "English", "box": [0.4700537109375, 0.6431236673773987, 0.0123681640625, 0.04139925373134329], "conf": 0.593611}, {"text": "Servant", "box": [0.5983056640625, 0.6740405117270789, 0.116865234375, 0.02398720682302772], "conf": 0.685015}, {"text": "English", "box": [0.5423193359375, 0.6809701492537313, 0.1852197265625, 0.054371002132196165], "conf": 0.507101}, {"text": "At English", "box": [0.5432958984375, 0.68363539445629, 0.1735009765625, 0.04797441364605544], "conf": 0.632922}, {"text": "Indian", "box": [0.630859375, 0.7083342217484009, 0.099609375, 0.03624733475479744], "conf": 0.741161}, {"text": "Agent", "box": [0.73046875, 0.7083342217484009, 0.0110693359375, 0.03624733475479744], "conf": 0.741161}];
+  const bOnlyData = [{"text": "%", "box": [0.115234375, 0.10687633262260128, 0.00927734375, 0.006929637526652452], "conf": null}, {"text": "Indian", "box": [0.27294921875, 0.8933901918976546, 0.05419921875, 0.006663113006396588], "conf": null}, {"text": "Affaire.", "box": [0.3359375, 0.8933901918976546, 0.072265625, 0.007196162046908316], "conf": null}, {"text": "(RO", "box": [0.419921875, 0.8923240938166311, 0.02734375, 0.00906183368869936], "conf": null}, {"text": "10,", "box": [0.45556640625, 0.8933901918976546, 0.02587890625, 0.008795309168443496], "conf": null}, {"text": "Volume", "box": [0.49267578125, 0.8933901918976546, 0.05419921875, 0.006929637526652452], "conf": null}, {"text": "7706,", "box": [0.55712890625, 0.8933901918976546, 0.0439453125, 0.008795309168443496], "conf": null}, {"text": "File", "box": [0.6123046875, 0.8939232409381663, 0.03662109375, 0.006929637526652452], "conf": null}, {"text": "23029-1", "box": [0.65869140625, 0.8941897654584222, 0.0625, 0.007729211087420042], "conf": null}, {"text": "Pt.1)", "box": [0.73193359375, 0.8933901918976546, 0.04443359375, 0.00906183368869936], "conf": null}, {"text": "PUBLIC", "box": [0.40625, 0.9112473347547975, 0.0859375, 0.009594882729211088], "conf": null}, {"text": "ARCHIVES", "box": [0.501953125, 0.912046908315565, 0.1259765625, 0.009861407249466951], "conf": null}, {"text": "ARCHIVES", "box": [0.38232421875, 0.9213752665245203, 0.125, 0.009861407249466951], "conf": null}, {"text": "PUBLIQUES", "box": [0.5146484375, 0.9221748400852878, 0.13623046875, 0.010394456289978678], "conf": null}, {"text": "CANADA", "box": [0.46142578125, 0.93363539445629, 0.10009765625, 0.009861407249466951], "conf": null}];
+  const pageWidth = 2048.0;
+  const pageHeight = 3752.0;
+
+  // SVGs & Sidebar
+  const svgLeft = document.getElementById("svgLeft");
+  const svgRight = document.getElementById("svgRight");
+  const sidebarList = document.getElementById("sidebarList");
+  const cards = [];
+
+  // Populate SVGs and Sidebar
+  matchedData.forEach((m, idx) => {
+    const isAgree = m.clean_match;
+    const cls = isAgree ? "agree" : "discrepancy";
+
+    // Left SVG
+    const rectL = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectL.setAttribute("x", m.p_box[0] * pageWidth);
+    rectL.setAttribute("y", m.p_box[1] * pageHeight);
+    rectL.setAttribute("width", m.p_box[2] * pageWidth);
+    rectL.setAttribute("height", m.p_box[3] * pageHeight);
+    rectL.setAttribute("class", cls);
+    rectL.id = "p-rect-" + idx;
+    rectL.dataset.idx = idx;
+    rectL.innerHTML = `<title>Pipeline: "${m.p_text}" | ABBYY: "${m.b_text}" (IoU: ${m.iou})</title>`;
+    rectL.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgLeft.appendChild(rectL);
+
+    // Right SVG
+    const rectR = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectR.setAttribute("x", m.b_box[0] * pageWidth);
+    rectR.setAttribute("y", m.b_box[1] * pageHeight);
+    rectR.setAttribute("width", m.b_box[2] * pageWidth);
+    rectR.setAttribute("height", m.b_box[3] * pageHeight);
+    rectR.setAttribute("class", cls);
+    rectR.id = "b-rect-" + idx;
+    rectR.dataset.idx = idx;
+    rectR.innerHTML = `<title>ABBYY: "${m.b_text}" | Pipeline: "${m.p_text}" (IoU: ${m.iou})</title>`;
+    rectR.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgRight.appendChild(rectR);
+
+    // Sidebar items for discrepancies
+    if (!isAgree) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = "card-" + idx;
+      card.dataset.verdict = m.lexical_verdict || "NONE";
+
+      let verdictBadge = "";
+      if (m.lexical_verdict === "PADDLE_WIN") {
+        verdictBadge = '<span class="verdict-tag paddle-win">Paddle Win</span>';
+      } else if (m.lexical_verdict === "ABBYY_WIN") {
+        verdictBadge = '<span class="verdict-tag abbyy-win">ABBYY Win</span>';
+      } else if (m.lexical_verdict === "BOTH_VALID") {
+        verdictBadge = '<span class="verdict-tag both-valid">Both Valid</span>';
+      } else if (m.lexical_verdict === "NEITHER_VALID") {
+        verdictBadge = '<span class="verdict-tag neither-valid">Neither</span>';
+      }
+
+      const pCheck = m.p_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+      const bCheck = m.b_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+
+      card.innerHTML = `
+        <div class="card-row">
+          <span class="card-diff">P: ${escapeHtml(m.p_text)}${pCheck}</span>
+          ${verdictBadge}
+        </div>
+        <div class="card-row">
+          <span style="color:#ef4444;">B: ${escapeHtml(m.b_text)}${bCheck}</span>
+          <span class="card-label">IoU: ${m.iou} | Sim: ${Math.round(m.sim * 100)}%</span>
+        </div>
+      `;
+      card.onclick = () => selectWord(idx);
+      sidebarList.appendChild(card);
+      cards.push({ idx: idx, el: card, verdict: m.lexical_verdict });
+    }
+  });
+
+  // Discrepancy filter
+  const selFilter = document.getElementById("selFilterDiscrepancies");
+  if (selFilter) {
+    selFilter.onchange = (e) => {
+      const val = e.target.value;
+      cards.forEach(c => {
+        if (val === "all" || c.verdict === val) {
+          c.el.style.display = "";
+        } else {
+          c.el.style.display = "none";
+        }
+      });
+    };
+  }
+
+  // Pipeline-only boxes
+  pOnlyData.forEach((p, pIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", p.box[0] * pageWidth);
+    rect.setAttribute("y", p.box[1] * pageHeight);
+    rect.setAttribute("width", p.box[2] * pageWidth);
+    rect.setAttribute("height", p.box[3] * pageHeight);
+    rect.setAttribute("class", "p-only");
+    rect.innerHTML = `<title>Pipeline Only: "${p.text}"</title>`;
+    svgLeft.appendChild(rect);
+  });
+
+  // Benchmark-only boxes
+  bOnlyData.forEach((b, bIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", b.box[0] * pageWidth);
+    rect.setAttribute("y", b.box[1] * pageHeight);
+    rect.setAttribute("width", b.box[2] * pageWidth);
+    rect.setAttribute("height", b.box[3] * pageHeight);
+    rect.setAttribute("class", "b-only");
+    rect.innerHTML = `<title>ABBYY Only: "${b.text}"</title>`;
+    svgRight.appendChild(rect);
+  });
+
+  function escapeHtml(str) {
+    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Active word selection and highlighting
+  let activeIdx = null;
+
+  function selectWord(idx) {
+    // Clear previously highlighted elements
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+
+    activeIdx = idx;
+    const m = matchedData[idx];
+    if (!m) return;
+
+    // Highlight rects on both left and right canvases
+    const rL = document.getElementById("p-rect-" + idx);
+    const rR = document.getElementById("b-rect-" + idx);
+    if (rL) rL.classList.add("highlighted");
+    if (rR) rR.classList.add("highlighted");
+
+    // Highlight and scroll into view sidebar card if present
+    const cardEl = document.getElementById("card-" + idx);
+    if (cardEl) {
+      cardEl.classList.add("active");
+      cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Zoom and center into the box
+    zoomToNormBox(m.p_box);
+  }
+
+  // Synchronized Pan & Zoom
+  let scale = 1.0;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const stageLeft = document.getElementById("stageLeft");
+  const stageRight = document.getElementById("stageRight");
+  const panelLeft = document.getElementById("panelLeft");
+  const panelRight = document.getElementById("panelRight");
+
+  function updateTransform() {
+    const transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    stageLeft.style.transform = transform;
+    stageRight.style.transform = transform;
+  }
+
+  function attachPanZoom(panel) {
+    panel.addEventListener("mousedown", e => {
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+    });
+
+    window.addEventListener("mousemove", e => {
+      if (!isDragging) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      updateTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    panel.addEventListener("wheel", e => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 10.0);
+      
+      const rect = panel.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+      updateTransform();
+    }, { passive: false });
+  }
+
+  attachPanZoom(panelLeft);
+  attachPanZoom(panelRight);
+
+  function fitToView() {
+    const panelW = panelLeft.clientWidth || 800;
+    const panelH = panelLeft.clientHeight || 900;
+    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    panX = (panelW - pageWidth * scale) / 2;
+    panY = 10;
+    updateTransform();
+  }
+
+  // Initial fit on load
+  fitToView();
+  window.addEventListener("resize", fitToView);
+
+  document.getElementById("btnResetView").onclick = () => {
+    fitToView();
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+  };
+
+  function zoomToNormBox(box) {
+    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
+    scale = 3.5;
+    const panelW = panelLeft.clientWidth;
+    const panelH = panelLeft.clientHeight;
+    const boxCenterX = (box[0] + (box[2] / 2.0)) * pageWidth;
+    const boxCenterY = (box[1] + (box[3] / 2.0)) * pageHeight;
+
+    panX = (panelW / 2.0) - (boxCenterX * scale);
+    panY = (panelH / 2.0) - (boxCenterY * scale);
+    updateTransform();
+  }
+
+  // Layer Toggles
+  document.getElementById("chkAgree").onchange = (e) => {
+    document.querySelectorAll(".agree").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkDiff").onchange = (e) => {
+    document.querySelectorAll(".discrepancy").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkOnly").onchange = (e) => {
+    document.querySelectorAll(".p-only, .b-only").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+
+  // Background Image Toggle & Opacity Slider
+  const chkBgImage = document.getElementById("chkBgImage");
+  const rngOpacity = document.getElementById("rngOpacity");
+  const lblOpacity = document.getElementById("lblOpacity");
+
+  function updateBgImageStyle() {
+    const show = chkBgImage.checked;
+    const op = rngOpacity.value / 100.0;
+    lblOpacity.textContent = rngOpacity.value + "%";
+
+    document.querySelectorAll(".page-image").forEach(img => {
+      img.style.display = show ? "block" : "none";
+      img.style.opacity = op;
+    });
+  }
+
+  chkBgImage.onchange = updateBgImageStyle;
+  rngOpacity.oninput = updateBgImageStyle;
+</script>
+</body>
+</html>

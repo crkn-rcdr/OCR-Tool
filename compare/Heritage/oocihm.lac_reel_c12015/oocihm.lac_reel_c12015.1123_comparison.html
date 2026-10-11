@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRKN OCR Comparison: oocihm.lac_reel_c12015.1123</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1a1e24; color: #e1e4e8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { background: #24292e; border-bottom: 1px solid #30363d; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; z-index: 10; gap: 12px; }
+  
+  .nav-left { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+  .nav-btn-back { background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.82rem; transition: all 0.15s ease; }
+  .nav-btn-back:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+  .nav-sep { color: #484f58; }
+  .nav-coll { color: #8b949e; font-weight: 500; font-size: 0.84rem; }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #f0f6fc; }
+  
+  .nav-center { display: flex; align-items: center; gap: 6px; }
+  .nav-page-btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; font-weight: 500; }
+  .nav-page-btn:hover:not(.disabled) { background: #30363d; color: #58a6ff; border-color: #58a6ff; }
+  .nav-page-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .page-current { font-size: 0.82rem; color: #8b949e; padding: 0 4px; }
+  
+  .badges { display: flex; gap: 8px; font-size: 0.8rem; align-items: center; }
+  .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; background: #30363d; }
+  .badge.success { background: #198754; color: #fff; }
+  .badge.warning { background: #d97706; color: #fff; }
+  .badge.info { background: #0284c7; color: #fff; }
+  .badge.qa-win { background: #238636; color: #fff; }
+  .badge.qa-loss { background: #8957e5; color: #fff; }
+  
+  .controls { background: #212529; border-bottom: 1px solid #30363d; padding: 8px 18px; display: flex; gap: 14px; align-items: center; font-size: 0.84rem; flex-wrap: wrap; }
+  .controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .controls select, .controls input[type="range"] { vertical-align: middle; }
+  .slider-group { display: flex; align-items: center; gap: 6px; }
+  
+  .main-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  .viewers-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  
+  .panel { flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; }
+  .panel:active { cursor: grabbing; }
+  .panel-header { position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }
+  
+  .canvas-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 1768.0px; height: 3752.0px; }
+  .page-image { position: absolute; top: 0; left: 0; width: 1768.0px; height: 3752.0px; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }
+  .overlay-svg { position: absolute; top: 0; left: 0; width: 1768.0px; height: 3752.0px; pointer-events: auto; }
+  
+  rect.agree { fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }
+  rect.discrepancy { fill: rgba(245, 158, 11, 0.35); stroke: #f59e0b; stroke-width: 2; cursor: pointer; }
+  rect.p-only { fill: rgba(56, 189, 248, 0.35); stroke: #38bdf8; stroke-width: 1.5; cursor: pointer; }
+  rect.b-only { fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }
+  rect:hover { fill-opacity: 0.7; stroke-width: 2.5; }
+  
+  /* Selected / Highlighted active word - completely transparent interior (fill: none) */
+  rect.highlighted {
+    stroke: #00ffff !important;
+    stroke-width: 4 !important;
+    fill: none !important;
+    filter: drop-shadow(0 0 6px #00ffff);
+    vector-effect: non-scaling-stroke;
+  }
+  
+  .sidebar { width: 360px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }
+  .sidebar-header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.88rem; background: #24292e; display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-filter-bar { padding: 8px 12px; background: #181b20; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+  .filter-dropdown { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; width: 100%; }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  
+  .card { background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s ease; }
+  .card:hover { border-color: #60a5fa; background: #2d3542; }
+  .card.active {
+    border-color: #00ffff !important;
+    background: #1e3a4f !important;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+  }
+  .card-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .card-diff { font-weight: bold; color: #f59e0b; word-break: break-all; }
+  .card-label { color: #9ca3af; font-size: 0.75rem; }
+  
+  .verdict-tag { font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+  .verdict-tag.paddle-win { background: rgba(35, 134, 54, 0.25); color: #3fb950; border: 1px solid #238636; }
+  .verdict-tag.abbyy-win { background: rgba(218, 54, 51, 0.25); color: #f85149; border: 1px solid #da3633; }
+  .verdict-tag.both-valid { background: rgba(56, 139, 253, 0.2); color: #58a6ff; border: 1px solid #1f6feb; }
+  .verdict-tag.neither-valid { background: rgba(110, 118, 129, 0.2); color: #8b949e; border: 1px solid #484f58; }
+  
+  .legend { display: flex; gap: 12px; font-size: 0.78rem; align-items: center; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav-left">
+    <a href="../../index.html" class="nav-btn-back">← Master Dashboard</a>
+    <span class="nav-sep">/</span>
+    <span class="nav-coll">Heritage/oocihm.lac_reel_c12015</span>
+    <span class="nav-sep">/</span>
+    <h1>oocihm.lac_reel_c12015.1123</h1>
+  </div>
+  <div class="nav-center">
+    <a href="oocihm.lac_reel_c12015.1122_comparison.html" class="nav-page-btn">‹ Previous</a>
+    <span class="page-current">oocihm.lac_reel_c12015.1123</span>
+    <a href="oocihm.lac_reel_c12015.1124_comparison.html" class="nav-page-btn">Next ›</a>
+  </div>
+  <div class="badges">
+    <div class="badge success" title="Text Concordance (Cleaned)">Concordance: 50.0%</div>
+    <div class="badge qa-loss" title="Paddle 1 wins vs ABBYY 4 wins on disputed words">Paddle QA Win Rate: 20.0%</div>
+    <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: 28.95%</div>
+    <div class="badge warning" title="Discrepant words count">Diffs: 11</div>
+  </div>
+</header>
+
+<div class="controls">
+  <label><input type="checkbox" id="chkAgree" checked> Concordant (Green)</label>
+  <label><input type="checkbox" id="chkDiff" checked> Discrepancies (Orange)</label>
+  <label><input type="checkbox" id="chkOnly" checked> Engine-Only (Blue/Red)</label>
+  
+  <span style="border-left: 1px solid #444c56; height: 18px; margin: 0 4px;"></span>
+  
+  <label><input type="checkbox" id="chkBgImage" checked> Background Image</label>
+  <div class="slider-group">
+    <span style="color:#9ca3af;font-size:0.8rem;">Opacity:</span>
+    <input type="range" id="rngOpacity" min="0" max="100" value="85" style="width: 90px; cursor: pointer;">
+    <span id="lblOpacity" style="font-size:0.8rem; width: 32px;">85%</span>
+  </div>
+  
+  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;">Reset View</button>
+  <span style="flex:1;"></span>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#28a745;"></div> Agreed</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Discrepancy</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Pipeline Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> ABBYY Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ffff;"></div> Selected</div>
+  </div>
+</div>
+
+<div class="main-container">
+  <div class="viewers-container">
+    <!-- Pipeline Panel (Left) -->
+    <div class="panel" id="panelLeft">
+      <div class="panel-header">Pipeline (PaddleOCR + VLM) - 76 words</div>
+      <div class="canvas-stage" id="stageLeft">
+        <img class='page-image' id='imgLeft' src='oocihm.lac_reel_c12015.1123.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgLeft" viewBox="0 0 1768.0 3752.0"></svg>
+      </div>
+    </div>
+    
+    <!-- Benchmark Panel (Right) -->
+    <div class="panel" id="panelRight">
+      <div class="panel-header">Benchmark (ABBYY FineReader) - 40 words</div>
+      <div class="canvas-stage" id="stageRight">
+        <img class='page-image' id='imgRight' src='oocihm.lac_reel_c12015.1123.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgRight" viewBox="0 0 1768.0 3752.0"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discrepancy Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div>
+        <span>Discrepancies</span>
+        <span class="badge warning" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">11</span>
+      </div>
+      <span style="font-size:0.75rem;color:#9ca3af;">Click card to inspect</span>
+    </div>
+    <div class="sidebar-filter-bar">
+      <select id="selFilterDiscrepancies" class="filter-dropdown">
+        <option value="all">All Discrepancies (11)</option>
+        <option value="PADDLE_WIN">Paddle Wins (1)</option>
+        <option value="ABBYY_WIN">ABBYY Wins (4)</option>
+        <option value="BOTH_VALID">Both Valid (3)</option>
+        <option value="NEITHER_VALID">Neither Valid (3)</option>
+      </select>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </div>
+</div>
+
+<script>
+  const matchedData = [{"p_text": "HOUSE.", "b_text": "HOUSE.", "p_box": [0.665158371040724, 0.3478144989339019, 0.09332579185520362, 0.012526652452025586], "b_box": [0.6578054298642534, 0.3502132196162047, 0.10294117647058823, 0.00906183368869936], "iou": 0.673, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999708, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Importers", "b_text": "Importers.", "p_box": [0.2664027149321267, 0.4544243070362473, 0.11368778280542986, 0.019989339019189766], "b_box": [0.26131221719457015, 0.4600213219616205, 0.12839366515837103, 0.014392324093816631], "iou": 0.659, "clean_match": true, "exact_match": false, "sim": 0.9, "p_conf": 0.860663, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Teaters.", "b_text": "Dealers.", "p_box": [0.6759049773755657, 0.4533582089552239, 0.11085972850678733, 0.0226545842217484], "b_box": [0.6770361990950227, 0.4586886993603412, 0.10294117647058823, 0.015458422174840085], "iou": 0.634, "clean_match": false, "exact_match": false, "sim": 0.75, "p_conf": 0.908056, "b_conf": null, "p_valid": false, "b_valid": true, "lexical_verdict": "ABBYY_WIN"}, {"p_text": "NNE", "b_text": "ILNE", "p_box": [0.6549773755656109, 0.4168443496801706, 0.08653846153846154, 0.03917910447761194], "b_box": [0.6668552036199095, 0.4192430703624733, 0.08484162895927602, 0.0314498933901919], "iou": 0.633, "clean_match": false, "exact_match": false, "sim": 0.5, "p_conf": 0.838589, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": "NEITHER_VALID"}, {"p_text": "HARDWARE", "b_text": "HARDWARE", "p_box": [0.4745475113122172, 0.3478144989339019, 0.1595022624434389, 0.012526652452025586], "b_box": [0.4660633484162896, 0.35047974413646055, 0.17420814479638008, 0.00826226012793177], "iou": 0.622, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999708, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "1948.", "b_text": "1848.", "p_box": [0.5933257918552036, 0.3603411513859275, 0.04411764705882353, 0.006929637526652452], "b_box": [0.5888009049773756, 0.36167377398720685, 0.050339366515837106, 0.00453091684434968], "iou": 0.599, "clean_match": false, "exact_match": false, "sim": 0.8, "p_conf": 0.81005, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": "BOTH_VALID"}, {"p_text": "STATEMENT.", "b_text": "STATEMENT.", "p_box": [0.19626696832579185, 0.3704690831556503, 0.10633484162895927, 0.013592750533049041], "b_box": [0.19457013574660634, 0.375, 0.10237556561085973, 0.008528784648187633], "iou": 0.588, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999124, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "MACKENZIE", "b_text": "MACKENZIE", "p_box": [0.2867647058823529, 0.34701492537313433, 0.15328054298642535, 0.013592750533049041], "b_box": [0.2748868778280543, 0.3502132196162047, 0.17251131221719457, 0.008528784648187633], "iou": 0.582, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.995725, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "ESTABLISHED", "b_text": "ESTABLISHED", "p_box": [0.415158371040724, 0.36087420042643925, 0.1408371040723982, 0.007196162046908316], "b_box": [0.4066742081447964, 0.36167377398720685, 0.17194570135746606, 0.004797441364605544], "iou": 0.581, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.782896, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "MACKENZIE", "b_text": "MACKENZIE,", "p_box": [0.4061085972850679, 0.4195095948827292, 0.1436651583710407, 0.034381663113006396], "b_box": [0.3987556561085973, 0.42510660980810233, 0.2228506787330317, 0.02771855010660981], "iou": 0.558, "clean_match": true, "exact_match": false, "sim": 0.9, "p_conf": 0.877753, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "bolesaie", "b_text": "Wholesale", "p_box": [0.4332579185520362, 0.4544243070362473, 0.09049773755656108, 0.019989339019189766], "b_box": [0.40441176470588236, 0.4600213219616205, 0.11990950226244344, 0.013592750533049041], "iou": 0.557, "clean_match": false, "exact_match": false, "sim": 0.667, "p_conf": 0.860663, "b_conf": null, "p_valid": false, "b_valid": true, "lexical_verdict": "ABBYY_WIN"}, {"p_text": "Betail", "b_text": "Retail", "p_box": [0.5893665158371041, 0.4533582089552239, 0.07409502262443439, 0.0226545842217484], "b_box": [0.5944570135746606, 0.4600213219616205, 0.07239819004524888, 0.013859275053304905], "iou": 0.554, "clean_match": false, "exact_match": false, "sim": 0.833, "p_conf": 0.908056, "b_conf": null, "p_valid": false, "b_valid": true, "lexical_verdict": "ABBYY_WIN"}, {"p_text": "Ae.", "b_text": "3e.", "p_box": [0.23585972850678733, 0.4195095948827292, 0.06561085972850679, 0.034381663113006396], "b_box": [0.23472850678733032, 0.42510660980810233, 0.04411764705882353, 0.028251599147121536], "iou": 0.531, "clean_match": false, "exact_match": false, "sim": 0.667, "p_conf": 0.877753, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": "NEITHER_VALID"}, {"p_text": "90r", "b_text": "QCr", "p_box": [0.7132352941176471, 0.4115138592750533, 0.03223981900452489, 0.015191897654584221], "b_box": [0.7109728506787331, 0.4147121535181237, 0.033936651583710405, 0.008528784648187633], "iou": 0.531, "clean_match": false, "exact_match": false, "sim": 0.333, "p_conf": 0.677394, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": "NEITHER_VALID"}, {"p_text": "Ont.,", "b_text": "@nt..", "p_box": [0.5571266968325792, 0.3805970149253731, 0.04638009049773756, 0.015458422174840085], "b_box": [0.5531674208144797, 0.3859275053304904, 0.04468325791855204, 0.00906183368869936], "iou": 0.49, "clean_match": false, "exact_match": false, "sim": 0.6, "p_conf": 0.965818, "b_conf": null, "p_valid": true, "b_valid": false, "lexical_verdict": "PADDLE_WIN"}, {"p_text": "I.", "b_text": "In", "p_box": [0.19683257918552036, 0.4195095948827292, 0.03902714932126697, 0.034381663113006396], "b_box": [0.19513574660633484, 0.42510660980810233, 0.026018099547511313, 0.026652452025586353], "iou": 0.467, "clean_match": false, "exact_match": false, "sim": 0.5, "p_conf": 0.877753, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": "BOTH_VALID"}, {"p_text": "Jaenia,", "b_text": "Jaenia,", "p_box": [0.4813348416289593, 0.3805970149253731, 0.06957013574660634, 0.015458422174840085], "b_box": [0.47058823529411764, 0.38619402985074625, 0.07070135746606335, 0.008528784648187633], "iou": 0.438, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.965818, "b_conf": null, "p_valid": false, "b_valid": false, "lexical_verdict": ""}, {"p_text": "CO.", "b_text": "Co.", "p_box": [0.8065610859728507, 0.4181769722814499, 0.06504524886877829, 0.036780383795309166], "b_box": [0.7980769230769231, 0.42350746268656714, 0.053167420814479636, 0.0255863539445629], "iou": 0.438, "clean_match": true, "exact_match": false, "sim": 0.667, "p_conf": 0.870993, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "with", "b_text": "with", "p_box": [0.3014705882352941, 0.4195095948827292, 0.05203619909502263, 0.034381663113006396], "b_box": [0.28789592760180993, 0.42510660980810233, 0.05203619909502263, 0.02398720682302772], "iou": 0.436, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.877753, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "and", "b_text": "and", "p_box": [0.540158371040724, 0.4533582089552239, 0.03676470588235294, 0.0226545842217484], "b_box": [0.5378959276018099, 0.4605543710021322, 0.042986425339366516, 0.009861407249466951], "iou": 0.405, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.908056, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "1880", "b_text": "188", "p_box": [0.794683257918552, 0.3779317697228145, 0.06278280542986425, 0.018923240938166313], "b_box": [0.7952488687782805, 0.38646055437100213, 0.04524886877828054, 0.007729211087420042], "iou": 0.294, "clean_match": false, "exact_match": false, "sim": 0.75, "p_conf": 0.936871, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": "BOTH_VALID"}, {"p_text": "G.", "b_text": "C.", "p_box": [0.3665158371040724, 0.4195095948827292, 0.03959276018099547, 0.034381663113006396], "b_box": [0.35350678733031676, 0.4229744136460554, 0.030542986425339366, 0.0255863539445629], "iou": 0.265, "clean_match": false, "exact_match": false, "sim": 0.5, "p_conf": 0.877753, "b_conf": null, "p_valid": false, "b_valid": true, "lexical_verdict": "ABBYY_WIN"}];
+  const pOnlyData = [{"text": "Importers.", "box": [0.2335972850678733, 0.3715351812366738, 0.13631221719457012, 0.05570362473347548], "conf": 0.655353}, {"text": "Wholesale", "box": [0.36990950226244346, 0.3715351812366738, 0.019796380090497737, 0.05570362473347548], "conf": 0.655353}, {"text": "and", "box": [0.4095022624434389, 0.3715351812366738, 0.13631221719457012, 0.05570362473347548], "conf": 0.655353}, {"text": "Indian", "box": [0.23076923076923078, 0.3821961620469083, 0.1340497737556561, 0.04051172707889126], "conf": 0.797069}, {"text": "Debartn", "box": [0.40497737556561086, 0.3821961620469083, 0.16119909502262444, 0.04051172707889126], "conf": 0.797069}, {"text": ", \u00dc", "box": [0.38744343891402716, 0.4544243070362473, 0.03789592760180995, 0.019989339019189766], "conf": 0.860663}, {"text": "an", "box": [0.5390271493212669, 0.4544243070362473, 0.02319004524886878, 0.019989339019189766], "conf": 0.860663}, {"text": "Wdle", "box": [0.4830316742081448, 0.47841151385927505, 0.06900452488687783, 0.027985074626865673], "conf": 0.915609}, {"text": "HARDY", "box": [0.47341628959276016, 0.34701492537313433, 0.08597285067873303, 0.013592750533049041], "conf": 0.995725}, {"text": "ESTABLISHED", "box": [0.46097285067873306, 0.3603411513859275, 0.11029411764705882, 0.006929637526652452], "conf": 0.81005}, {"text": "artment", "box": [0.4632352941176471, 0.392590618336887, 0.17590497737556562, 0.029850746268656716], "conf": 0.966191}, {"text": "MENT OF", "box": [0.6317873303167421, 0.39925373134328357, 0.08936651583710407, 0.011460554371002133], "conf": 0.816447}, {"text": "90T", "box": [0.7149321266968326, 0.41124733475479747, 0.030542986425339366, 0.015458422174840085], "conf": 0.594258}, {"text": "ACKENZIE", "box": [0.4677601809954751, 0.4168443496801706, 0.1583710407239819, 0.03917910447761194], "conf": 0.838589}, {"text": "51", "box": [0.7409502262443439, 0.451226012793177, 0.01414027149321267, 0.0021321961620469083], "conf": 0.540444}, {"text": "wholesale", "box": [0.45361990950226244, 0.4533582089552239, 0.07409502262443439, 0.0226545842217484], "conf": 0.908056}, {"text": "1406448", "box": [0.6866515837104072, 0.4672174840085288, 0.18042986425339366, 0.05303837953091684], "conf": 0.849403}, {"text": "line", "box": [0.47341628959276016, 0.5047974413646056, 0.09898190045248868, 0.019722814498933903], "conf": 0.88531}, {"text": "20", "box": [0.7115384615384616, 0.502132196162047, 0.029411764705882353, 0.02105543710021322], "conf": 0.856542}, {"text": "1a", "box": [0.5526018099547512, 0.523454157782516, 0.01414027149321267, 0.007462686567164179], "conf": 0.286013}, {"text": "Oct 8th", "box": [0.6436651583710408, 0.369136460554371, 0.1430995475113122, 0.018923240938166313], "conf": 0.607396}, {"text": "Sep", "box": [0.16855203619909503, 0.4802771855010661, 0.050339366515837106, 0.03171641791044776], "conf": 0.832208}, {"text": "27", "box": [0.24377828054298642, 0.4802771855010661, 0.03733031674208145, 0.03171641791044776], "conf": 0.832208}, {"text": "1", "box": [0.3065610859728507, 0.4802771855010661, 0.012443438914027148, 0.03171641791044776], "conf": 0.832208}, {"text": "pick", "box": [0.3438914027149321, 0.4802771855010661, 0.0752262443438914, 0.03171641791044776], "conf": 0.832208}, {"text": "Ndle", "box": [0.4445701357466063, 0.4802771855010661, 0.11255656108597285, 0.03171641791044776], "conf": 0.832208}, {"text": "1", "box": [0.31278280542986425, 0.5, 0.007352941176470588, 0.023720682302771856], "conf": 0.593233}, {"text": "pick", "box": [0.32748868778280543, 0.5, 0.007352941176470588, 0.023720682302771856], "conf": 0.593233}, {"text": "&", "box": [0.3495475113122172, 0.5, 0.13914027149321267, 0.023720682302771856], "conf": 0.593233}, {"text": "handle", "box": [0.49604072398190047, 0.5, 0.007352941176470588, 0.023720682302771856], "conf": 0.593233}, {"text": "entee", "box": [0.18042986425339366, 0.5162579957356077, 0.13800904977375567, 0.015191897654584221], "conf": 0.39492}, {"text": "2'aus", "box": [0.35407239819004527, 0.5223880597014925, 0.08484162895927602, 0.008795309168443496], "conf": 0.354959}, {"text": "act", "box": [0.17138009049773756, 0.5122601279317697, 0.06447963800904978, 0.04717484008528785], "conf": 0.828326}, {"text": "8", "box": [0.26131221719457015, 0.5122601279317697, 0.013009049773755657, 0.04717484008528785], "conf": 0.828326}, {"text": "1", "box": [0.2997737556561086, 0.5122601279317697, 0.013009049773755657, 0.04717484008528785], "conf": 0.828326}, {"text": "pick", "box": [0.3382352941176471, 0.5122601279317697, 0.07748868778280543, 0.04717484008528785], "conf": 0.828326}, {"text": "Kandle", "box": [0.4411764705882353, 0.5122601279317697, 0.12839366515837103, 0.04717484008528785], "conf": 0.828326}, {"text": "Reged", "box": [0.372737556561086, 0.5639658848614072, 0.09841628959276018, 0.0482409381663113], "conf": 0.914455}, {"text": "Pag", "box": [0.5130090497737556, 0.5639658848614072, 0.05656108597285068, 0.0482409381663113], "conf": 0.914455}, {"text": "Mackenzie", "box": [0.4095022624434389, 0.6052771855010661, 0.16402714932126697, 0.05223880597014925], "conf": 0.830071}, {"text": "The", "box": [0.28846153846153844, 0.6537846481876333, 0.0582579185520362, 0.04371002132196162], "conf": 0.758768}, {"text": "foregoing", "box": [0.34671945701357465, 0.6537846481876333, 0.014705882352941176, 0.04371002132196162], "conf": 0.758768}, {"text": "a", "box": [0.36142533936651583, 0.6537846481876333, 0.1600678733031674, 0.04371002132196162], "conf": 0.758768}, {"text": "handle", "box": [0.4626696832579186, 0.521588486140725, 0.11990950226244344, 0.024520255863539446], "conf": 0.850524}, {"text": "140", "box": [0.6736425339366516, 0.5202558635394456, 0.07183257918552036, 0.026652452025586353], "conf": 0.9963}, {"text": "300", "box": [0.6742081447963801, 0.5453091684434968, 0.06957013574660634, 0.020788912579957356], "conf": 0.980645}, {"text": "Payment", "box": [0.4660633484162896, 0.5716950959488273, 0.22737556561085973, 0.03571428571428571], "conf": 0.782473}, {"text": "ckeuzieilueto", "box": [0.4677601809954751, 0.6090085287846482, 0.33710407239819007, 0.038646055437100216], "conf": 0.667318}, {"text": "X", "box": [0.4264705882352941, 0.7004264392324094, 0.02828054298642534, 0.07995735607675906], "conf": 0.747393}, {"text": "1", "box": [0.47002262443438914, 0.7137526652452025, 0.003393665158371041, 0.009861407249466951], "conf": 0.412956}, {"text": "E.", "box": [0.4762443438914027, 0.658315565031983, 0.033936651583710405, 0.03011727078891258], "conf": 0.656526}, {"text": "Watson", "box": [0.5101809954751131, 0.658315565031983, 0.011877828054298642, 0.03011727078891258], "conf": 0.656526}, {"text": "E.", "box": [0.6334841628959276, 0.6753731343283582, 0.041289592760180995, 0.05197228144989339], "conf": 0.758064}, {"text": "Watson", "box": [0.6747737556561086, 0.6753731343283582, 0.125, 0.05197228144989339], "conf": 0.758064}];
+  const bOnlyData = [{"text": "46448", "box": [0.6442307692307693, 0.27318763326226014, 0.10972850678733032, 0.01812366737739872], "conf": null}, {"text": "151", "box": [0.7618778280542986, 0.4139125799573561, 0.034502262443438916, 0.009328358208955223], "conf": null}, {"text": "IV", "box": [0.6397058823529411, 0.43576759061833686, 0.021493212669683258, 0.013859275053304905], "conf": null}, {"text": "A-", "box": [0.6481900452488688, 0.4165778251599147, 0.013574660633484163, 0.0061300639658848615], "conf": null}, {"text": "Indian", "box": [0.2251131221719457, 0.8957889125799574, 0.06334841628959276, 0.007462686567164179], "conf": null}, {"text": "Affairs.", "box": [0.2992081447963801, 0.8957889125799574, 0.0831447963800905, 0.00826226012793177], "conf": null}, {"text": "(RG", "box": [0.38574660633484165, 0.8952558635394456, 0.0418552036199095, 0.009861407249466951], "conf": null}, {"text": "10,", "box": [0.43778280542986425, 0.8960554371002132, 0.02997737556561086, 0.009328358208955223], "conf": null}, {"text": "Volume", "box": [0.4802036199095023, 0.8957889125799574, 0.06334841628959276, 0.006663113006396588], "conf": null}, {"text": "7706,", "box": [0.5548642533936652, 0.8947228144989339, 0.051470588235294115, 0.009328358208955223], "conf": null}, {"text": "File", "box": [0.6187782805429864, 0.8949893390191898, 0.04242081447963801, 0.007196162046908316], "conf": null}, {"text": "23029-1", "box": [0.6725113122171946, 0.8949893390191898, 0.07296380090497738, 0.007729211087420042], "conf": null}, {"text": "Pt.l)", "box": [0.7573529411764706, 0.8936567164179104, 0.051470588235294115, 0.00906183368869936], "conf": null}, {"text": "PUBLIC", "box": [0.37952488687782804, 0.9107142857142857, 0.09954751131221719, 0.009594882729211088], "conf": null}, {"text": "ARCHIVES", "box": [0.49038461538461536, 0.9117803837953091, 0.14536199095022626, 0.009594882729211088], "conf": null}, {"text": "ARCHIVES", "box": [0.35180995475113125, 0.9208422174840085, 0.14479638009049775, 0.009861407249466951], "conf": null}, {"text": "PUBLIQUES", "box": [0.5050904977375565, 0.9216417910447762, 0.15723981900452488, 0.010394456289978678], "conf": null}, {"text": "CANADA", "box": [0.4428733031674208, 0.9331023454157783, 0.11368778280542986, 0.007995735607675906], "conf": null}];
+  const pageWidth = 1768.0;
+  const pageHeight = 3752.0;
+
+  // SVGs & Sidebar
+  const svgLeft = document.getElementById("svgLeft");
+  const svgRight = document.getElementById("svgRight");
+  const sidebarList = document.getElementById("sidebarList");
+  const cards = [];
+
+  // Populate SVGs and Sidebar
+  matchedData.forEach((m, idx) => {
+    const isAgree = m.clean_match;
+    const cls = isAgree ? "agree" : "discrepancy";
+
+    // Left SVG
+    const rectL = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectL.setAttribute("x", m.p_box[0] * pageWidth);
+    rectL.setAttribute("y", m.p_box[1] * pageHeight);
+    rectL.setAttribute("width", m.p_box[2] * pageWidth);
+    rectL.setAttribute("height", m.p_box[3] * pageHeight);
+    rectL.setAttribute("class", cls);
+    rectL.id = "p-rect-" + idx;
+    rectL.dataset.idx = idx;
+    rectL.innerHTML = `<title>Pipeline: "${m.p_text}" | ABBYY: "${m.b_text}" (IoU: ${m.iou})</title>`;
+    rectL.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgLeft.appendChild(rectL);
+
+    // Right SVG
+    const rectR = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectR.setAttribute("x", m.b_box[0] * pageWidth);
+    rectR.setAttribute("y", m.b_box[1] * pageHeight);
+    rectR.setAttribute("width", m.b_box[2] * pageWidth);
+    rectR.setAttribute("height", m.b_box[3] * pageHeight);
+    rectR.setAttribute("class", cls);
+    rectR.id = "b-rect-" + idx;
+    rectR.dataset.idx = idx;
+    rectR.innerHTML = `<title>ABBYY: "${m.b_text}" | Pipeline: "${m.p_text}" (IoU: ${m.iou})</title>`;
+    rectR.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgRight.appendChild(rectR);
+
+    // Sidebar items for discrepancies
+    if (!isAgree) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = "card-" + idx;
+      card.dataset.verdict = m.lexical_verdict || "NONE";
+
+      let verdictBadge = "";
+      if (m.lexical_verdict === "PADDLE_WIN") {
+        verdictBadge = '<span class="verdict-tag paddle-win">Paddle Win</span>';
+      } else if (m.lexical_verdict === "ABBYY_WIN") {
+        verdictBadge = '<span class="verdict-tag abbyy-win">ABBYY Win</span>';
+      } else if (m.lexical_verdict === "BOTH_VALID") {
+        verdictBadge = '<span class="verdict-tag both-valid">Both Valid</span>';
+      } else if (m.lexical_verdict === "NEITHER_VALID") {
+        verdictBadge = '<span class="verdict-tag neither-valid">Neither</span>';
+      }
+
+      const pCheck = m.p_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+      const bCheck = m.b_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+
+      card.innerHTML = `
+        <div class="card-row">
+          <span class="card-diff">P: ${escapeHtml(m.p_text)}${pCheck}</span>
+          ${verdictBadge}
+        </div>
+        <div class="card-row">
+          <span style="color:#ef4444;">B: ${escapeHtml(m.b_text)}${bCheck}</span>
+          <span class="card-label">IoU: ${m.iou} | Sim: ${Math.round(m.sim * 100)}%</span>
+        </div>
+      `;
+      card.onclick = () => selectWord(idx);
+      sidebarList.appendChild(card);
+      cards.push({ idx: idx, el: card, verdict: m.lexical_verdict });
+    }
+  });
+
+  // Discrepancy filter
+  const selFilter = document.getElementById("selFilterDiscrepancies");
+  if (selFilter) {
+    selFilter.onchange = (e) => {
+      const val = e.target.value;
+      cards.forEach(c => {
+        if (val === "all" || c.verdict === val) {
+          c.el.style.display = "";
+        } else {
+          c.el.style.display = "none";
+        }
+      });
+    };
+  }
+
+  // Pipeline-only boxes
+  pOnlyData.forEach((p, pIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", p.box[0] * pageWidth);
+    rect.setAttribute("y", p.box[1] * pageHeight);
+    rect.setAttribute("width", p.box[2] * pageWidth);
+    rect.setAttribute("height", p.box[3] * pageHeight);
+    rect.setAttribute("class", "p-only");
+    rect.innerHTML = `<title>Pipeline Only: "${p.text}"</title>`;
+    svgLeft.appendChild(rect);
+  });
+
+  // Benchmark-only boxes
+  bOnlyData.forEach((b, bIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", b.box[0] * pageWidth);
+    rect.setAttribute("y", b.box[1] * pageHeight);
+    rect.setAttribute("width", b.box[2] * pageWidth);
+    rect.setAttribute("height", b.box[3] * pageHeight);
+    rect.setAttribute("class", "b-only");
+    rect.innerHTML = `<title>ABBYY Only: "${b.text}"</title>`;
+    svgRight.appendChild(rect);
+  });
+
+  function escapeHtml(str) {
+    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Active word selection and highlighting
+  let activeIdx = null;
+
+  function selectWord(idx) {
+    // Clear previously highlighted elements
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+
+    activeIdx = idx;
+    const m = matchedData[idx];
+    if (!m) return;
+
+    // Highlight rects on both left and right canvases
+    const rL = document.getElementById("p-rect-" + idx);
+    const rR = document.getElementById("b-rect-" + idx);
+    if (rL) rL.classList.add("highlighted");
+    if (rR) rR.classList.add("highlighted");
+
+    // Highlight and scroll into view sidebar card if present
+    const cardEl = document.getElementById("card-" + idx);
+    if (cardEl) {
+      cardEl.classList.add("active");
+      cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Zoom and center into the box
+    zoomToNormBox(m.p_box);
+  }
+
+  // Synchronized Pan & Zoom
+  let scale = 1.0;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const stageLeft = document.getElementById("stageLeft");
+  const stageRight = document.getElementById("stageRight");
+  const panelLeft = document.getElementById("panelLeft");
+  const panelRight = document.getElementById("panelRight");
+
+  function updateTransform() {
+    const transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    stageLeft.style.transform = transform;
+    stageRight.style.transform = transform;
+  }
+
+  function attachPanZoom(panel) {
+    panel.addEventListener("mousedown", e => {
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+    });
+
+    window.addEventListener("mousemove", e => {
+      if (!isDragging) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      updateTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    panel.addEventListener("wheel", e => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 10.0);
+      
+      const rect = panel.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+      updateTransform();
+    }, { passive: false });
+  }
+
+  attachPanZoom(panelLeft);
+  attachPanZoom(panelRight);
+
+  function fitToView() {
+    const panelW = panelLeft.clientWidth || 800;
+    const panelH = panelLeft.clientHeight || 900;
+    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    panX = (panelW - pageWidth * scale) / 2;
+    panY = 10;
+    updateTransform();
+  }
+
+  // Initial fit on load
+  fitToView();
+  window.addEventListener("resize", fitToView);
+
+  document.getElementById("btnResetView").onclick = () => {
+    fitToView();
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+  };
+
+  function zoomToNormBox(box) {
+    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
+    scale = 3.5;
+    const panelW = panelLeft.clientWidth;
+    const panelH = panelLeft.clientHeight;
+    const boxCenterX = (box[0] + (box[2] / 2.0)) * pageWidth;
+    const boxCenterY = (box[1] + (box[3] / 2.0)) * pageHeight;
+
+    panX = (panelW / 2.0) - (boxCenterX * scale);
+    panY = (panelH / 2.0) - (boxCenterY * scale);
+    updateTransform();
+  }
+
+  // Layer Toggles
+  document.getElementById("chkAgree").onchange = (e) => {
+    document.querySelectorAll(".agree").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkDiff").onchange = (e) => {
+    document.querySelectorAll(".discrepancy").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkOnly").onchange = (e) => {
+    document.querySelectorAll(".p-only, .b-only").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+
+  // Background Image Toggle & Opacity Slider
+  const chkBgImage = document.getElementById("chkBgImage");
+  const rngOpacity = document.getElementById("rngOpacity");
+  const lblOpacity = document.getElementById("lblOpacity");
+
+  function updateBgImageStyle() {
+    const show = chkBgImage.checked;
+    const op = rngOpacity.value / 100.0;
+    lblOpacity.textContent = rngOpacity.value + "%";
+
+    document.querySelectorAll(".page-image").forEach(img => {
+      img.style.display = show ? "block" : "none";
+      img.style.opacity = op;
+    });
+  }
+
+  chkBgImage.onchange = updateBgImageStyle;
+  rngOpacity.oninput = updateBgImageStyle;
+</script>
+</body>
+</html>

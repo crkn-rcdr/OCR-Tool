@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRKN OCR Comparison: oocihm.lac_reel_c12015.1925</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1a1e24; color: #e1e4e8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { background: #24292e; border-bottom: 1px solid #30363d; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; z-index: 10; gap: 12px; }
+  
+  .nav-left { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+  .nav-btn-back { background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.82rem; transition: all 0.15s ease; }
+  .nav-btn-back:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+  .nav-sep { color: #484f58; }
+  .nav-coll { color: #8b949e; font-weight: 500; font-size: 0.84rem; }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #f0f6fc; }
+  
+  .nav-center { display: flex; align-items: center; gap: 6px; }
+  .nav-page-btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; font-weight: 500; }
+  .nav-page-btn:hover:not(.disabled) { background: #30363d; color: #58a6ff; border-color: #58a6ff; }
+  .nav-page-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .page-current { font-size: 0.82rem; color: #8b949e; padding: 0 4px; }
+  
+  .badges { display: flex; gap: 8px; font-size: 0.8rem; align-items: center; }
+  .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; background: #30363d; }
+  .badge.success { background: #198754; color: #fff; }
+  .badge.warning { background: #d97706; color: #fff; }
+  .badge.info { background: #0284c7; color: #fff; }
+  .badge.qa-win { background: #238636; color: #fff; }
+  .badge.qa-loss { background: #8957e5; color: #fff; }
+  
+  .controls { background: #212529; border-bottom: 1px solid #30363d; padding: 8px 18px; display: flex; gap: 14px; align-items: center; font-size: 0.84rem; flex-wrap: wrap; }
+  .controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .controls select, .controls input[type="range"] { vertical-align: middle; }
+  .slider-group { display: flex; align-items: center; gap: 6px; }
+  
+  .main-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  .viewers-container { display: flex; flex: 1; overflow: hidden; position: relative; }
+  
+  .panel { flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; }
+  .panel:active { cursor: grabbing; }
+  .panel-header { position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }
+  
+  .canvas-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: 2080.0px; height: 3472.0px; }
+  .page-image { position: absolute; top: 0; left: 0; width: 2080.0px; height: 3472.0px; display: block; user-select: none; pointer-events: none; transition: opacity 0.1s ease; }
+  .overlay-svg { position: absolute; top: 0; left: 0; width: 2080.0px; height: 3472.0px; pointer-events: auto; }
+  
+  rect.agree { fill: rgba(40, 167, 69, 0.25); stroke: #28a745; stroke-width: 1.5; cursor: pointer; }
+  rect.discrepancy { fill: rgba(245, 158, 11, 0.35); stroke: #f59e0b; stroke-width: 2; cursor: pointer; }
+  rect.p-only { fill: rgba(56, 189, 248, 0.35); stroke: #38bdf8; stroke-width: 1.5; cursor: pointer; }
+  rect.b-only { fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }
+  rect:hover { fill-opacity: 0.7; stroke-width: 2.5; }
+  
+  /* Selected / Highlighted active word - completely transparent interior (fill: none) */
+  rect.highlighted {
+    stroke: #00ffff !important;
+    stroke-width: 4 !important;
+    fill: none !important;
+    filter: drop-shadow(0 0 6px #00ffff);
+    vector-effect: non-scaling-stroke;
+  }
+  
+  .sidebar { width: 360px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }
+  .sidebar-header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.88rem; background: #24292e; display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-filter-bar { padding: 8px 12px; background: #181b20; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+  .filter-dropdown { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; width: 100%; }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  
+  .card { background: #282e38; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s ease; }
+  .card:hover { border-color: #60a5fa; background: #2d3542; }
+  .card.active {
+    border-color: #00ffff !important;
+    background: #1e3a4f !important;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+  }
+  .card-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .card-diff { font-weight: bold; color: #f59e0b; word-break: break-all; }
+  .card-label { color: #9ca3af; font-size: 0.75rem; }
+  
+  .verdict-tag { font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+  .verdict-tag.paddle-win { background: rgba(35, 134, 54, 0.25); color: #3fb950; border: 1px solid #238636; }
+  .verdict-tag.abbyy-win { background: rgba(218, 54, 51, 0.25); color: #f85149; border: 1px solid #da3633; }
+  .verdict-tag.both-valid { background: rgba(56, 139, 253, 0.2); color: #58a6ff; border: 1px solid #1f6feb; }
+  .verdict-tag.neither-valid { background: rgba(110, 118, 129, 0.2); color: #8b949e; border: 1px solid #484f58; }
+  
+  .legend { display: flex; gap: 12px; font-size: 0.78rem; align-items: center; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav-left">
+    <a href="../../index.html" class="nav-btn-back">← Master Dashboard</a>
+    <span class="nav-sep">/</span>
+    <span class="nav-coll">Heritage/oocihm.lac_reel_c12015</span>
+    <span class="nav-sep">/</span>
+    <h1>oocihm.lac_reel_c12015.1925</h1>
+  </div>
+  <div class="nav-center">
+    <a href="oocihm.lac_reel_c12015.1924_comparison.html" class="nav-page-btn">‹ Previous</a>
+    <span class="page-current">oocihm.lac_reel_c12015.1925</span>
+    <a href="oocihm.lac_reel_c12015.1926_comparison.html" class="nav-page-btn">Next ›</a>
+  </div>
+  <div class="badges">
+    <div class="badge success" title="Text Concordance (Cleaned)">Concordance: 85.71%</div>
+    <div class="badge qa-win" title="Paddle 0 wins vs ABBYY 0 wins on disputed words">Paddle QA Win Rate: 50.0%</div>
+    <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: 9.59%</div>
+    <div class="badge warning" title="Discrepant words count">Diffs: 1</div>
+  </div>
+</header>
+
+<div class="controls">
+  <label><input type="checkbox" id="chkAgree" checked> Concordant (Green)</label>
+  <label><input type="checkbox" id="chkDiff" checked> Discrepancies (Orange)</label>
+  <label><input type="checkbox" id="chkOnly" checked> Engine-Only (Blue/Red)</label>
+  
+  <span style="border-left: 1px solid #444c56; height: 18px; margin: 0 4px;"></span>
+  
+  <label><input type="checkbox" id="chkBgImage" checked> Background Image</label>
+  <div class="slider-group">
+    <span style="color:#9ca3af;font-size:0.8rem;">Opacity:</span>
+    <input type="range" id="rngOpacity" min="0" max="100" value="85" style="width: 90px; cursor: pointer;">
+    <span id="lblOpacity" style="font-size:0.8rem; width: 32px;">85%</span>
+  </div>
+  
+  <button id="btnResetView" style="background:#3b82f6;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;">Reset View</button>
+  <span style="flex:1;"></span>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#28a745;"></div> Agreed</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Discrepancy</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Pipeline Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> ABBYY Only</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ffff;"></div> Selected</div>
+  </div>
+</div>
+
+<div class="main-container">
+  <div class="viewers-container">
+    <!-- Pipeline Panel (Left) -->
+    <div class="panel" id="panelLeft">
+      <div class="panel-header">Pipeline (PaddleOCR + VLM) - 73 words</div>
+      <div class="canvas-stage" id="stageLeft">
+        <img class='page-image' id='imgLeft' src='oocihm.lac_reel_c12015.1925.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgLeft" viewBox="0 0 2080.0 3472.0"></svg>
+      </div>
+    </div>
+    
+    <!-- Benchmark Panel (Right) -->
+    <div class="panel" id="panelRight">
+      <div class="panel-header">Benchmark (ABBYY FineReader) - 25 words</div>
+      <div class="canvas-stage" id="stageRight">
+        <img class='page-image' id='imgRight' src='oocihm.lac_reel_c12015.1925.jpg' style='opacity:0.85;'>
+        <svg class="overlay-svg" id="svgRight" viewBox="0 0 2080.0 3472.0"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discrepancy Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div>
+        <span>Discrepancies</span>
+        <span class="badge warning" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">1</span>
+      </div>
+      <span style="font-size:0.75rem;color:#9ca3af;">Click card to inspect</span>
+    </div>
+    <div class="sidebar-filter-bar">
+      <select id="selFilterDiscrepancies" class="filter-dropdown">
+        <option value="all">All Discrepancies (1)</option>
+        <option value="PADDLE_WIN">Paddle Wins (0)</option>
+        <option value="ABBYY_WIN">ABBYY Wins (0)</option>
+        <option value="BOTH_VALID">Both Valid (1)</option>
+        <option value="NEITHER_VALID">Neither Valid (0)</option>
+      </select>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </div>
+</div>
+
+<script>
+  const matchedData = [{"p_text": "Department", "b_text": "Department", "p_box": [0.2793269230769231, 0.2692972350230415, 0.1605769230769231, 0.024193548387096774], "b_box": [0.27355769230769234, 0.27534562211981567, 0.16778846153846153, 0.016129032258064516], "iou": 0.647, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999948, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Indian", "b_text": "Indian", "p_box": [0.49951923076923077, 0.26872119815668205, 0.08028846153846154, 0.02390552995391705], "b_box": [0.4985576923076923, 0.27476958525345624, 0.08605769230769231, 0.012960829493087557], "iou": 0.522, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.991072, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Affairs.", "b_text": "Affairs.", "p_box": [0.5932692307692308, 0.26872119815668205, 0.1201923076923077, 0.02390552995391705], "b_box": [0.5995192307692307, 0.27390552995391704, 0.10817307692307693, 0.013536866359447005], "iou": 0.51, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.991072, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "of", "b_text": "of", "p_box": [0.46105769230769234, 0.2692972350230415, 0.020673076923076922, 0.024193548387096774], "b_box": [0.45528846153846153, 0.27505760368663595, 0.027403846153846154, 0.012672811059907835], "iou": 0.447, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.999948, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "191", "b_text": "191", "p_box": [0.8259615384615384, 0.3052995391705069, 0.021153846153846155, 0.019009216589861752], "b_box": [0.8221153846153846, 0.31105990783410137, 0.028365384615384615, 0.009216589861751152], "iou": 0.416, "clean_match": true, "exact_match": true, "sim": 1.0, "p_conf": 0.99992, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "Ottawa,.", "b_text": "Ottawa,", "p_box": [0.4894230769230769, 0.30817972350230416, 0.07548076923076923, 0.018145161290322582], "b_box": [0.4860576923076923, 0.31307603686635943, 0.06586538461538462, 0.009216589861751152], "iou": 0.411, "clean_match": true, "exact_match": false, "sim": 0.875, "p_conf": 0.929101, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": ""}, {"p_text": "81.48", "b_text": "87.47", "p_box": [0.5134615384615384, 0.7759216589861752, 0.06826923076923076, 0.034274193548387094], "b_box": [0.5225961538461539, 0.7871543778801844, 0.04903846153846154, 0.010944700460829493], "iou": 0.229, "clean_match": false, "exact_match": false, "sim": 0.6, "p_conf": 0.837368, "b_conf": null, "p_valid": true, "b_valid": true, "lexical_verdict": "BOTH_VALID"}];
+  const pOnlyData = [{"text": "Indi", "box": [0.5028846153846154, 0.2692972350230415, 0.04903846153846154, 0.024193548387096774], "conf": 0.999948}, {"text": "River", "box": [0.2423076923076923, 0.339573732718894, 0.06490384615384616, 0.03859447004608295], "conf": 0.898587}, {"text": "Rood", "box": [0.3283653846153846, 0.339573732718894, 0.07548076923076923, 0.03859447004608295], "conf": 0.898587}, {"text": "ad", "box": [0.36538461538461536, 0.3522465437788018, 0.027884615384615386, 0.019873271889400922], "conf": 0.723199}, {"text": "Nov", "box": [0.2403846153846154, 0.3652073732718894, 0.06057692307692308, 0.03888248847926267], "conf": 0.611111}, {"text": "6th", "box": [0.30096153846153845, 0.3652073732718894, 0.009615384615384616, 0.03888248847926267], "conf": 0.611111}, {"text": "Sum 18", "box": [0.2375, 0.3701036866359447, 0.09519230769230769, 0.02966589861751152], "conf": 0.78364}, {"text": "400.00", "box": [0.4355769230769231, 0.3675115207373272, 0.0798076923076923, 0.03168202764976959], "conf": 0.997064}, {"text": "aen1st", "box": [0.24807692307692308, 0.3942972350230415, 0.09182692307692308, 0.02304147465437788], "conf": 0.623015}, {"text": "arnist", "box": [0.2466346153846154, 0.39400921658986177, 0.08701923076923077, 0.02390552995391705], "conf": 0.603974}, {"text": "100.", "box": [0.4423076923076923, 0.39314516129032256, 0.04423076923076923, 0.022753456221198155], "conf": 0.97758}, {"text": "n", "box": [0.49951923076923077, 0.39314516129032256, 0.00625, 0.022753456221198155], "conf": 0.97758}, {"text": "of", "box": [0.4596153846153846, 0.26872119815668205, 0.026923076923076925, 0.02390552995391705], "conf": 0.991072}, {"text": "00.00", "box": [0.4596153846153846, 0.3689516129032258, 0.07067307692307692, 0.029089861751152073], "conf": 0.797681}, {"text": "vl", "box": [0.5442307692307692, 0.3689516129032258, 0.028365384615384615, 0.029089861751152073], "conf": 0.797681}, {"text": "e1c259.", "box": [0.5870192307692308, 0.3689516129032258, 0.11298076923076923, 0.029089861751152073], "conf": 0.797681}, {"text": "2", "box": [0.5019230769230769, 0.3980414746543779, 0.0028846153846153848, 0.011232718894009217], "conf": 0.55087}, {"text": "917", "box": [0.6442307692307693, 0.39602534562211983, 0.03365384615384615, 0.017569124423963134], "conf": 0.810258}, {"text": "00.00", "box": [0.4668269230769231, 0.41330645161290325, 0.023076923076923078, 0.025921658986175114], "conf": 0.77526}, {"text": "d/c", "box": [0.5048076923076923, 0.41330645161290325, 0.007692307692307693, 0.025921658986175114], "conf": 0.77526}, {"text": "ch", "box": [0.5278846153846154, 0.41330645161290325, 0.007692307692307693, 0.025921658986175114], "conf": 0.77526}, {"text": "4146", "box": [0.5581730769230769, 0.41330645161290325, 0.03798076923076923, 0.025921658986175114], "conf": 0.77526}, {"text": "afe", "box": [0.5581730769230769, 0.41647465437788017, 0.032692307692307694, 0.021889400921658985], "conf": 0.893106}, {"text": "en", "box": [0.6230769230769231, 0.41647465437788017, 0.025961538461538463, 0.021889400921658985], "conf": 0.893106}, {"text": "4146", "box": [0.66875, 0.41647465437788017, 0.058173076923076925, 0.021889400921658985], "conf": 0.893106}, {"text": "Nov", "box": [0.25432692307692306, 0.4112903225806452, 0.06778846153846153, 0.02966589861751152], "conf": 0.561247}, {"text": "6", "box": [0.35625, 0.4112903225806452, 0.008173076923076924, 0.02966589861751152], "conf": 0.561247}, {"text": "100.0", "box": [0.4389423076923077, 0.4130184331797235, 0.06682692307692308, 0.027649769585253458], "conf": 0.895678}, {"text": "600x00", "box": [0.4307692307692308, 0.4423963133640553, 0.10625, 0.03369815668202765], "conf": 0.800587}, {"text": "Paylib", "box": [0.23798076923076922, 0.5408986175115207, 0.09759615384615385, 0.02880184331797235], "conf": 0.738427}, {"text": "20117", "box": [0.2375, 0.5622119815668203, 0.14903846153846154, 0.027649769585253458], "conf": 0.765204}, {"text": "67.49", "box": [0.44375, 0.5567396313364056, 0.07548076923076923, 0.032546082949308754], "conf": 0.996284}, {"text": "23024-11", "box": [0.28894230769230766, 0.586405529953917, 0.09663461538461539, 0.025921658986175114], "conf": 0.824864}, {"text": "10.00", "box": [0.4480769230769231, 0.5841013824884793, 0.06682692307692308, 0.022753456221198155], "conf": 0.998785}, {"text": "43.12", "box": [0.45048076923076924, 0.6039746543778802, 0.06923076923076923, 0.025633640552995392], "conf": 0.998925}, {"text": "Nov", "box": [0.23990384615384616, 0.6238479262672811, 0.05480769230769231, 0.034850230414746546], "conf": 0.73456}, {"text": "27-", "box": [0.29471153846153847, 0.6238479262672811, 0.10048076923076923, 0.034850230414746546], "conf": 0.73456}, {"text": "\u4e00", "box": [0.3730769230769231, 0.6382488479262672, 0.01826923076923077, 0.010368663594470046], "conf": 0.617845}, {"text": "182.87", "box": [0.43846153846153846, 0.6275921658986175, 0.08125, 0.026497695852534562], "conf": 0.987333}, {"text": "\u4e00", "box": [0.36009615384615384, 0.6575460829493087, 0.03413461538461538, 0.008928571428571428], "conf": 0.458008}, {"text": "x", "box": [0.4673076923076923, 0.44556451612903225, 0.023076923076923078, 0.02793778801843318], "conf": 0.647777}, {"text": "0.0", "box": [0.49038461538461536, 0.44556451612903225, 0.008173076923076924, 0.02793778801843318], "conf": 0.647777}, {"text": "72.87", "box": [0.4596153846153846, 0.625, 0.06586538461538462, 0.02707373271889401], "conf": 0.845884}, {"text": "1.50", "box": [0.4754807692307692, 0.6500576036866359, 0.04230769230769231, 0.016417050691244238], "conf": 0.75685}, {"text": "13", "box": [0.24519230769230768, 0.652073732718894, 0.08269230769230769, 0.022465437788018433], "conf": 0.814492}, {"text": "61.50", "box": [0.4567307692307692, 0.6494815668202765, 0.06490384615384616, 0.023329493087557603], "conf": 0.988554}, {"text": "27-", "box": [0.3091346153846154, 0.6705069124423964, 0.07596153846153846, 0.027361751152073732], "conf": 0.952443}, {"text": "1", "box": [0.38076923076923075, 0.681163594470046, 0.002403846153846154, 0.007488479262672811], "conf": 0.903968}, {"text": "20", "box": [0.30865384615384617, 0.693836405529954, 0.020673076923076922, 0.022753456221198155], "conf": 0.988402}, {"text": "169.25", "box": [0.4423076923076923, 0.6921082949308756, 0.08653846153846154, 0.019585253456221197], "conf": 0.992811}, {"text": "58", "box": [0.43798076923076923, 0.7102534562211982, 0.03173076923076923, 0.025921658986175114], "conf": 0.968774}, {"text": "/\u00d7", "box": [0.4778846153846154, 0.7102534562211982, 0.023557692307692307, 0.025921658986175114], "conf": 0.968774}, {"text": "48", "box": [0.5096153846153846, 0.7102534562211982, 0.023557692307692307, 0.025921658986175114], "conf": 0.968774}, {"text": "1962", "box": [0.15528846153846154, 0.7589285714285714, 0.09807692307692308, 0.012096774193548387], "conf": 0.667009}, {"text": "sD", "box": [0.24519230769230768, 0.7721774193548387, 0.008173076923076924, 0.0031682027649769587], "conf": 0.399327}, {"text": "80", "box": [0.21009615384615385, 0.7839861751152074, 0.013942307692307693, 0.0037442396313364054], "conf": 0.815437}, {"text": "47.25-7", "box": [0.46634615384615385, 0.6690668202764977, 0.10576923076923077, 0.021025345622119815], "conf": 0.747128}, {"text": "=", "box": [0.4778846153846154, 0.7056451612903226, 0.009134615384615385, 0.03110599078341014], "conf": 0.768948}, {"text": "3880.50", "box": [0.49615384615384617, 0.7056451612903226, 0.009134615384615385, 0.03110599078341014], "conf": 0.768948}, {"text": "600.", "box": [0.7278846153846154, 0.6555299539170507, 0.05961538461538462, 0.011808755760368663], "conf": 0.666804}, {"text": "Gou.", "box": [0.7254807692307692, 0.6512096774193549, 0.06442307692307692, 0.02131336405529954], "conf": 0.771423}, {"text": "581.48", "box": [0.7375, 0.6730990783410138, 0.10288461538461538, 0.014976958525345621], "conf": 0.947177}, {"text": "18.52", "box": [0.7519230769230769, 0.699020737327189, 0.09471153846153846, 0.011808755760368663], "conf": 0.913346}, {"text": "500.00", "box": [0.4947115384615385, 0.756336405529954, 0.08221153846153846, 0.02304147465437788], "conf": 0.846072}, {"text": "Vol", "box": [0.6067307692307692, 0.756336405529954, 0.03701923076923077, 0.02304147465437788], "conf": 0.846072}, {"text": "ap/s", "box": [0.6048076923076923, 0.7759216589861752, 0.05673076923076923, 0.034274193548387094], "conf": 0.837368}];
+  const bOnlyData = [{"text": "\u2022", "box": [0.8807692307692307, 0.3790322580645161, 0.004807692307692308, 0.004320276497695853], "conf": null}, {"text": "**", "box": [0.5855769230769231, 0.4066820276497696, 0.010096153846153847, 0.0034562211981566822], "conf": null}, {"text": "\\", "box": [0.5990384615384615, 0.5889976958525346, 0.0038461538461538464, 0.008640552995391706], "conf": null}, {"text": "\u2022", "box": [0.3177884615384615, 0.6160714285714286, 0.007211538461538462, 0.004032258064516129], "conf": null}, {"text": "Indian", "box": [0.26826923076923076, 0.880184331797235, 0.05432692307692308, 0.007488479262672811], "conf": null}, {"text": "Affaire.", "box": [0.33076923076923076, 0.8796082949308756, 0.07211538461538461, 0.007488479262672811], "conf": null}, {"text": "(RO", "box": [0.4149038461538462, 0.8778801843317973, 0.02548076923076923, 0.009792626728110598], "conf": null}, {"text": "10,", "box": [0.4495192307692308, 0.8787442396313364, 0.025961538461538463, 0.009504608294930876], "conf": null}, {"text": "Volume", "box": [0.4855769230769231, 0.8787442396313364, 0.05432692307692308, 0.007200460829493088], "conf": null}, {"text": "7706,", "box": [0.5490384615384616, 0.8773041474654378, 0.04423076923076923, 0.010080645161290322], "conf": null}, {"text": "File", "box": [0.6038461538461538, 0.8778801843317973, 0.036057692307692304, 0.007488479262672811], "conf": null}, {"text": "23029-1A", "box": [0.65, 0.8773041474654378, 0.07163461538461538, 0.009216589861751152], "conf": null}, {"text": "Pt.l)", "box": [0.73125, 0.8758640552995391, 0.04375, 0.01065668202764977], "conf": null}, {"text": "PUBLIC", "box": [0.4216346153846154, 0.9003456221198156, 0.08509615384615385, 0.010944700460829493], "conf": null}, {"text": "ARCHIVES", "box": [0.5163461538461539, 0.9000576036866359, 0.12403846153846154, 0.009792626728110598], "conf": null}, {"text": "ARCHIVES", "box": [0.39903846153846156, 0.9115783410138248, 0.12307692307692308, 0.009792626728110598], "conf": null}, {"text": "PUBLIQUES", "box": [0.5293269230769231, 0.9107142857142857, 0.13413461538461538, 0.01065668202764977], "conf": null}, {"text": "CANADA", "box": [0.4774038461538462, 0.923963133640553, 0.09807692307692308, 0.010080645161290322], "conf": null}];
+  const pageWidth = 2080.0;
+  const pageHeight = 3472.0;
+
+  // SVGs & Sidebar
+  const svgLeft = document.getElementById("svgLeft");
+  const svgRight = document.getElementById("svgRight");
+  const sidebarList = document.getElementById("sidebarList");
+  const cards = [];
+
+  // Populate SVGs and Sidebar
+  matchedData.forEach((m, idx) => {
+    const isAgree = m.clean_match;
+    const cls = isAgree ? "agree" : "discrepancy";
+
+    // Left SVG
+    const rectL = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectL.setAttribute("x", m.p_box[0] * pageWidth);
+    rectL.setAttribute("y", m.p_box[1] * pageHeight);
+    rectL.setAttribute("width", m.p_box[2] * pageWidth);
+    rectL.setAttribute("height", m.p_box[3] * pageHeight);
+    rectL.setAttribute("class", cls);
+    rectL.id = "p-rect-" + idx;
+    rectL.dataset.idx = idx;
+    rectL.innerHTML = `<title>Pipeline: "${m.p_text}" | ABBYY: "${m.b_text}" (IoU: ${m.iou})</title>`;
+    rectL.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgLeft.appendChild(rectL);
+
+    // Right SVG
+    const rectR = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectR.setAttribute("x", m.b_box[0] * pageWidth);
+    rectR.setAttribute("y", m.b_box[1] * pageHeight);
+    rectR.setAttribute("width", m.b_box[2] * pageWidth);
+    rectR.setAttribute("height", m.b_box[3] * pageHeight);
+    rectR.setAttribute("class", cls);
+    rectR.id = "b-rect-" + idx;
+    rectR.dataset.idx = idx;
+    rectR.innerHTML = `<title>ABBYY: "${m.b_text}" | Pipeline: "${m.p_text}" (IoU: ${m.iou})</title>`;
+    rectR.onclick = (e) => { e.stopPropagation(); selectWord(idx); };
+    svgRight.appendChild(rectR);
+
+    // Sidebar items for discrepancies
+    if (!isAgree) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = "card-" + idx;
+      card.dataset.verdict = m.lexical_verdict || "NONE";
+
+      let verdictBadge = "";
+      if (m.lexical_verdict === "PADDLE_WIN") {
+        verdictBadge = '<span class="verdict-tag paddle-win">Paddle Win</span>';
+      } else if (m.lexical_verdict === "ABBYY_WIN") {
+        verdictBadge = '<span class="verdict-tag abbyy-win">ABBYY Win</span>';
+      } else if (m.lexical_verdict === "BOTH_VALID") {
+        verdictBadge = '<span class="verdict-tag both-valid">Both Valid</span>';
+      } else if (m.lexical_verdict === "NEITHER_VALID") {
+        verdictBadge = '<span class="verdict-tag neither-valid">Neither</span>';
+      }
+
+      const pCheck = m.p_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+      const bCheck = m.b_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
+
+      card.innerHTML = `
+        <div class="card-row">
+          <span class="card-diff">P: ${escapeHtml(m.p_text)}${pCheck}</span>
+          ${verdictBadge}
+        </div>
+        <div class="card-row">
+          <span style="color:#ef4444;">B: ${escapeHtml(m.b_text)}${bCheck}</span>
+          <span class="card-label">IoU: ${m.iou} | Sim: ${Math.round(m.sim * 100)}%</span>
+        </div>
+      `;
+      card.onclick = () => selectWord(idx);
+      sidebarList.appendChild(card);
+      cards.push({ idx: idx, el: card, verdict: m.lexical_verdict });
+    }
+  });
+
+  // Discrepancy filter
+  const selFilter = document.getElementById("selFilterDiscrepancies");
+  if (selFilter) {
+    selFilter.onchange = (e) => {
+      const val = e.target.value;
+      cards.forEach(c => {
+        if (val === "all" || c.verdict === val) {
+          c.el.style.display = "";
+        } else {
+          c.el.style.display = "none";
+        }
+      });
+    };
+  }
+
+  // Pipeline-only boxes
+  pOnlyData.forEach((p, pIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", p.box[0] * pageWidth);
+    rect.setAttribute("y", p.box[1] * pageHeight);
+    rect.setAttribute("width", p.box[2] * pageWidth);
+    rect.setAttribute("height", p.box[3] * pageHeight);
+    rect.setAttribute("class", "p-only");
+    rect.innerHTML = `<title>Pipeline Only: "${p.text}"</title>`;
+    svgLeft.appendChild(rect);
+  });
+
+  // Benchmark-only boxes
+  bOnlyData.forEach((b, bIdx) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", b.box[0] * pageWidth);
+    rect.setAttribute("y", b.box[1] * pageHeight);
+    rect.setAttribute("width", b.box[2] * pageWidth);
+    rect.setAttribute("height", b.box[3] * pageHeight);
+    rect.setAttribute("class", "b-only");
+    rect.innerHTML = `<title>ABBYY Only: "${b.text}"</title>`;
+    svgRight.appendChild(rect);
+  });
+
+  function escapeHtml(str) {
+    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Active word selection and highlighting
+  let activeIdx = null;
+
+  function selectWord(idx) {
+    // Clear previously highlighted elements
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+
+    activeIdx = idx;
+    const m = matchedData[idx];
+    if (!m) return;
+
+    // Highlight rects on both left and right canvases
+    const rL = document.getElementById("p-rect-" + idx);
+    const rR = document.getElementById("b-rect-" + idx);
+    if (rL) rL.classList.add("highlighted");
+    if (rR) rR.classList.add("highlighted");
+
+    // Highlight and scroll into view sidebar card if present
+    const cardEl = document.getElementById("card-" + idx);
+    if (cardEl) {
+      cardEl.classList.add("active");
+      cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Zoom and center into the box
+    zoomToNormBox(m.p_box);
+  }
+
+  // Synchronized Pan & Zoom
+  let scale = 1.0;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const stageLeft = document.getElementById("stageLeft");
+  const stageRight = document.getElementById("stageRight");
+  const panelLeft = document.getElementById("panelLeft");
+  const panelRight = document.getElementById("panelRight");
+
+  function updateTransform() {
+    const transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    stageLeft.style.transform = transform;
+    stageRight.style.transform = transform;
+  }
+
+  function attachPanZoom(panel) {
+    panel.addEventListener("mousedown", e => {
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+    });
+
+    window.addEventListener("mousemove", e => {
+      if (!isDragging) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      updateTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    panel.addEventListener("wheel", e => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 10.0);
+      
+      const rect = panel.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+      updateTransform();
+    }, { passive: false });
+  }
+
+  attachPanZoom(panelLeft);
+  attachPanZoom(panelRight);
+
+  function fitToView() {
+    const panelW = panelLeft.clientWidth || 800;
+    const panelH = panelLeft.clientHeight || 900;
+    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    panX = (panelW - pageWidth * scale) / 2;
+    panY = 10;
+    updateTransform();
+  }
+
+  // Initial fit on load
+  fitToView();
+  window.addEventListener("resize", fitToView);
+
+  document.getElementById("btnResetView").onclick = () => {
+    fitToView();
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+  };
+
+  function zoomToNormBox(box) {
+    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
+    scale = 3.5;
+    const panelW = panelLeft.clientWidth;
+    const panelH = panelLeft.clientHeight;
+    const boxCenterX = (box[0] + (box[2] / 2.0)) * pageWidth;
+    const boxCenterY = (box[1] + (box[3] / 2.0)) * pageHeight;
+
+    panX = (panelW / 2.0) - (boxCenterX * scale);
+    panY = (panelH / 2.0) - (boxCenterY * scale);
+    updateTransform();
+  }
+
+  // Layer Toggles
+  document.getElementById("chkAgree").onchange = (e) => {
+    document.querySelectorAll(".agree").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkDiff").onchange = (e) => {
+    document.querySelectorAll(".discrepancy").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+  document.getElementById("chkOnly").onchange = (e) => {
+    document.querySelectorAll(".p-only, .b-only").forEach(r => r.style.display = e.target.checked ? "" : "none");
+  };
+
+  // Background Image Toggle & Opacity Slider
+  const chkBgImage = document.getElementById("chkBgImage");
+  const rngOpacity = document.getElementById("rngOpacity");
+  const lblOpacity = document.getElementById("lblOpacity");
+
+  function updateBgImageStyle() {
+    const show = chkBgImage.checked;
+    const op = rngOpacity.value / 100.0;
+    lblOpacity.textContent = rngOpacity.value + "%";
+
+    document.querySelectorAll(".page-image").forEach(img => {
+      img.style.display = show ? "block" : "none";
+      img.style.opacity = op;
+    });
+  }
+
+  chkBgImage.onchange = updateBgImageStyle;
+  rngOpacity.oninput = updateBgImageStyle;
+</script>
+</body>
+</html>
