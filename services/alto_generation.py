@@ -12,7 +12,11 @@ from numbers import Number
 
 from PIL import Image
 
-from services.word_box_normalization import merge_apostrophe_word_boxes, merge_word_boxes_advanced
+from services.word_box_normalization import (
+    merge_apostrophe_word_boxes,
+    merge_word_boxes_advanced,
+    normalize_ocr_word_boxes_in_payload,
+)
 
 
 ALTO_PROFILE_ABBYY_LIKE = "abbyy_like"
@@ -166,6 +170,10 @@ def extract_paddlevl_lines(data):
 
 def extract_word_level_lines(ocr_payload):
     """Build line structures directly from word-level OCR arrays when available."""
+    try:
+        normalize_ocr_word_boxes_in_payload(ocr_payload)
+    except Exception:
+        pass
     rec_texts = ocr_payload.get("rec_texts", [])
     rec_scores = ocr_payload.get("rec_scores", [])
     text_word_lines = ocr_payload.get("text_word") or []

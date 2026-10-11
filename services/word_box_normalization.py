@@ -57,7 +57,155 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
                 text_word_boxes[index] = merged_boxes
                 changed = True
 
+        # Reconcile cross-line soft hyphens (e.g. 'occupa-' on line i + 'tion' on line i+1)
+        if len(text_word) > 1 and len(text_word_boxes) > 1:
+            hyphen_changed = reconcile_cross_line_hyphens(text_word, text_word_boxes)
+            changed = changed or hyphen_changed
+
     return changed
+
+
+def reconcile_cross_line_hyphens(text_word: list[Any], text_word_boxes: list[Any]) -> bool:
+    """Reconcile split cross-line hyphenated words so the root word is evaluated as a full lexical term.
+    
+    When a line ends with a soft hyphen (e.g. 'occupa-') and the next line begins with a continuation
+    (e.g. 'tion'), joining them produces 'occupation' which passes lexical dictionary validation.
+    """
+    changed = False
+    for i in range(min(len(text_word) - 1, len(text_word_boxes) - 1)):
+        curr_words = text_word[i]
+        curr_boxes = text_word_boxes[i]
+        next_words = text_word[i + 1]
+        next_boxes = text_word_boxes[i + 1]
+
+        if not curr_words or not next_words or not curr_boxes or not next_boxes:
+            continue
+
+        # Find last non-empty word in current line and first non-empty word in next line
+        curr_idx = len(curr_words) - 1
+        while curr_idx >= 0 and not str(curr_words[curr_idx]).strip():
+            curr_idx -= 1
+
+        next_idx = 0
+        while next_idx < len(next_words) and not str(next_words[next_idx]).strip():
+            next_idx += 1
+
+        if curr_idx < 0 or next_idx >= len(next_words):
+            continue
+
+        last_w = str(curr_words[curr_idx]).strip()
+        first_w = str(next_words[next_idx]).strip()
+
+        # Check for trailing soft hyphen on last word
+        if any(last_w.endswith(h) for h in ("-", "\u2010", "\u2011", "\u2013", "\u2014")) and len(last_w) >= 3:
+            root_prefix = last_w.rstrip("- \u2010\u2011\u2013\u2014").strip()
+            suffix = first_w.lstrip("- \u2010\u2011\u2013\u2014").strip(".,:;!?()[]{}\"'`")
+            if root_prefix and suffix and root_prefix.isalpha() and suffix.isalpha():
+                combined = f"{root_prefix}{suffix}"
+                # Check if combined word is a valid lexical word
+                try:
+                    from services.historical_lexicon import is_valid_historical_word
+                    valid = is_valid_historical_word(combined)
+                except Exception:
+                    valid = True
+
+                if valid:
+                    # Update root word on line end to contain full lexical word with hyphen notation for ALTO
+                    curr_words[curr_idx] = combined
+                    changed = True
+
+    return changed
+
+
+FRENCH_DIACRITICS = set("éèêëàâäîïôöùûüçÉÈÊËÀÂÄÎÏÔÖÙÛÜÇ")
+
+
+def merge_accent_split_tokens(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Recombine words that Paddle split across accented characters or isolated diacritics.
+    
+    Handles cases where Paddle segments words across accents:
+    - Isolated diacritics: ['é', 'talage'] -> ['étalage']
+    - Trailing accents: ['galvanis', 'é'] -> ['galvanisé']
+    - Infix accents: ['Montr', 'é', 'al'] -> ['Montréal']
+    - Split accented pieces: ['int', 'é', 'ressant'] -> ['intéressant'], ['commer', 'ç', 'ants'] -> ['commerçants']
+    
+    Guards strictly against merging distinct words separated by whitespace in line_text.
+    """
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    try:
+        from services.historical_lexicon import is_valid_historical_word
+    except ImportError:
+        return words, boxes
+
+    items = [{"text": str(w), "box": deepcopy(b)} for w, b in zip(words, boxes) if str(w).strip()]
+    if not items:
+        return words, boxes
+
+    raw_line = str(line_text or "").lower()
+
+    merged: list[dict[str, Any]] = []
+    i = 0
+    n = len(items)
+
+    while i < n:
+        # Try 3-token merge (e.g. ['Montr', 'é', 'al'] or ['int', 'é', 'ressant'])
+        if i + 2 < n:
+            t1 = items[i]["text"].strip()
+            t2 = items[i + 1]["text"].strip()
+            t3 = items[i + 2]["text"].strip()
+            joined3 = f"{t1}{t2}{t3}"
+            clean3 = joined3.strip(".,:;!?()[]{}\"'`").lower()
+            clean_t2 = t2.strip(".,:;!?()[]{}\"'`")
+
+            # Must be an infix isolated diacritic
+            if len(clean_t2) == 1 and clean_t2 in FRENCH_DIACRITICS:
+                # Must be present in line_text without internal space OR be a verified dictionary word
+                in_line = (clean3 in raw_line) if raw_line else False
+                is_valid = is_valid_historical_word(clean3)
+                if in_line or (is_valid and not is_valid_historical_word(t1) and not is_valid_historical_word(t3)):
+                    merged.append(combine_word_items([items[i], items[i + 1], items[i + 2]]))
+                    i += 3
+                    continue
+
+        # Try 2-token merge (e.g. ['é', 'talage'] or ['galvanis', 'é'])
+        if i + 1 < n:
+            t1 = items[i]["text"].strip()
+            t2 = items[i + 1]["text"].strip()
+            joined2 = f"{t1}{t2}"
+            clean2 = joined2.strip(".,:;!?()[]{}\"'`").lower()
+            clean_t1 = t1.strip(".,:;!?()[]{}\"'`")
+            clean_t2 = t2.strip(".,:;!?()[]{}\"'`")
+
+            is_isolated_diacritic = (
+                (len(clean_t1) == 1 and clean_t1 in FRENCH_DIACRITICS)
+                or (len(clean_t2) == 1 and clean_t2 in FRENCH_DIACRITICS)
+            )
+
+            if is_isolated_diacritic:
+                in_line = (clean2 in raw_line) if raw_line else False
+                is_valid = is_valid_historical_word(clean2)
+                if in_line or is_valid:
+                    merged.append(combine_word_items([items[i], items[i + 1]]))
+                    i += 2
+                    continue
+            elif not is_valid_historical_word(clean_t1) and not is_valid_historical_word(clean_t2):
+                # Neither is a valid word, but together they form a word in line_text
+                in_line = (clean2 in raw_line) if raw_line else False
+                if in_line and is_valid_historical_word(clean2):
+                    merged.append(combine_word_items([items[i], items[i + 1]]))
+                    i += 2
+                    continue
+
+        merged.append(items[i])
+        i += 1
+
+    return [m["text"] for m in merged], [m["box"] for m in merged]
 
 
 def merge_word_boxes_advanced(
@@ -68,6 +216,7 @@ def merge_word_boxes_advanced(
 ) -> tuple[Any, Any]:
     """Execute complete token consolidation pipeline."""
     # 1. Recombine accented French and line words that Paddle split across tokens
+    words, boxes = merge_accent_split_tokens(words, boxes, line_text=line_text)
     words, boxes = consolidate_words_to_line_text(words, boxes, line_text=line_text)
     # 2. Merge apostrophes (queen's, o'clock, etc.)
     words, boxes = merge_apostrophe_word_boxes(words, boxes, line_text=line_text)

@@ -750,8 +750,8 @@ def collect_word_candidates(
             # In invalid_lexical mode: target words that fail lexical dictionary validation
             if mode == "invalid_lexical":
                 try:
-                    from tools.compare_alto import is_lexically_valid_word
-                    is_valid = is_lexically_valid_word(text)
+                    from services.historical_lexicon import is_valid_historical_word
+                    is_valid = is_valid_historical_word(text)
                 except Exception:
                     is_valid = True
                 if is_valid and not (low_confidence and weirdness >= 0.75):

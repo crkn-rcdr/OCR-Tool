@@ -468,23 +468,93 @@ def _get_shared_spellcheckers():
     return _SP_EN_INSTANCE, _SP_FR_INSTANCE
 
 
+# High-confidence optical confusion and abbreviation mappings common to historical print
+HISTORICAL_OPTICAL_CORRECTIONS: Dict[str, str] = {
+    # Microfilm stroke breakages & contractions
+    "sd": "said",
+    "thie": "this",
+    "tis": "this",
+    "heeb": "hereby",
+    "oupa": "occupa-",
+    "boad": "boats",
+    "conainin": "containing",
+    "resering": "reserving",
+    "paage": "passage",
+    "veel": "vessels",
+    "fery": "fishery",
+    "beign": "reign",
+    "wi": "with",
+    "visty": "viscount",
+    "coanada": "canada",
+    # Optical confusion pairs: rn <-> m, cl <-> d, vv <-> w, etc.
+    "modem": "modern",
+    "bomed": "bombed",
+    "buming": "burning",
+    "fami": "farm",
+    "fre": "free",
+    "cleaf": "deaf",
+    "clead": "dead",
+    "cleath": "death",
+    "vvhich": "which",
+    "vvill": "will",
+    "vvith": "with",
+    "vvhen": "when",
+    "vvhere": "where",
+}
+
+
+def is_valid_historical_word(word: str) -> bool:
+    """Check if a word token is recognized in historical Canadian vocabulary or standard EN/FR dictionaries."""
+    if not word:
+        return False
+    clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", str(word).lower().strip())
+    if not clean:
+        return False
+    if clean in {"&c", "&c.", "c.", "c"}:
+        return True
+    if clean.isdigit() or re.match(r"^[\d,.]+$", clean):
+        return True
+    if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
+        return True
+    if len(clean) == 1:
+        return clean in {"a", "i", "o", "y", "à", "d", "l", "s", "n", "m", "j", "t", "c"}
+    if clean in ALL_CANADIAN_LEXICON_TOKENS:
+        return True
+    if clean in HISTORICAL_OPTICAL_CORRECTIONS.values():
+        return True
+    sp_en, sp_fr = _get_shared_spellcheckers()
+    if sp_en and clean in sp_en:
+        return True
+    if sp_fr and clean in sp_fr:
+        return True
+    return False
+
+
 def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_confidence: float = 0.88) -> str:
-    """1-edit Levenshtein dictionary regularizer for broken microfilm letterforms.
+    """1-edit Levenshtein dictionary regularizer and optical confusion resolver for broken microfilm letterforms.
     
-    When a word is recognized with confidence below `max_confidence` and is not already a valid
-    lexical word or proper name, snaps single-character split or broken strokes (e.g., 'resering' -> 'reserving',
-    'paage' -> 'page', 'heeb' -> 'hereby') to known Canadian historical and standard dictionary words.
+    Snaps single-character split or broken strokes (e.g., 'resering' -> 'reserving', 'sd' -> 'said',
+    'thie' -> 'this', 'fre' -> 'free') to known Canadian historical and standard dictionary words.
+    Deterministic optical corrections apply whenever the token is not an existing dictionary word;
+    fuzzy 1-edit Levenshtein regularizing applies on low-confidence tokens (confidence <= max_confidence).
     """
-    if not word or len(word) < 4:
-        return word
-    if confidence > max_confidence:
+    if not word or len(word) < 2:
         return word
 
     clean = word.lower().strip(".,:;!?()[]{}\"'`")
     if not clean.isalpha():
         return word
 
-    # If already a valid canonical Canadian historical word, do not change
+    # 1. Deterministic historical optical corrections (e.g. sd -> said, thie -> this, resering -> reserving)
+    if clean in HISTORICAL_OPTICAL_CORRECTIONS:
+        target = HISTORICAL_OPTICAL_CORRECTIONS[clean]
+        if word.istitle():
+            return target.capitalize()
+        elif word.isupper():
+            return target.upper()
+        return target
+
+    # 2. If already a valid canonical Canadian historical word or dictionary word, do not change
     if clean in ALL_CANADIAN_LEXICON_TOKENS:
         return word
 
@@ -492,6 +562,14 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
     if sp_en and clean in sp_en:
         return word
     if sp_fr and clean in sp_fr:
+        return word
+
+    # Words under 4 chars must not be heuristically spell-checked to avoid corrupting short words
+    if len(clean) < 4:
+        return word
+
+    # 3. Fuzzy 1-edit Levenshtein regularizer only triggers on lower-confidence words
+    if confidence > max_confidence:
         return word
 
     import difflib
@@ -528,5 +606,6 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
         return best
 
     return word
+
 
 

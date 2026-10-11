@@ -140,10 +140,12 @@ def preprocessing_enabled(opt: dict | None) -> bool:
 
 
 def detect_microfilm_degradation(gray: np.ndarray) -> tuple[bool, dict[str, Any]]:
-    """Analyze image contrast and edge gradient to auto-detect degraded microfilm.
+    """Analyze image contrast, edge gradient, and background unevenness to auto-detect degraded microfilm.
 
-    Historical microfilms typically feature soft, blurry letter strokes (Laplacian variance < 75)
-    and compressed dynamic range with faded gray ink (p5 > 50).
+    Historical microfilms typically feature:
+    1. Soft, blurry letter strokes (Laplacian variance < 75) and compressed dynamic range with faded gray ink (p5 > 50).
+    2. Strong optical vignette / dark border gradient (corner brightness < 35% of page center).
+    3. Severe uneven background illumination across page quadrants (quadrant background std > 5.0).
     """
     height, width = gray.shape[:2]
     sample = gray[
@@ -158,10 +160,39 @@ def detect_microfilm_degradation(gray: np.ndarray) -> tuple[bool, dict[str, Any]
     lap_var = float(cv2.Laplacian(sample, cv2.CV_64F).var())
     std = float(sample.std())
 
+    # Check optical vignetting / dark border fade (prominent in microfilm negative reels)
+    cw = max(50, int(width * 0.05))
+    ch = max(50, int(height * 0.05))
+    corners = [
+        gray[0:ch, 0:cw],
+        gray[0:ch, width - cw : width],
+        gray[height - ch : height, 0:cw],
+        gray[height - ch : height, width - cw : width],
+    ]
+    corner_avg = float(np.mean([float(c.mean()) for c in corners]))
+    center_area = gray[int(height * 0.25) : int(height * 0.75), int(width * 0.25) : int(width * 0.75)]
+    center_avg = float(center_area.mean()) if center_area.size > 0 else 128.0
+    vignette_ratio = corner_avg / max(1.0, center_avg)
+
+    # Check quadrant background variance
+    qh, qw = sample.shape[0] // 2, sample.shape[1] // 2
+    quadrants = [
+        float(sample[:qh, :qw].mean()),
+        float(sample[:qh, qw:].mean()),
+        float(sample[qh:, :qw].mean()),
+        float(sample[qh:, qw:].mean()),
+    ]
+    quadrant_std = float(np.std(quadrants))
+
     # Microfilm signature:
     # 1. Soft stroke edges (lap_var < 75.0) combined with faded ink (p5 > 50.0)
     # 2. Or very low sharpness (lap_var < 60.0) and compressed contrast (range < 140.0)
-    is_microfilm = bool((lap_var < 75.0 and p5 > 50.0) or (lap_var < 60.0 and contrast_range < 140.0))
+    # 3. Or severe negative microfilm vignette (vignette_ratio < 0.25) with background gradient
+    is_microfilm = bool(
+        (lap_var < 75.0 and p5 > 50.0)
+        or (lap_var < 60.0 and contrast_range < 140.0)
+        or (vignette_ratio < 0.25 and quadrant_std > 5.0)
+    )
 
     details = {
         "laplacian_variance": round(lap_var, 1),
@@ -169,6 +200,8 @@ def detect_microfilm_degradation(gray: np.ndarray) -> tuple[bool, dict[str, Any]
         "percentile_95": round(float(p95), 1),
         "contrast_range": round(contrast_range, 1),
         "std_dev": round(std, 1),
+        "vignette_ratio": round(vignette_ratio, 3),
+        "quadrant_std": round(quadrant_std, 2),
         "is_microfilm": is_microfilm,
     }
     return is_microfilm, details
@@ -190,8 +223,6 @@ def preprocess_image_for_ocr(
     ignore_black_border = bool(
         (opt or {}).get("ignore_black_border", DEFAULT_IGNORE_BLACK_BORDER)
     )
-    if not preprocessing_steps and not ignore_black_border:
-        return image_path, None
 
     image_path = Path(image_path)
     out_dir = Path(out_dir)
@@ -225,13 +256,17 @@ def preprocess_image_for_ocr(
         steps.append("suppress_ruling_lines")
         details["table_ruling_lines_suppressed"] = True
 
-    # Auto-detect degraded microfilm and dynamically apply CLAHE + stroke reconnection
+    # Auto-detect degraded microfilm and dynamically apply background flattening + CLAHE + stroke reconnection
     is_microfilm, microfilm_details = detect_microfilm_degradation(gray)
     details["microfilm_detection"] = microfilm_details
     effective_steps = list(preprocessing_steps)
-    if is_microfilm and "contrast" not in effective_steps:
-        effective_steps.append("contrast")
-        details["auto_microfilm_clahe_applied"] = True
+    if is_microfilm:
+        if "background_flatten" not in effective_steps:
+            effective_steps.insert(0, "background_flatten")
+            details["auto_microfilm_flatten_applied"] = True
+        if "contrast" not in effective_steps:
+            effective_steps.append("contrast")
+            details["auto_microfilm_clahe_applied"] = True
 
     processed, step_details = apply_preprocessing_steps(gray, effective_steps)
     if is_microfilm:
@@ -255,7 +290,12 @@ def preprocess_image_for_ocr(
         details["table_unclip_ratio"] = 1.25
 
     details.update(step_details)
-    details["steps"] = [*steps, *step_details.get("steps", [])]
+    all_applied_steps = [*steps, *step_details.get("steps", [])]
+    details["steps"] = all_applied_steps
+
+    # If no preprocessing transformations were required, pass through the original image
+    if not all_applied_steps and not effective_steps and not details.get("micro_print_upscaling_applied"):
+        return image_path, None
 
     step_suffix = "_".join(effective_steps)
     if ignore_black_border and step_suffix:
