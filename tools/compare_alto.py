@@ -2128,43 +2128,72 @@ def sync_to_evaluations_repo(
         print(f"[CRKN Sync] Successfully copied evaluation assets to {docs_dir}.")
 
         if auto_push:
-            print("[CRKN Sync] Committing and pushing updates to GitHub Pages...")
-            # Git add
-            subprocess.run(
-                ["git", "add", "docs/"],
-                cwd=str(eval_repo_dir),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            # Check if there are changes staged
-            status_res = subprocess.run(
-                ["git", "status", "--porcelain", "docs/"],
-                cwd=str(eval_repo_dir),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            if not status_res.stdout.strip():
-                print("[CRKN Sync] No changes detected to commit in OCR-Evaluations.")
-                return True
+            print("[CRKN Sync] Committing and pushing updates to GitHub Pages in robust batches...")
+            # Configure git buffers in target repo
+            for cfg_cmd in [
+                ["git", "config", "http.postBuffer", "524288000"],
+                ["git", "config", "http.maxRequestBuffer", "524288000"],
+                ["git", "config", "http.version", "HTTP/1.1"],
+            ]:
+                subprocess.run(cfg_cmd, cwd=str(eval_repo_dir), check=False)
 
-            commit_msg = "Auto-update evaluation docs & dashboard from paddle_pipeline run"
-            subprocess.run(
-                ["git", "commit", "-m", commit_msg],
+            # 1. Sync dashboard summaries first
+            top_level = ["docs/index.html", "docs/comparison_summary.json", "docs/comparison_summary.csv"]
+            for tlf in top_level:
+                if (eval_repo_dir / tlf).exists():
+                    subprocess.run(["git", "add", tlf], cwd=str(eval_repo_dir), check=False)
+
+            diff_staged = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
                 cwd=str(eval_repo_dir),
-                check=True,
                 capture_output=True,
                 text=True,
             )
-            push_res = subprocess.run(
-                ["git", "push", "origin", "main"],
+            if diff_staged.stdout.strip():
+                subprocess.run(
+                    ["git", "commit", "-m", "Auto-update Master AI Dashboard and summary tables"],
+                    cwd=str(eval_repo_dir),
+                    check=False,
+                )
+                subprocess.run(["git", "push", "origin", "main"], cwd=str(eval_repo_dir), check=False)
+
+            # 2. Sync publication subfolders individually to avoid HTTP 500 payload limit
+            status_out = subprocess.run(
+                ["git", "status", "--porcelain", "-uall", "docs/"],
                 cwd=str(eval_repo_dir),
-                check=True,
                 capture_output=True,
                 text=True,
-            )
-            print("[CRKN Sync] Successfully pushed to origin main on crkn-rcdr/OCR-Evaluations!")
+            ).stdout
+
+            target_folders = set()
+            for line in status_out.splitlines():
+                parts = line.strip().split(maxsplit=1)
+                if len(parts) < 2:
+                    continue
+                rel_parts = Path(parts[1].strip('"')).parts
+                if len(rel_parts) >= 3 and rel_parts[0] == "docs":
+                    target_folders.add(f"{rel_parts[0]}/{rel_parts[1]}/{rel_parts[2]}")
+                elif len(rel_parts) >= 2 and rel_parts[0] == "docs":
+                    target_folders.add(f"{rel_parts[0]}/{rel_parts[1]}")
+
+            for folder in sorted(target_folders):
+                subprocess.run(["git", "add", folder], cwd=str(eval_repo_dir), check=False)
+                sub_diff = subprocess.run(
+                    ["git", "diff", "--cached", "--name-only"],
+                    cwd=str(eval_repo_dir),
+                    capture_output=True,
+                    text=True,
+                )
+                if sub_diff.stdout.strip():
+                    commit_msg = f"Add comparison pages and scan images for {folder.replace('docs/', '')}"
+                    subprocess.run(["git", "commit", "-m", commit_msg], cwd=str(eval_repo_dir), check=False)
+                    p_res = subprocess.run(["git", "push", "origin", "main"], cwd=str(eval_repo_dir), check=False)
+                    if p_res.returncode != 0:
+                        import time
+                        time.sleep(2)
+                        subprocess.run(["git", "push", "origin", "main"], cwd=str(eval_repo_dir), check=False)
+
+            print("[CRKN Sync] Successfully synchronized all evaluation assets to origin main on crkn-rcdr/OCR-Evaluations!")
             return True
     except subprocess.CalledProcessError as e:
         print(f"[CRKN Sync ERROR] Git command failed: {e.cmd}\n{e.stderr or e.stdout}")
