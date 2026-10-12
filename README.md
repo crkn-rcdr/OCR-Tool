@@ -30,18 +30,23 @@ Open **`http://127.0.0.1:7860`** in your browser.
 > - **Language**: Leave as `Auto-detect Script` (automatically identifies Traditional Chinese, Bilingual French Latin superset, or English).
 > - **Pre Process**: `[x] Enabled` (handles microfilm black borders, contrast fading, background flattening, micro-print upscaling, and deskew).
 > - **Post Process**: `[x] Enabled` (delegates degraded lines & disputed words to Dots OCR 7B, regularizes broken historical tokens, restores French accents, reconstructs hyphens, and de-compounds display ads).
+> - **Image Tiling Strategy**: Leave as `auto` (autonomously applies $3 \times 2$ quadrant grid tiling to dense $\ge 18\text{ MP}$ broadsheets while running standard $< 18\text{ MP}$ books at native full scale with zero seam overlap).
 
 ---
 
 ### Option 2: Full Benchmark & ABBYY Comparison Run (CLI)
-Run the automated end-to-end batch script to process the entire test dataset and immediately generate an updated comparison report:
+Run the automated end-to-end batch script to process the test dataset and immediately generate an updated comparison report:
 
 ```powershell
+# Default run (targets Newspapers folder):
 .\venv\Scripts\python.exe tools/run_full_benchmark.py
+
+# Or target the entire test dataset (all collections including books, serials, and reels):
+.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\blapierre\Documents\PDF Test"
 ```
 
 This single command:
-1. Processes all documents from `C:\Users\blapierre\Documents\PDF Test`.
+1. Processes documents from `C:\Users\blapierre\Documents\PDF Test\Newspapers` (or the supplied custom input directory).
 2. Generates Searchable PDFs, ALTO XML 4.2, and JSON files in `C:\Users\blapierre\Desktop\PDF Test - Final`.
 3. Runs the lexical comparator against baseline ABBYY FineReader XMLs.
 4. Generates an interactive visual report at **`compare/index.html`**, summary metrics at `compare/comparison_summary.csv`, and automatically syncs publication dashboards to the `OCR-Evaluations` repository.
@@ -84,12 +89,12 @@ flowchart TD
         B7["Adaptive 1.5x Micro-Print Upscaling<br/>(For Font Heights < 18px + Coordinate Inversion)"]
     end
 
-    subgraph Recognition ["3. Stage 2: Core Recognition & Script Dispatch"]
+    subgraph Recognition ["3. Stage 2: Core Recognition, Tiling & Script Dispatch"]
         C1{"Script & Language Detection<br/>services/language_detection.py"}
         C2["Traditional Chinese (sfu.00001)<br/>Bilingual French Superset (sru, qmbn, oocihm.8)<br/>Standard English"]
-        C3{"Image Height > 4000px?"}
-        C4["Adaptive 3x2 Tile Splitter<br/>(15% Overlap Margin + NMS Merging)"]
-        C5["PP-OCRv6 TensorRT / FastDeploy<br/>(DBNet++ Detection + SVTR-LCNet Recognition)"]
+        C3{"Auto-Detect Tiling?<br/>services/tile_ocr.py<br/>(≥ 18 MP or ≥ 4500x3200px)"}
+        C4["3x2 Grid Quadrant Tiling<br/>(15% Overlap Margin + NMS Merging)"]
+        C5["Native Full-Page DBNet Inference<br/>(PP-OCRv6 DBNet++ + SVTR-LCNet)"]
     end
 
     subgraph Spatial ["4. Stage 3: Spatial Layout & Reading Order"]
@@ -119,8 +124,8 @@ flowchart TD
     A --> B1
     B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
     B7 --> C1 --> C2 --> C3
-    C3 -- Yes --> C4 --> C5
-    C3 -- No --> C5
+    C3 -- "Broadsheet (≥ 18 MP)" --> C4 --> C5
+    C3 -- "Standard (< 18 MP)" --> C5
     C5 --> D1 --> D2 --> D3
     D3 --> E1
     E1 -- Line Score < 0.78 --> E2
@@ -223,8 +228,32 @@ CRKN collections span multilingual archives: 19th-century English newspapers, Fr
 - **Bilingual French Superset (`fr`)**: Automatically detected for Canadian federal publications, provincial gazettes, and historical Québec serials (`sru.00007`, `sru.00004`, `oocihm.8_06619`, `oocihm.8_`, `qmbn` BAnQ serials, RCMP forms, Hansard). When `lang="fr"` is dispatched, Paddle's Latin/French model natively processes accented characters (`é`, `è`, `ê`, `à`, `ç`, `ô`, `î`, `ù`, `ë`, `ï`, `œ`, `æ`) as first-class tokens rather than treating them as anomalous English noise, preventing dropouts (*qualité* $\rightarrow$ *qualit*, *société* $\rightarrow$ *societ*).
 - **Standard English (`en`)**: Default for unflagged historical serials and monographs.
 
-### Adaptive Broadsheet Tiling (`services/tile_ocr.py`)
-Historical broadsheets frequently exceed $6000 \times 9000$ pixels. When page dimensions exceed 4000px, the engine slices the image into a $3 \times 2$ grid with a 15% overlap margin, runs OCR concurrently, and merges overlapping bounding boxes using Non-Maximum Suppression (NMS).
+### CJK Directional Character Tokenization & Box Partitioning (`services/word_box_normalization.py`)
+Historical Chinese Canadian newspapers (such as `sfu.00001` *The Chinese Times / 大漢公報*) present a complex mix of vertical columnar body text and horizontal display banners:
+- **The Challenge**: Unlike Western scripts with spaces, Traditional Chinese characters are non-delimited. PaddleOCR returns full multicharacter line boxes (`rec_texts`). In naive export, entire column strips are lumped into single string entries, breaking word-level search, indexing, and alignment.
+- **Orientation Sensing**: The normalizer evaluates the bounding box aspect ratio:
+  - **Vertical Text Columns ($H > 1.2 \times W$)**: The bounding box is sliced vertically along the Y-axis into $N$ equal character slots with interpolated sub-pixel coordinates.
+  - **Horizontal Banner Headers ($W > 1.2 \times H$)**: The bounding box is sliced horizontally along the X-axis into $N$ character slots.
+- **ALTO & Searchable PDF Integration**: Emits discrete, individual `<String>` tokens in ALTO XML 4.2 with accurate `HPOS`, `VPOS`, `WIDTH`, and `HEIGHT`, and embeds per-glyph invisible text boxes in the Searchable PDF layer.
+
+### Auto-Detect Tiling Strategy (`services/tile_ocr.py`)
+Historical print in the CRKN archive spans from massive broadsheets ($6000 \times 9000\text{px}$) to standard microfilm monographs ($1800 \times 2400\text{px}$). Empirical testing proved that a single static tiling policy is suboptimal:
+
+1. **Large Broadsheet Newspapers ($\ge 18\text{ MP}$ or $\max \ge 4500\text{px} \land \min \ge 3200\text{px}$)**:
+   - On scans such as *The Ottawa Citizen* (`ome.00003`, 31–37 MP), classified advertisements have character heights of only 10–14px.
+   - Processing untiled forces DBNet to downsample the image, missing thousands of micro-print words.
+   - Slicing into a **$3 \times 2$ Grid** with a 15% overlap margin and Non-Maximum Suppression (NMS) merging yields **+328 words (+10.0% word recall over untiled OCR and +396 words over ABBYY FineReader)** on a single page.
+2. **Standard Microfilms & Monographs ($< 18\text{ MP}$)**:
+   - Books, annual reports, and Heritage microfilm reels (`oocihm.72118`, `lac_reel_c6063`, 3.8–7.8 MP) fit natively inside DBNet's receptive field (up to 9984 side len).
+   - Running full-page inference without tiling avoids horizontal/vertical slice seams, eliminates duplicate edge words, and runs **$4\times$ faster**.
+   - $3 \times 1$ slicing was empirically retired as obsolete, as horizontal cuts severed vertical Chinese columns and split multi-column paragraphs.
+
+#### Supported Tiling Modes (`tile_strategy`)
+- **`auto` *(Default)***: Automatically inspects image resolution. Broadsheets ($\ge 18\text{ MP}$) are routed to $3 \times 2$ quadrant grid tiling; books and standard pages ($< 18\text{ MP}$) run at native full-image resolution.
+- **`3x2` / `grid_3x2`**: Forces $3 \times 2$ quadrant grid tiling across all documents.
+- **`none`**: Forces native full-resolution OCR across all documents with zero tiling.
+
+> Available as the **Image Tiling Strategy** dropdown in the Gradio Web UI and via `--tile-strategy auto|3x2|none` in the batch runner CLI.
 
 ---
 
@@ -290,6 +319,7 @@ Prevents automated spellcheckers from misidentifying genuine historical proper n
 - **Territories & Settlements**: *Upper Canada*, *Lower Canada*, *Assiniboia*, *Athabaska*, *Keewatin*, *Rupert's Land*, *Hochelaga*, *Bytown*, *Stadacona*, *Cataraqui*, *Glengarry*, *Gaspésie*, *Kamouraska*, *Batoche*.
 - **French Canadian Seigniorial Terms**: *seigneurie*, *censive*, *censitaire*, *lods*, *corvée*, *arpents*, *bailliage*, *prévôté*, *greffier*, *marguillier*, *voltigeurs*, *fencibles*.
 - **Colonial Abbreviations**: *Vic.* (Victorian statutes), *Geo.*, *Edw.*, *Esq.*, *Honble.*, *M.P.P.*, *M.L.A.*, *Q.C.*, *inst.*, *ult.*, *prox.*, *sess.*
+- **Canadian Historical Surnames & Commercial Entities (`CANADIAN_HISTORICAL_NAMES_AND_SURNAMES`)**: Historical romanized Chinese Canadian surnames (*Cho*, *Chow*, *Chan*, *Wong*, *Lee*, *Lim*, *Yip*, *Ho*, *Wu*, *Cheung*, *Yuen*, *Kwan*) and archival business entities (*Co*, *Ltd*, *Inc*). Eliminates false-win attributions to ABBYY on historical commercial advertisements (e.g. validly recognizing `"CHO CO."` where ABBYY incorrectly substituted `"So"`).
 
 ### 8. Word-Box & Historical Ligature Consolidation (`services/word_box_normalization.py`)
 Historical typography contains contractions and ligatures that standard OCR engines fracture into separate bounding boxes:
@@ -352,11 +382,20 @@ flowchart LR
   - Local `compare/` directories are untracked in `.gitignore` to keep the main pipeline repository clean and lightweight.
 
 ### Running the Full Automated Benchmark
-To run OCR on the full test directory and update the comparison dashboard:
+To run OCR on the test directory and update the comparison dashboard:
 
 ```powershell
+# Default run (targets Newspapers collection: 68 broadsheet & tabloid pages):
 .\venv\Scripts\python.exe tools/run_full_benchmark.py
+
+# Or target the entire test dataset (all collections including books, serials, and reels):
+.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\blapierre\Documents\PDF Test"
 ```
+
+The script executes 3 automated phases:
+1. **Phase 1: Full OCR Run**: Runs PP-OCRv6 with `tile_strategy="auto"`, preprocessing (border crop, CLAHE, micro-print upscaling), and post-OCR VLM arbitration.
+2. **Phase 2: ABBYY Benchmarking**: Generates token concordance diffs, dictionary win rates, and interactive HTML dashboards under `compare/`.
+3. **Phase 3: Resilient GitHub Sync**: Pushes updated dashboards and metrics to the `OCR-Evaluations` repository.
 
 ### Running the Comparison Dashboard Standalone
 To compare an existing folder of ALTO XML files against ABBYY FineReader baseline files:
@@ -390,6 +429,7 @@ For unattended processing of full microfilm reels (hundreds or thousands of page
   --input "C:\CRKN Projects\Heritage\oocihm.lac_reel_c10143" `
   --output "C:\CRKN Projects\output\lac_reel_c10143" `
   --method PP-OCRv6 `
+  --tile-strategy auto `
   --pre-process `
   --post-process `
   --format pdf_alto `
@@ -398,11 +438,10 @@ For unattended processing of full microfilm reels (hundreds or thousands of page
 ```
 
 ### Key CLI Flags
+- `--tile-strategy`: Tiling policy: `auto` (default, evaluates resolution $\ge 18\text{ MP}$), `3x2` (forces 3x2 quadrant tiling), or `none` (native full resolution).
 - `--resume` / `-r`: Resumes an interrupted run, skipping pages that already have complete output in the target destination folder.
 - `--pre-process`: Enables automatic microfilm detection, black border crop, CLAHE contrast boost, stroke reconnection, and auto-deskew.
 - `--post-process`: Enables post-OCR VLM arbitration, historical lexicon whitelisting, and orthography cleanup.
-- `--concurrency`: Number of parallel worker threads for post-OCR VLM crop evaluation.
-
 ---
 
 ## Setup & Installation

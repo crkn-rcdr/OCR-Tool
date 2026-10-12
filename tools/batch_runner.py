@@ -64,7 +64,7 @@ from services.txt_generation import generate_txt_file
 import services.ocr_pp as ocr_pp
 
 BEST_PREPROCESSING_STEPS = list(DEFAULT_PREPROCESSING_STEPS)
-BEST_TILE_STRATEGY = "grid_3x2_doclayout_v3"
+BEST_TILE_STRATEGY = "auto"
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
 logger = logging.getLogger("batch_runner")
