@@ -225,30 +225,62 @@ def extract_word_level_lines(ocr_payload):
             if not word_text or not clean_alto_text(word_text):
                 continue
 
-            subwords = str(word_text).strip().split()
-            if len(subwords) > 1:
-                from services.word_box_normalization import partition_box_horizontal
-                part_boxes = partition_box_horizontal(word_box, subwords)
-                for sw, sb in zip(subwords, part_boxes):
-                    if not sw or not clean_alto_text(sw):
-                        continue
+            from services.word_box_normalization import (
+                CJK_CHAR_RE,
+                tokenize_cjk_text,
+                partition_box_for_subwords,
+                partition_box_horizontal,
+            )
+
+            clean_w = clean_alto_text(word_text)
+            if CJK_CHAR_RE.search(clean_w):
+                subwords = tokenize_cjk_text(clean_w)
+                if len(subwords) > 1:
+                    part_boxes = partition_box_for_subwords(word_box, subwords)
+                    for sw, sb in zip(subwords, part_boxes):
+                        if not sw or not clean_alto_text(sw):
+                            continue
+                        string_items.append(
+                            make_ocr_item(
+                                sw,
+                                sb,
+                                score=line_score,
+                                line_index=index,
+                            )
+                        )
+                else:
                     string_items.append(
                         make_ocr_item(
-                            sw,
-                            sb,
+                            word_text,
+                            word_box,
                             score=line_score,
                             line_index=index,
                         )
                     )
             else:
-                string_items.append(
-                    make_ocr_item(
-                        word_text,
-                        word_box,
-                        score=line_score,
-                        line_index=index,
+                subwords = str(word_text).strip().split()
+                if len(subwords) > 1:
+                    part_boxes = partition_box_horizontal(word_box, subwords)
+                    for sw, sb in zip(subwords, part_boxes):
+                        if not sw or not clean_alto_text(sw):
+                            continue
+                        string_items.append(
+                            make_ocr_item(
+                                sw,
+                                sb,
+                                score=line_score,
+                                line_index=index,
+                            )
+                        )
+                else:
+                    string_items.append(
+                        make_ocr_item(
+                            word_text,
+                            word_box,
+                            score=line_score,
+                            line_index=index,
+                        )
                     )
-                )
 
         if not string_items:
             continue
@@ -1338,17 +1370,35 @@ def generate_alto(
             expanded_items = []
             for item in string_items:
                 raw_text = clean_alto_text(item["text"])
-                subwords = raw_text.split()
-                if len(subwords) > 1:
-                    from services.word_box_normalization import partition_box_horizontal
-                    part_boxes = partition_box_horizontal(item["box"], subwords)
-                    for sw, sb in zip(subwords, part_boxes):
-                        sub_item = dict(item)
-                        sub_item["text"] = sw
-                        sub_item["box"] = sb
-                        expanded_items.append(sub_item)
+                from services.word_box_normalization import (
+                    CJK_CHAR_RE,
+                    tokenize_cjk_text,
+                    partition_box_for_subwords,
+                    partition_box_horizontal,
+                )
+
+                if CJK_CHAR_RE.search(raw_text):
+                    subwords = tokenize_cjk_text(raw_text)
+                    if len(subwords) > 1:
+                        part_boxes = partition_box_for_subwords(item["box"], subwords)
+                        for sw, sb in zip(subwords, part_boxes):
+                            sub_item = dict(item)
+                            sub_item["text"] = sw
+                            sub_item["box"] = sb
+                            expanded_items.append(sub_item)
+                    else:
+                        expanded_items.append(item)
                 else:
-                    expanded_items.append(item)
+                    subwords = raw_text.split()
+                    if len(subwords) > 1:
+                        part_boxes = partition_box_horizontal(item["box"], subwords)
+                        for sw, sb in zip(subwords, part_boxes):
+                            sub_item = dict(item)
+                            sub_item["text"] = sw
+                            sub_item["box"] = sb
+                            expanded_items.append(sub_item)
+                    else:
+                        expanded_items.append(item)
             string_items = expanded_items
 
             for string_index, string_item in enumerate(string_items):

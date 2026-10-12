@@ -208,6 +208,7 @@ def merge_accent_split_tokens(
     return [m["text"] for m in merged], [m["box"] for m in merged]
 
 
+
 def partition_box_horizontal(box: Any, subwords: list[str]) -> list[Any]:
     """Partition a bounding box or polygon horizontally into N sub-boxes proportional to subword lengths."""
     if not subwords or len(subwords) <= 1:
@@ -261,6 +262,154 @@ def partition_box_horizontal(box: Any, subwords: list[str]) -> list[Any]:
         return out_boxes
 
     return [deepcopy(box) for _ in subwords]
+
+
+def is_box_vertical(box: Any) -> bool:
+    """Return True if bounding box or polygon has vertical text layout (height > width * 1.15)."""
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        if isinstance(box[0], (list, tuple)) and len(box[0]) == 2:
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            return (max(ys) - min(ys)) > (max(xs) - min(xs)) * 1.15
+        elif all(isinstance(v, (int, float)) for v in box):
+            return abs(box[3] - box[1]) > abs(box[2] - box[0]) * 1.15
+    return False
+
+
+def partition_box_vertical(box: Any, subwords: list[str]) -> list[Any]:
+    """Partition a bounding box or polygon vertically (top to bottom) into N sub-boxes proportional to subword lengths."""
+    if not subwords or len(subwords) <= 1:
+        return [box]
+
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+
+    weights = [max(1, len(str(w))) for w in subwords]
+    total_w = sum(weights)
+    cum_ratios = [0.0]
+    curr = 0.0
+    for w in weights:
+        curr += w / total_w
+        cum_ratios.append(curr)
+    cum_ratios[-1] = 1.0
+
+    is_polygon = (
+        isinstance(box, (list, tuple))
+        and len(box) == 4
+        and isinstance(box[0], (list, tuple))
+        and len(box[0]) == 2
+    )
+    is_rect = (
+        isinstance(box, (list, tuple))
+        and len(box) == 4
+        and all(isinstance(v, (int, float)) for v in box)
+    )
+
+    if is_polygon:
+        p0, p1, p2, p3 = box[0], box[1], box[2], box[3]
+        out_boxes = []
+        for i in range(len(subwords)):
+            r_start = cum_ratios[i]
+            r_end = cum_ratios[i + 1]
+            tl = [p0[0] + (p3[0] - p0[0]) * r_start, p0[1] + (p3[1] - p0[1]) * r_start]
+            bl = [p0[0] + (p3[0] - p0[0]) * r_end, p0[1] + (p3[1] - p0[1]) * r_end]
+            tr = [p1[0] + (p2[0] - p1[0]) * r_start, p1[1] + (p2[1] - p1[1]) * r_start]
+            br = [p1[0] + (p2[0] - p1[0]) * r_end, p1[1] + (p2[1] - p1[1]) * r_end]
+            out_boxes.append([tl, tr, br, bl])
+        return out_boxes
+    elif is_rect:
+        x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+        out_boxes = []
+        for i in range(len(subwords)):
+            r_start = cum_ratios[i]
+            r_end = cum_ratios[i + 1]
+            sy1 = y1 + (y2 - y1) * r_start
+            sy2 = y1 + (y2 - y1) * r_end
+            out_boxes.append([x1, sy1, x2, sy2])
+        return out_boxes
+
+    return [deepcopy(box) for _ in subwords]
+
+
+def partition_box_for_subwords(box: Any, subwords: list[str]) -> list[Any]:
+    """Partition box vertically if vertical text, otherwise horizontally."""
+    if is_box_vertical(box):
+        return partition_box_vertical(box, subwords)
+    return partition_box_horizontal(box, subwords)
+
+
+CJK_CHAR_RE = re.compile(
+    r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u2e80-\u2fd5\u31c0-\u31ef\u3400-\u4dbf\uf900-\ufaff]"
+)
+
+
+def tokenize_cjk_text(text: str) -> list[str]:
+    """Tokenize a CJK text string into individual characters and intact alphanumeric words."""
+    if not text:
+        return []
+    tokens = []
+    curr_latin = []
+    for ch in text:
+        if ch.isspace():
+            if curr_latin:
+                tokens.append("".join(curr_latin))
+                curr_latin = []
+            continue
+        if CJK_CHAR_RE.search(ch):
+            if curr_latin:
+                tokens.append("".join(curr_latin))
+                curr_latin = []
+            tokens.append(ch)
+        elif ch.isascii() and ch.isalnum():
+            curr_latin.append(ch)
+        else:
+            if curr_latin:
+                tokens.append("".join(curr_latin))
+                curr_latin = []
+            tokens.append(ch)
+    if curr_latin:
+        tokens.append("".join(curr_latin))
+    return [t for t in tokens if t]
+
+
+def chunk_cjk_tokens(
+    words: Any,
+    boxes: Any,
+    line_text: Any = None,
+) -> tuple[Any, Any]:
+    """Split any CJK tokens into individual character words with appropriately partitioned bounding boxes."""
+    if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+        return words, boxes
+
+    has_cjk = any(CJK_CHAR_RE.search(str(w)) for w in words if w)
+    if not has_cjk:
+        return words, boxes
+
+    out_words = []
+    out_boxes = []
+
+    for w, b in zip(words, boxes):
+        w_str = str(w).strip()
+        if not w_str or not CJK_CHAR_RE.search(w_str):
+            out_words.append(w)
+            out_boxes.append(b)
+            continue
+
+        subtokens = tokenize_cjk_text(w_str)
+        if len(subtokens) <= 1:
+            out_words.append(w_str)
+            out_boxes.append(b)
+            continue
+
+        part_boxes = partition_box_for_subwords(b, subtokens)
+        for tok, pbox in zip(subtokens, part_boxes):
+            out_words.append(tok)
+            out_boxes.append(pbox)
+
+    return out_words, out_boxes
+
 
 
 def split_box_horizontally(box: Any, ratio: float) -> tuple[Any, Any]:
@@ -369,7 +518,7 @@ def decompound_fused_display_tokens(
         clean = text.strip(".,:;!?()[]{}\"'`")
 
         # Consider tokens of length >= 5 that are not already valid dictionary words
-        if len(clean) >= 5 and clean.isalpha() and not is_valid_historical_word(clean.lower()):
+        if len(clean) >= 5 and clean.isascii() and clean.isalpha() and not is_valid_historical_word(clean.lower()):
             found_split = False
             for k in range(2, len(clean) - 1):
                 p1 = clean[:k].lower()
@@ -450,6 +599,11 @@ def merge_word_boxes_advanced(
     line_score: Any = None,
 ) -> tuple[Any, Any]:
     """Execute complete token consolidation pipeline."""
+    # 0. Fast-path for CJK: chunk CJK tokens into separate character words with partitioned geometry immediately
+    has_cjk = any(CJK_CHAR_RE.search(str(w)) for w in words if w) or (line_text and CJK_CHAR_RE.search(str(line_text)))
+    if has_cjk:
+        return chunk_cjk_tokens(words, boxes, line_text=line_text)
+
     # 1. Recombine accented French and line words that Paddle split across tokens
     words, boxes = merge_accent_split_tokens(words, boxes, line_text=line_text)
     words, boxes = consolidate_words_to_line_text(words, boxes, line_text=line_text)
@@ -503,6 +657,8 @@ def consolidate_words_to_line_text(
     if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
         return words, boxes
     if not line_text or not isinstance(line_text, str):
+        return words, boxes
+    if any(CJK_CHAR_RE.search(str(w)) for w in words if w) or CJK_CHAR_RE.search(line_text):
         return words, boxes
 
     expected_words = line_text.split()

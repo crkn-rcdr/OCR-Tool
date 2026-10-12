@@ -43,8 +43,8 @@ from services.ocr_defaults import (
     DEFAULT_TILE_OVERLAP_PX,
 )
 
-DEFAULT_INPUT_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
-DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
+DEFAULT_INPUT_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test\Newspapers")
+DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final\Newspapers")
 DEFAULT_COMPARE_DIR = root_dir / "compare"
 
 
@@ -69,13 +69,13 @@ def build_options() -> dict:
         "preprocessing_steps": list(DEFAULT_PREPROCESSING_STEPS),
         "ignore_black_border": bool(DEFAULT_IGNORE_BLACK_BORDER),
         "tile_source_images": True,
-        "tile_strategy": "grid_3x2_doclayout_v3",
+        "tile_strategy": "grid_3x2",
         "tile_rows": 3,
         "tile_cols": 2,
         "tile_overlap_px": int(DEFAULT_TILE_OVERLAP_PX),
         "tile_doclayout_padding_px": int(DEFAULT_DOCLAYOUT_PADDING_PX),
         "tile_doclayout_threshold": float(DEFAULT_DOCLAYOUT_THRESHOLD),
-        "tile_doclayout_recovery": True,
+        "tile_doclayout_recovery": False,
         # Post-OCR VL configuration
         "post_ocr_vl_enabled": True,
         "post_ocr_vl_backend": "dotsocr",
@@ -94,8 +94,11 @@ def build_options() -> dict:
 
 
 def main():
-    input_path = DEFAULT_INPUT_DIR
-    output_path = DEFAULT_OUTPUT_DIR
+    input_path = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else DEFAULT_INPUT_DIR
+    if input_path == Path(r"C:\Users\blapierre\Documents\PDF Test"):
+        output_path = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
+    else:
+        output_path = DEFAULT_OUTPUT_DIR
     compare_root = DEFAULT_COMPARE_DIR
 
     print("==================================================================")
