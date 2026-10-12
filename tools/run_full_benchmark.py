@@ -137,7 +137,10 @@ def main():
             rel = sub.relative_to(output_path)
             bench_dir = input_path / rel
             if bench_dir.exists() and any(bench_dir.glob("*.xml")):
-                coll_name = str(rel).replace("\\", "/")
+                if output_path.name.lower() == "newspapers":
+                    coll_name = f"Newspapers/{str(rel).replace('\\', '/')}"
+                else:
+                    coll_name = str(rel).replace("\\", "/")
                 print(f"  Comparing collection: {coll_name}...")
                 count = compare_directory_batch(
                     pipeline_dir=sub,

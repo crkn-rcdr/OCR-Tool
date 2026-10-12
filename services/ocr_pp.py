@@ -395,7 +395,10 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 images = sorted(images, key=lambda p: natural_sort_key(p.name))
                 rel_folder = folder.relative_to(input_base)
                 if folder.parent.name.lower() in {"newspapers", "annuals", "heritage"}:
-                    out_dir = output_root / folder.parent.name / folder.name
+                    if output_root.name.lower() == folder.parent.name.lower():
+                        out_dir = output_root / folder.name
+                    else:
+                        out_dir = output_root / folder.parent.name / folder.name
                 else:
                     out_dir = output_base / rel_folder
                 out_dir.mkdir(parents=True, exist_ok=True)
