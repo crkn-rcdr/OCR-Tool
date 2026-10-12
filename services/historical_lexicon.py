@@ -131,10 +131,42 @@ CANADIAN_HISTORICAL_ABBREVIATIONS: Set[str] = {
     "cents", "dol", "dols",
 }
 
+# ---------------------------------------------------------------------------
+# 3b. Historical Chinese Canadian & Overseas Names, Surnames & Commercial Terms
+# ---------------------------------------------------------------------------
+
+CANADIAN_HISTORICAL_NAMES_AND_SURNAMES: Set[str] = {
+    # Chinese romanized surnames and given names (Wade-Giles, Cantonese, Pinyin)
+    # ubiquitous in SFU Chinese Times and British Columbia / Pacific historical archives
+    "chan", "chen", "cheng", "cheung", "chew", "chin", "ching", "chiu",
+    "cho", "chou", "chow", "choy", "chu", "chuan", "chuen", "chun", "chung",
+    "fong", "foo", "fu", "fung",
+    "gan", "gim", "gin", "goon", "guan",
+    "ha", "hang", "hau", "he", "heng", "hing", "ho", "hom", "hon", "hong", "hou", "hsu", "huang", "hui", "hung",
+    "jang", "jeung", "jew", "jim", "jin", "joe", "jong", "jow", "jung",
+    "kam", "kan", "kang", "kao", "kau", "keung", "kin", "king", "ko", "kong", "koo", "kuan", "kuo", "kwan", "kwok", "kwon", "kwong",
+    "lai", "lam", "lau", "law", "lee", "leong", "leung", "li", "liang", "liao", "lien", "lim", "lin", "ling", "liu", "lo", "lock", "lok", "loo", "look", "louie", "low", "lu", "lui", "luk", "lum", "lung",
+    "ma", "mah", "mak", "man", "mar", "mau", "mei", "ming", "mock", "mok", "mon", "moon",
+    "ng", "ngan", "ngo",
+    "ou", "ouyang",
+    "pack", "pak", "pan", "pang", "pei", "peng", "ping", "pong", "poon", "poy", "pun",
+    "quon",
+    "sam", "sang", "seid", "seto", "shek", "shen", "shi", "shin", "shing", "shiu", "shue", "shum", "sing", "siu", "so", "som", "song", "sue", "suen", "sui", "sum", "sun", "sung", "szeto",
+    "tai", "tam", "tan", "tang", "tin", "ting", "to", "tom", "tong", "tsai", "tsang", "tse", "tsim", "tso", "tsoi", "tsou", "tsui", "tu", "tung",
+    "wah", "wai", "wan", "wang", "wei", "wen", "wing", "wo", "won", "wong", "woo", "woon", "wu",
+    "xia", "xiang", "xiao", "xie", "xin", "xing", "xiong", "xu", "xue",
+    "yan", "yang", "yao", "yap", "yau", "ye", "yee", "yeh", "yen", "yeung", "yim", "yin", "ying", "yip", "yiu", "yong", "yow", "yu", "yuan", "yue", "yuen", "yung",
+    "zeng", "zhang", "zhao", "zhen", "zheng", "zhong", "zhou", "zhu", "zhuang",
+    # Commercial & municipal terms appearing in advertisements and directories
+    "co", "ltd", "inc", "corp", "dept", "mgr", "bros", "cie", "assn", "soc",
+    "mfg", "tel", "ave", "boul", "bvd", "blvd", "bldg", "san", "francisco",
+}
+
 ALL_CANADIAN_LEXICON_TOKENS: Set[str] = (
     CANADIAN_HISTORICAL_PLACES
     | CANADIAN_HISTORICAL_TERMS
     | CANADIAN_HISTORICAL_ABBREVIATIONS
+    | CANADIAN_HISTORICAL_NAMES_AND_SURNAMES
 )
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,8 @@ PREPROCESSING_PRESET_TO_STEPS = {
     "deskew_contrast": ["light_clean", "contrast", "deskew"],
 }
 
-DEFAULT_TILE_SOURCE_IMAGES = os.getenv("OCR_TILE_SOURCE_IMAGES", "").lower() in {"1", "true", "yes"}
+DEFAULT_TILE_STRATEGY = os.getenv("OCR_TILE_STRATEGY", "auto")
+DEFAULT_TILE_SOURCE_IMAGES = os.getenv("OCR_TILE_SOURCE_IMAGES", "1").lower() in {"1", "true", "yes"}
 DEFAULT_TILE_OVERLAP_PX = 96
 DEFAULT_DOCLAYOUT_PADDING_PX = 32
 DEFAULT_DOCLAYOUT_THRESHOLD = 0.20

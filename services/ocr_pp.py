@@ -25,6 +25,8 @@ from services.tile_ocr import (
     tile_grid_for_strategy,
     run_tiled_local_ocr,
     supports_tiled_ocr,
+    should_use_3x2_tiling,
+    normalize_tile_strategy,
 )
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
@@ -62,7 +64,12 @@ GPU_RECOVERY_ERROR_MARKERS = (
 
 def describe_tiling(opt):
     """Return a readable description of the active tiling strategy."""
-    strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
+    strategy = normalize_tile_strategy(opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+    if strategy == "none" or not opt.get("tile_source_images", False):
+        return "full-image pass (no tiles)"
+    if strategy == "auto":
+        return "auto-detected 3x2 quadrant tiling"
+
     rows, cols = tile_grid_for_strategy(strategy)
     grid_label = f"{rows}x{cols}"
 
@@ -464,7 +471,12 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                             if recovery_note:
                                 messages.append(f"{img.name} {recovery_note}")
-                            if tile_source_images and supports_tiled_ocr(method, select):
+                            effective_strat = normalize_tile_strategy(folder_opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+                            if effective_strat == "auto":
+                                used_tiling = should_use_3x2_tiling(img)
+                                t_desc = "auto-detected 3x2 quadrant tiling" if used_tiling else "auto-detected full-image pass"
+                                messages.append(f"{img.name} created ({t_desc}) and saved in {out_dir}")
+                            elif tile_source_images and supports_tiled_ocr(method, select):
                                 messages.append(
                                     f"{img.name} created from {describe_tiling(folder_opt)} and saved in {out_dir}"
                                 )
@@ -630,6 +642,23 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None, preprocessed_result
     current_opt = dict(opt)
     if preprocess_metadata and preprocess_metadata.get("table_unclip_ratio"):
         current_opt["text_det_unclip_ratio"] = float(preprocess_metadata["table_unclip_ratio"])
+
+    effective_strat = normalize_tile_strategy(current_opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+    if effective_strat == "auto":
+        use_3x2 = should_use_3x2_tiling(ocr_image_path)
+        if use_3x2:
+            current_opt["tile_source_images"] = True
+            current_opt["tile_strategy"] = "grid_3x2"
+            current_opt["tile_rows"] = 3
+            current_opt["tile_cols"] = 2
+            current_opt["tile_overlap_px"] = int(current_opt.get("tile_overlap_px", DEFAULT_TILE_OVERLAP_PX))
+        else:
+            current_opt["tile_source_images"] = False
+            current_opt["tile_strategy"] = "none"
+            current_opt["tile_rows"] = 1
+            current_opt["tile_cols"] = 1
+    elif effective_strat == "none":
+        current_opt["tile_source_images"] = False
 
     if current_opt.get("tile_source_images", False) and supports_tiled_ocr(current_opt.get("method"), select):
         merged_json = run_tiled_local_ocr(ocr_image_path, current_opt, select=select)

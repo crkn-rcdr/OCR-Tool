@@ -30,12 +30,14 @@ TILE_GRID_SIZE = 3
 DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
 DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
+TILE_STRATEGY_AUTO = "auto"
+TILE_STRATEGY_NONE = "none"
 TILE_STRATEGY_GRID = "grid"
 TILE_STRATEGY_GRID_3X2 = "grid_3x2"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
 TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
 TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3 = "grid_3x2_doclayout_v3"
-DEFAULT_TILE_STRATEGY = TILE_STRATEGY_GRID_DOCLAYOUT_V3
+DEFAULT_TILE_STRATEGY = TILE_STRATEGY_AUTO
 GRID_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_GRID_3X2,
@@ -47,6 +49,8 @@ GRID_DOCLAYOUT_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
 }
 SUPPORTED_TILE_STRATEGIES = {
+    TILE_STRATEGY_AUTO,
+    TILE_STRATEGY_NONE,
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_GRID_3X2,
     TILE_STRATEGY_DOCLAYOUT_V3,
@@ -333,11 +337,33 @@ def resolve_tile_grid(
     return rows, cols
 
 
+def should_use_3x2_tiling(image_path_or_size: tuple[int, int] | Path | str) -> bool:
+    """Auto-detect whether to use 3x2 quadrant tiling based on image scale and format.
+
+    Broadsheet newspapers (>= 18 Megapixels or max dimension >= 4,500px and min dimension >= 3,200px)
+    contain dense multi-column micro-classifieds where 3x2 quadrant tiling yields +5% to +10% word recall.
+    Standard books, annuals, tabloids, and pamphlets (< 18 Megapixels) fit natively inside
+    Paddle's detector limits and run 4-5x faster without tiling.
+    """
+    try:
+        if isinstance(image_path_or_size, (tuple, list)):
+            w, h = int(image_path_or_size[0]), int(image_path_or_size[1])
+        else:
+            with Image.open(image_path_or_size) as img:
+                w, h = img.size
+        megapixels = (w * h) / 1_000_000.0
+        return megapixels >= 18.0 or (max(w, h) >= 4500 and min(w, h) >= 3200)
+    except Exception:
+        return False
+
+
 def tile_grid_for_strategy(strategy: str | None) -> tuple[int, int]:
     """Return the default grid dimensions for a named tile strategy."""
     strategy = normalize_tile_strategy(strategy)
-    if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3}:
+    if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3, TILE_STRATEGY_AUTO}:
         return 3, 2
+    if strategy in {TILE_STRATEGY_NONE, "no_tiles", "notiles"}:
+        return 1, 1
     return DEFAULT_TILE_ROWS, DEFAULT_TILE_COLS
 
 
@@ -349,7 +375,7 @@ def grid_strategy_for_shape(rows: int, cols: int) -> str:
 def resolve_tile_strategy(opt: dict) -> str:
     """Resolve the effective tile strategy from an OCR options dict."""
     strategy = normalize_tile_strategy(opt.get("tile_strategy"))
-    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
+    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_AUTO
 
 
 def normalize_tile_strategy(value: Any) -> str:
@@ -357,6 +383,16 @@ def normalize_tile_strategy(value: Any) -> str:
     strategy = str(value or DEFAULT_TILE_STRATEGY)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
     strategy_aliases = {
+        "auto": TILE_STRATEGY_AUTO,
+        "auto_detect": TILE_STRATEGY_AUTO,
+        "autodetect": TILE_STRATEGY_AUTO,
+        "automatic": TILE_STRATEGY_AUTO,
+        "none": TILE_STRATEGY_NONE,
+        "no_tiles": TILE_STRATEGY_NONE,
+        "notiles": TILE_STRATEGY_NONE,
+        "no_tile": TILE_STRATEGY_NONE,
+        "off": TILE_STRATEGY_NONE,
+        "disabled": TILE_STRATEGY_NONE,
         "pp_doclayoutv3": TILE_STRATEGY_DOCLAYOUT_V3,
         "pp_doclayout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "pp_doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,

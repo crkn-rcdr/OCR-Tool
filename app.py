@@ -47,8 +47,9 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_SOURCE_IMAGES,
+    DEFAULT_TILE_STRATEGY,
 )
-from services.tile_ocr import tile_grid_for_strategy
+from services.tile_ocr import tile_grid_for_strategy, normalize_tile_strategy
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 OCR_METHOD_CHOICES = [
@@ -72,7 +73,16 @@ APP_CSS = """
 """
 
 BEST_PREPROCESSING_STEPS = list(DEFAULT_PREPROCESSING_STEPS)
-BEST_TILE_STRATEGY = "grid_3x2_doclayout_v3"
+BEST_TILE_STRATEGY = "auto"
+
+TILE_STRATEGY_CHOICES = [
+    ("Auto-Detect (3x2 on broadsheets, full-image on books)", "auto"),
+    ("3x2 Grid (Always tile 6 quadrants)", "grid_3x2"),
+    ("No Tiling (Full-image single pass)", "none"),
+    ("3x1 Grid (3 horizontal tiles)", "grid"),
+    ("PP-DocLayout-V3 (Adaptive block crops)", "doclayout_v3"),
+]
+DEFAULT_TILE_STRATEGY_UI = "auto"
 
 PRE_PROCESS_INFO = (
     "Crops detected scan borders, auto-deskews, and flattens uneven lighting. "
@@ -324,6 +334,7 @@ def submit_config(
     pre_process_enabled,
     post_process_enabled,
     post_ocr_backend=None,
+    tile_strategy="auto",
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -343,10 +354,10 @@ def submit_config(
 
     input_path = Path(image_input_folder)
     output_root = Path(output_folder)
-    tile_strategy = BEST_TILE_STRATEGY
-    tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy)
+    effective_tile_strat = normalize_tile_strategy(tile_strategy or BEST_TILE_STRATEGY)
+    tile_rows, tile_cols = tile_grid_for_strategy(effective_tile_strat)
     tile_source_images = (
-        bool(DEFAULT_TILE_SOURCE_IMAGES) if method in PADDLE_OCR_METHODS else False
+        (effective_tile_strat != "none") if method in PADDLE_OCR_METHODS else False
     )
     
     opt = {
@@ -363,7 +374,7 @@ def submit_config(
         "ignore_black_border": bool(pre_process_enabled)
         and bool(DEFAULT_IGNORE_BLACK_BORDER),
         "tile_source_images": tile_source_images,
-        "tile_strategy": tile_strategy,
+        "tile_strategy": effective_tile_strat,
         "tile_rows": tile_rows,
         "tile_cols": tile_cols,
         "tile_overlap_px": int(DEFAULT_TILE_OVERLAP_PX),
@@ -448,6 +459,16 @@ with gr.Blocks() as demo:
             value="auto",
         )
 
+        tile_strategy_dropdown = gr.Dropdown(
+            choices=TILE_STRATEGY_CHOICES,
+            value=DEFAULT_TILE_STRATEGY_UI,
+            label="Image Tiling Strategy",
+            info=(
+                "Auto-Detect (Recommended) automatically applies 3x2 quadrant tiling for large broadsheets (30+ MP) "
+                "to maximize fine-print word recall, and fast full-image pass for standard books/pamphlets."
+            ),
+        )
+
         generate_text_file = gr.Checkbox(
             label="Generate TXT instead of PDF/ALTO.",
             value=False,
@@ -495,6 +516,7 @@ with gr.Blocks() as demo:
         output_folder,
         output_folder_btn,
         language_dropdown,
+        tile_strategy_dropdown,
         method_radio,
         generate_text_file,
         pre_process,
@@ -585,6 +607,7 @@ with gr.Blocks() as demo:
         pre_process,
         post_process,
         post_ocr_backend,
+        tile_strategy_dropdown,
     ],
     outputs=output
     ).then(

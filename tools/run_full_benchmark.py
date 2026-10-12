@@ -69,7 +69,7 @@ def build_options() -> dict:
         "preprocessing_steps": list(DEFAULT_PREPROCESSING_STEPS),
         "ignore_black_border": bool(DEFAULT_IGNORE_BLACK_BORDER),
         "tile_source_images": True,
-        "tile_strategy": "grid_3x2",
+        "tile_strategy": "auto",
         "tile_rows": 3,
         "tile_cols": 2,
         "tile_overlap_px": int(DEFAULT_TILE_OVERLAP_PX),
