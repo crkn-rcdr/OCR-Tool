@@ -79,6 +79,11 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any], lang: Optional[
             dedupe_changed = deduplicate_cross_line_word_boxes(payload)
             changed = changed or dedupe_changed
 
+        # Clamp vertical overlaps between adjacent lines in the same column
+        if len(text_word) > 1 and len(text_word_boxes) > 1:
+            clamp_changed = clamp_adjacent_line_vertical_overlap(payload)
+            changed = changed or clamp_changed
+
     return changed
 
 
@@ -205,6 +210,155 @@ def deduplicate_cross_line_word_boxes(payload: dict[str, Any]) -> bool:
                 payload[key] = [payload[key][i] for i in indices_to_keep]
 
     return changed
+
+
+def clamp_adjacent_line_vertical_overlap(payload: dict[str, Any]) -> bool:
+    """Clamp vertical overlaps between vertically adjacent lines in the same column.
+
+    When OCR detection polygons dilate vertically, adjacent lines within a column
+    can bleed into one another (e.g. Line i bottom overlaps Line i+1 top by several pixels).
+    This function finds adjacent line pairs in the same column, and if they overlap vertically,
+    clamps both lines and their constituent word boxes at the inter-line gap midpoint (Y_mid).
+    Non-overlapping lines and handwriting descenders with natural gaps remain untouched.
+    """
+    rec_texts = payload.get("rec_texts")
+    rec_polys = payload.get("rec_polys")
+    text_word_boxes = payload.get("text_word_boxes")
+
+    if not isinstance(rec_texts, list) or not isinstance(text_word_boxes, list):
+        return False
+
+    n_lines = min(len(rec_texts), len(text_word_boxes))
+    if rec_polys and isinstance(rec_polys, list):
+        n_lines = min(n_lines, len(rec_polys))
+
+    if n_lines < 2:
+        return False
+
+    # Extract bounding rectangle [x1, y1, x2, y2] for each line
+    line_bounds: list[list[float]] = []
+    for li in range(n_lines):
+        rect = None
+        if rec_polys and li < len(rec_polys) and rec_polys[li]:
+            poly = rec_polys[li]
+            if isinstance(poly[0], (int, float)) and len(poly) >= 4:
+                rect = [float(poly[0]), float(poly[1]), float(poly[2]), float(poly[3])]
+            elif isinstance(poly[0], (list, tuple)) and len(poly[0]) >= 2:
+                xs = [float(pt[0]) for pt in poly]
+                ys = [float(pt[1]) for pt in poly]
+                rect = [min(xs), min(ys), max(xs), max(ys)]
+        if rect is None:
+            # Fall back to word boxes
+            w_boxes = text_word_boxes[li] if li < len(text_word_boxes) else []
+            valid_wbs = [b for b in w_boxes if isinstance(b, (list, tuple)) and len(b) >= 4]
+            if valid_wbs:
+                xs = [float(b[0]) for b in valid_wbs] + [float(b[2]) for b in valid_wbs]
+                ys = [float(b[1]) for b in valid_wbs] + [float(b[3]) for b in valid_wbs]
+                rect = [min(xs), min(ys), max(xs), max(ys)]
+        if rect is None:
+            rect = [0.0, 0.0, 0.0, 0.0]
+        line_bounds.append(rect)
+
+    centers_y = [(b[1] + b[3]) / 2.0 for b in line_bounds]
+    sorted_indices = sorted(range(n_lines), key=lambda idx: centers_y[idx])
+
+    overall_changed = False
+
+    # Perform up to 3 passes to handle multi-line cascade adjustments
+    for _ in range(3):
+        pass_changed = False
+        for k in range(len(sorted_indices)):
+            idx_b = sorted_indices[k]
+            b = line_bounds[idx_b]
+            cy_b = (b[1] + b[3]) / 2.0
+            h_b = b[3] - b[1]
+
+            # Find immediate predecessor above in same vertical column
+            closest_a = None
+            for p in range(k - 1, -1, -1):
+                idx_a = sorted_indices[p]
+                a = line_bounds[idx_a]
+                cy_a = (a[1] + a[3]) / 2.0
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                if (cy_b - cy_a) < 0.35 * min_h:
+                    continue  # side-by-side fragments on same row
+
+                x_ov = min(a[2], b[2]) - max(a[0], b[0])
+                min_w = min(a[2] - a[0], b[2] - b[0])
+
+                if min_w > 0 and (x_ov / min_w >= 0.20 or x_ov >= 24.0):
+                    closest_a = idx_a
+                    break
+
+            if closest_a is not None:
+                a = line_bounds[closest_a]
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                # Check if bottom of A overlaps top of B
+                if a[3] > b[1]:
+                    ov = a[3] - b[1]
+                    # Only clamp adjacent line dilation bleed (not full overlaps/nested ads)
+                    if 0 < ov <= 0.70 * min_h:
+                        y_mid = round((a[3] + b[1]) / 2.0, 1)
+
+                        # Safeguard: ensure lines maintain minimal height (>= 4px)
+                        clamp_bottom_a = max(a[1] + 4.0, min(a[3], y_mid))
+                        clamp_top_b = min(b[3] - 4.0, max(b[1], y_mid))
+
+                        if a[3] != clamp_bottom_a or b[1] != clamp_top_b:
+                            # Apply to line bounds
+                            a[3] = clamp_bottom_a
+                            b[1] = clamp_top_b
+
+                            # Apply to line A's word boxes (clamp bottom edge to clamp_bottom_a)
+                            wbs_a = text_word_boxes[closest_a]
+                            if isinstance(wbs_a, list):
+                                for wb in wbs_a:
+                                    if isinstance(wb, list) and len(wb) >= 4:
+                                        if wb[3] > clamp_bottom_a:
+                                            wb[3] = max(wb[1] + 1.0, clamp_bottom_a)
+
+                            # Apply to line B's word boxes (clamp top edge to clamp_top_b)
+                            wbs_b = text_word_boxes[idx_b]
+                            if isinstance(wbs_b, list):
+                                for wb in wbs_b:
+                                    if isinstance(wb, list) and len(wb) >= 4:
+                                        if wb[1] < clamp_top_b:
+                                            wb[1] = min(wb[3] - 1.0, clamp_top_b)
+
+                            # Apply to rec_polys if present
+                            for target_idx, clamp_y, is_bottom in [
+                                (closest_a, clamp_bottom_a, True),
+                                (idx_b, clamp_top_b, False),
+                            ]:
+                                for poly_key in ("rec_polys", "dt_polys", "rec_boxes"):
+                                    poly_list = payload.get(poly_key)
+                                    if isinstance(poly_list, list) and target_idx < len(poly_list):
+                                        poly_val = poly_list[target_idx]
+                                        if isinstance(poly_val, list):
+                                            if len(poly_val) == 4 and all(isinstance(v, (int, float)) for v in poly_val):
+                                                if is_bottom and poly_val[3] > clamp_y:
+                                                    poly_val[3] = clamp_y
+                                                elif not is_bottom and poly_val[1] < clamp_y:
+                                                    poly_val[1] = clamp_y
+                                            elif len(poly_val) >= 3 and isinstance(poly_val[0], list):
+                                                for pt in poly_val:
+                                                    if isinstance(pt, list) and len(pt) >= 2:
+                                                        if is_bottom and pt[1] > clamp_y:
+                                                            pt[1] = clamp_y
+                                                        elif not is_bottom and pt[1] < clamp_y:
+                                                            pt[1] = clamp_y
+
+                            pass_changed = True
+                            overall_changed = True
+
+        if not pass_changed:
+            break
+
+    return overall_changed
 
 
 def reconcile_cross_line_hyphens(text_word: list[Any], text_word_boxes: list[Any], lang: Optional[str] = None) -> bool:

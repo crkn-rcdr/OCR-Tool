@@ -334,6 +334,118 @@ def extract_line_level_items(source_payload):
     return items
 
 
+def clamp_adjacent_alto_lines(lines: list[dict]) -> bool:
+    """Enforce an inter-line boundary check so vertically adjacent lines in the same column never overlap.
+
+    When Line A (above) and Line B (below) in the same column overlap vertically (dilation bleed),
+    clamps their bounding boxes and all child String items at the midpoint of their inter-line overlap.
+    Preserves natural gaps and handwriting descenders when lines do not collide.
+    """
+    if not lines or len(lines) < 2:
+        return False
+
+    line_rects = []
+    for ln in lines:
+        x1, y1, x2, y2 = box_to_rect(ln["box"])
+        line_rects.append([x1, y1, x2, y2])
+
+    centers_y = [(r[1] + r[3]) / 2.0 for r in line_rects]
+    sorted_indices = sorted(range(len(lines)), key=lambda idx: centers_y[idx])
+
+    changed = False
+
+    for _ in range(3):
+        pass_changed = False
+        for k in range(len(sorted_indices)):
+            idx_b = sorted_indices[k]
+            b = line_rects[idx_b]
+            cy_b = (b[1] + b[3]) / 2.0
+            h_b = b[3] - b[1]
+
+            # Find closest predecessor above in same vertical column
+            closest_a = None
+            for p in range(k - 1, -1, -1):
+                idx_a = sorted_indices[p]
+                a = line_rects[idx_a]
+                cy_a = (a[1] + a[3]) / 2.0
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                if (cy_b - cy_a) < 0.35 * min_h:
+                    continue  # side-by-side fragments on same row
+
+                x_ov = min(a[2], b[2]) - max(a[0], b[0])
+                min_w = min(a[2] - a[0], b[2] - b[0])
+
+                if min_w > 0 and (x_ov / min_w >= 0.20 or x_ov >= 24.0):
+                    closest_a = idx_a
+                    break
+
+            if closest_a is not None:
+                a = line_rects[closest_a]
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                if a[3] > b[1]:
+                    ov = a[3] - b[1]
+                    if 0 < ov <= 0.70 * min_h:
+                        y_mid = round((a[3] + b[1]) / 2.0, 1)
+                        clamp_bottom_a = max(a[1] + 4.0, min(a[3], y_mid))
+                        clamp_top_b = min(b[3] - 4.0, max(b[1], y_mid))
+
+                        if a[3] != clamp_bottom_a or b[1] != clamp_top_b:
+                            a[3] = clamp_bottom_a
+                            b[1] = clamp_top_b
+
+                            # Update Line A
+                            ln_a = lines[closest_a]
+                            ln_a_box = ln_a["box"]
+                            if isinstance(ln_a_box, list) and len(ln_a_box) == 4 and all(isinstance(v, (int, float)) for v in ln_a_box):
+                                ln_a_box[3] = clamp_bottom_a
+                            elif isinstance(ln_a_box, list) and len(ln_a_box) >= 3 and isinstance(ln_a_box[0], list):
+                                for pt in ln_a_box:
+                                    if len(pt) >= 2 and pt[1] > clamp_bottom_a:
+                                        pt[1] = clamp_bottom_a
+
+                            for s in ln_a.get("strings", []):
+                                s_box = s.get("box")
+                                if isinstance(s_box, list) and len(s_box) == 4 and all(isinstance(v, (int, float)) for v in s_box):
+                                    if s_box[3] > clamp_bottom_a:
+                                        s_box[3] = max(s_box[1] + 1.0, clamp_bottom_a)
+                                elif isinstance(s_box, list) and len(s_box) >= 3 and isinstance(s_box[0], list):
+                                    for pt in s_box:
+                                        if len(pt) >= 2 and pt[1] > clamp_bottom_a:
+                                            pt[1] = clamp_bottom_a
+
+                            # Update Line B
+                            ln_b = lines[idx_b]
+                            ln_b_box = ln_b["box"]
+                            if isinstance(ln_b_box, list) and len(ln_b_box) == 4 and all(isinstance(v, (int, float)) for v in ln_b_box):
+                                ln_b_box[1] = clamp_top_b
+                            elif isinstance(ln_b_box, list) and len(ln_b_box) >= 3 and isinstance(ln_b_box[0], list):
+                                for pt in ln_b_box:
+                                    if len(pt) >= 2 and pt[1] < clamp_top_b:
+                                        pt[1] = clamp_top_b
+
+                            for s in ln_b.get("strings", []):
+                                s_box = s.get("box")
+                                if isinstance(s_box, list) and len(s_box) == 4 and all(isinstance(v, (int, float)) for v in s_box):
+                                    if s_box[1] < clamp_top_b:
+                                        s_box[1] = min(s_box[3] - 1.0, clamp_top_b)
+                                elif isinstance(s_box, list) and len(s_box) >= 3 and isinstance(s_box[0], list):
+                                    for pt in s_box:
+                                        if len(pt) >= 2 and pt[1] < clamp_top_b:
+                                            pt[1] = clamp_top_b
+
+                            pass_changed = True
+                            changed = True
+
+        if not pass_changed:
+            break
+
+    return changed
+
+
 def build_alto_lines(data, lang: str | None = None):
     """Build normalized ALTO-style lines from the available OCR structures."""
     if "result" in data:
@@ -353,6 +465,7 @@ def build_alto_lines(data, lang: str | None = None):
 
     word_lines = extract_word_level_lines(source_payload, lang=lang)
     if word_lines:
+        clamp_adjacent_alto_lines(word_lines)
         return word_lines
 
     # If we don't have explicit word-level arrays, try to build lines
@@ -438,6 +551,7 @@ def build_alto_lines(data, lang: str | None = None):
         return sort_lines_reading_order(lines)
 
     lines = group_words_into_lines(items)
+    clamp_adjacent_alto_lines(lines)
     return lines
 
 
@@ -1363,6 +1477,10 @@ def generate_alto(
             blocks = [{"box": [0, 0, width, height], "lines": lines}]
 
     annotate_block_hyphenation(blocks)
+
+    # Ensure adjacent lines within each text block do not vertically collide
+    for block in blocks:
+        clamp_adjacent_alto_lines(block.get("lines", []))
 
     # Create a TextBlock element for each block and add TextLine/String children.
     for block_index, block in enumerate(blocks, start=1):
