@@ -1149,10 +1149,10 @@ def generate_interactive_html(
   .controls select, .controls input[type="range"] {{ vertical-align: middle; }}
   .slider-group {{ display: flex; align-items: center; gap: 6px; }}
   
-  .main-container {{ display: flex; flex: 1; overflow: hidden; position: relative; }}
-  .viewers-container {{ display: flex; flex: 1; overflow: hidden; position: relative; }}
+  .main-container {{ display: flex; flex: 1; overflow: hidden; position: relative; min-height: 0; }}
+  .viewers-container {{ display: flex; flex: 1; overflow: hidden; position: relative; min-height: 0; }}
   
-  .panel {{ flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; }}
+  .panel {{ flex: 1; height: 100%; position: relative; overflow: hidden; border-right: 1px solid #30363d; background: #121519; cursor: grab; min-height: 0; }}
   .panel:active {{ cursor: grabbing; }}
   .panel-header {{ position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; pointer-events: none; }}
   
@@ -2209,17 +2209,28 @@ def generate_interactive_html(
   attachPanZoom(panelRight);
 
   function fitToView() {{
-    const panelW = panelLeft.clientWidth || 800;
-    const panelH = panelLeft.clientHeight || 900;
-    scale = Math.min(panelW / pageWidth, panelH / pageHeight);
+    const rect = panelLeft.getBoundingClientRect();
+    const panelW = (rect && rect.width > 0) ? rect.width : (panelLeft.clientWidth || 800);
+    const panelH = (rect && rect.height > 0) ? rect.height : (panelLeft.clientHeight || 700);
+
+    // Safe margins (24px) so neither height nor width is ever clipped by window edges
+    const padX = 24;
+    const padY = 24;
+    const availW = Math.max(50, panelW - padX);
+    const availH = Math.max(50, panelH - padY);
+
+    scale = Math.min(availW / pageWidth, availH / pageHeight);
     panX = (panelW - pageWidth * scale) / 2;
-    panY = 10;
+    panY = (panelH - pageHeight * scale) / 2;
     updateTransform();
   }}
 
-  // Initial fit on load
+  // Initial fit on load - starts out fully zoomed out
   fitToView();
+  window.addEventListener("load", fitToView);
   window.addEventListener("resize", fitToView);
+  setTimeout(fitToView, 50);
+  setTimeout(fitToView, 250);
 
   document.getElementById("btnResetView").onclick = () => {{
     fitToView();
@@ -2280,11 +2291,9 @@ def generate_interactive_html(
   chkBgImage.onchange = updateBgImageStyle;
   rngOpacity.oninput = updateBgImageStyle;
 
-  // Initialize summary stats on load and auto-select first discrepancy if available
+  // Initialize summary stats on load and stay fully zoomed out (no auto-zoom into boxes)
   recalculateSummaryStats();
-  if (cards.length > 0) {{
-    selectWord(cards[0].idx);
-  }}
+  fitToView();
 </script>
 </body>
 </html>
