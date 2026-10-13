@@ -2461,11 +2461,102 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   .filter-select {{ background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }}
   
   /* Table */
-  .table-responsive {{ overflow-x: auto; }}
+  .table-responsive {{ overflow-x: auto; min-height: 480px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left; }}
-  th {{ background: #0d1117; color: #8b949e; font-weight: 600; padding: 10px 14px; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; white-space: nowrap; }}
+  th {{ background: #0d1117; color: #8b949e; font-weight: 600; padding: 10px 14px; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; white-space: nowrap; position: relative; }}
   th:hover {{ color: #58a6ff; }}
   .sort-icon {{ font-size: 0.75rem; margin-left: 4px; color: #8b949e; }}
+  
+  /* Info Tooltip */
+  .info-icon {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: help;
+    position: relative;
+    vertical-align: middle;
+    margin-left: 5px;
+    transition: all 0.15s ease;
+  }}
+  .info-icon:hover, .info-icon:focus {{
+    background: #388bfd;
+    color: #ffffff;
+    border-color: #58a6ff;
+    z-index: 1200;
+  }}
+  .info-tooltip {{
+    visibility: hidden;
+    opacity: 0;
+    width: 290px;
+    background: #161b22;
+    color: #c9d1d9;
+    text-align: left;
+    border: 1px solid #30363d;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.7);
+    border-radius: 8px;
+    padding: 10px 14px;
+    position: absolute;
+    z-index: 1300;
+    top: 140%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.77rem;
+    font-weight: 400;
+    line-height: 1.45;
+    white-space: normal;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+  }}
+  .info-icon.right-align .info-tooltip {{
+    left: auto;
+    right: 0;
+    transform: none;
+  }}
+  .info-icon.left-align .info-tooltip {{
+    left: 0;
+    transform: none;
+  }}
+  .info-icon:hover .info-tooltip,
+  .info-icon:focus .info-tooltip {{
+    visibility: visible;
+    opacity: 1;
+  }}
+  .info-tooltip-title {{
+    color: #58a6ff;
+    font-size: 0.83rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: block;
+  }}
+  .info-tooltip-body {{
+    color: #c9d1d9;
+    margin-bottom: 6px;
+  }}
+  .info-tooltip-highlight {{
+    background: rgba(110, 118, 129, 0.15);
+    border-radius: 4px;
+    padding: 6px 8px;
+    border-left: 2px solid #58a6ff;
+    color: #8b949e;
+    font-size: 0.72rem;
+  }}
+  .info-tooltip-highlight strong {{
+    color: #f0f6fc;
+  }}
+  .info-tooltip-highlight em {{
+    color: #79c0ff;
+    font-style: normal;
+    font-weight: 600;
+  }}
+
   td {{ padding: 10px 14px; border-bottom: 1px solid #21262d; }}
   tr:hover td {{ background: #1c2128; }}
   
@@ -2549,27 +2640,82 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
       <div class="kpi-sub">Across {len(collections_map)} collections</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Word Extraction Recall</div>
+      <div class="kpi-label">
+        Word Extraction Recall
+        <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+          <span class="info-tooltip">
+            <span class="info-tooltip-title">Word Extraction Recall</span>
+            <div class="info-tooltip-body">Total word tokens recognized by PaddleOCR vs. ABBYY FineReader across all evaluated pages.</div>
+            <div class="info-tooltip-highlight">
+              <strong>Recall Advantage:</strong> Positive percentage reflects additional text captured by Paddle (e.g. fine captions, stamps, margin notes).
+            </div>
+          </span>
+        </span>
+      </div>
       <div class="kpi-value blue">{total_pipeline_words:,}</div>
       <div class="kpi-sub">ABBYY: {total_benchmark_words:,} ({kpi_w_sign}{kpi_w_pct:.1f}% recall)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Clean Concordance</div>
+      <div class="kpi-label">
+        Clean Concordance
+        <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+          <span class="info-tooltip">
+            <span class="info-tooltip-title">Clean Text Concordance</span>
+            <div class="info-tooltip-body">Percentage of spatially matched words where Paddle and ABBYY produced identical text (normalized for casing and punctuation).</div>
+            <div class="info-tooltip-highlight">
+              <strong>Consensus Metric:</strong> High concordance (&ge; 90%) signifies strong agreement between both independent OCR engines.
+            </div>
+          </span>
+        </span>
+      </div>
       <div class="kpi-value green">{avg_clean_concordance:.1f}%</div>
       <div class="kpi-sub">Exact: {avg_exact_concordance:.1f}%</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Paddle QA Win Rate</div>
+      <div class="kpi-label">
+        Paddle QA Win Rate
+        <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+          <span class="info-tooltip">
+            <span class="info-tooltip-title">Automated Lexical Arbitration</span>
+            <div class="info-tooltip-body">When engines disagree on a word, checks each candidate against standard English and French dictionaries.</div>
+            <div class="info-tooltip-highlight">
+              <strong>Accuracy Indicator:</strong> A win rate &gt; 50% indicates Paddle produced more valid dictionary words on disputed historical tokens.
+            </div>
+          </span>
+        </span>
+      </div>
       <div class="kpi-value green">{overall_p_win_rate:.1f}%</div>
       <div class="kpi-sub">{total_p_lex_wins:,} wins vs {total_b_lex_wins:,}</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Spatial Alignment</div>
+      <div class="kpi-label">
+        Spatial Alignment
+        <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+          <span class="info-tooltip">
+            <span class="info-tooltip-title">Spatial Alignment (Box Overlap)</span>
+            <div class="info-tooltip-body">Percentage of word bounding boxes that physically overlap in coordinate space (IoU &ge; 0.25).</div>
+            <div class="info-tooltip-highlight">
+              <strong>Spatial vs Concordance:</strong> Spatial Alignment checks <em>where</em> words are on the page, regardless of character agreement. Concordance checks <em>what</em> the words say.
+            </div>
+          </span>
+        </span>
+      </div>
       <div class="kpi-value purple">{avg_spatial_match:.1f}%</div>
       <div class="kpi-sub">{total_matched_boxes:,} matched boxes</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Mean Bounding IoU</div>
+      <div class="kpi-label">
+        Mean Bounding IoU
+        <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
+          <span class="info-tooltip">
+            <span class="info-tooltip-title">Mean Bounding Box IoU</span>
+            <div class="info-tooltip-body">Average Intersection over Union (IoU) of matched word bounding boxes (1.0 = perfect geometric overlap).</div>
+            <div class="info-tooltip-highlight">
+              <strong>Coordinate Drift:</strong> dX and dY show horizontal and vertical center drift between the two OCR coordinate grids.
+            </div>
+          </span>
+        </span>
+      </div>
       <div class="kpi-value">{avg_iou:.3f}</div>
       <div class="kpi-sub">dX: {avg_dx:+.4f} | dY: {avg_dy:+.4f}</div>
     </div>
@@ -2637,14 +2783,110 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
       <table id="pageTable">
         <thead>
           <tr>
-            <th onclick="sortTable('name')">Page / Item Name <span class="sort-icon" id="sort-name">▲</span></th>
-            <th onclick="sortTable('collection')">Collection <span class="sort-icon" id="sort-collection">⇕</span></th>
-            <th onclick="sortTable('word_diff')" title="Sort by total added words (Paddle minus ABBYY delta)">Words: P / B (Delta) <span class="sort-icon" id="sort-word_diff">⇕</span></th>
-            <th onclick="sortTable('match_rate')">Spatial Align <span class="sort-icon" id="sort-match_rate">⇕</span></th>
-            <th onclick="sortTable('clean_conc')">Concordance <span class="sort-icon" id="sort-clean_conc">⇕</span></th>
-            <th onclick="sortTable('win_rate')">Paddle QA Win <span class="sort-icon" id="sort-win_rate">⇕</span></th>
-            <th onclick="sortTable('diffs')">Diffs <span class="sort-icon" id="sort-diffs">⇕</span></th>
-            <th>Action</th>
+            <th onclick="sortTable('name')">
+              Page / Item Name
+              <span class="info-icon left-align" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Page / Item Name</span>
+                  <div class="info-tooltip-body">Unique digital archive page stem. Click "Open Viewer &rarr;" in the Action column to inspect bounding boxes and side-by-side diffs.</div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-name">▲</span>
+            </th>
+            <th onclick="sortTable('collection')">
+              Collection
+              <span class="info-icon left-align" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Collection</span>
+                  <div class="info-tooltip-body">Publication category or archive sub-collection (e.g. Newspapers, Annuals, Heritage Microfilms). Filterable via dropdown.</div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-collection">⇕</span>
+            </th>
+            <th onclick="sortTable('word_diff')" title="Sort by total added words (Paddle minus ABBYY delta)">
+              Words: P / B (Delta)
+              <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Total Words &amp; Delta</span>
+                  <div class="info-tooltip-body"><strong>P</strong> = Pipeline (Paddle) words, <strong>B</strong> = Benchmark (ABBYY) words, and <strong>(Delta)</strong> = P &minus; B.</div>
+                  <div class="info-tooltip-highlight">
+                    &bull; <em>Positive (+):</em> Paddle extracted more words (higher recall in fine print/captions).<br>
+                    &bull; <em>Negative (&minus;):</em> ABBYY extracted more words.<br>
+                    Click column header to sort by lowest delta (Paddle fewer) or highest.
+                  </div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-word_diff">⇕</span>
+            </th>
+            <th onclick="sortTable('match_rate')">
+              Spatial Align
+              <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Spatial Alignment (Box Overlap)</span>
+                  <div class="info-tooltip-body">Measures whether Paddle and ABBYY detected words in the <em>same physical coordinate positions</em> on the page, regardless of character recognition.</div>
+                  <div class="info-tooltip-highlight">
+                    <strong>Spatial vs Concordance:</strong><br>
+                    &bull; <strong>Spatial Alignment</strong> tests <em>WHERE</em> words are located (box overlap IoU &ge; 0.25).<br>
+                    &bull; <strong>Concordance</strong> tests <em>WHAT</em> the text characters say.<br>
+                    Both can find a box at the exact same coordinates (100% spatial align) even if they read different words.
+                  </div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-match_rate">⇕</span>
+            </th>
+            <th onclick="sortTable('clean_conc')">
+              Concordance
+              <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Clean Text Concordance</span>
+                  <div class="info-tooltip-body">Character-level agreement between Paddle and ABBYY for spatially matched words (normalized for punctuation and case).</div>
+                  <div class="info-tooltip-highlight">
+                    &bull; <em>&ge; 90% (Green):</em> High consensus; both engines agree.<br>
+                    &bull; <em>80% &ndash; 90% (Yellow):</em> Moderate agreement.<br>
+                    &bull; <em>&lt; 80% (Red):</em> Divergence; manual review suggested.<br>
+                    <strong>Key Point:</strong> Tests <em>text character correctness</em> rather than box coordinates.
+                  </div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-clean_conc">⇕</span>
+            </th>
+            <th onclick="sortTable('win_rate')">
+              Paddle QA Win
+              <span class="info-icon" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Paddle QA Win Rate</span>
+                  <div class="info-tooltip-body">Automated dictionary validation on disputed words. Tests candidate words against English and French lexicons.</div>
+                  <div class="info-tooltip-highlight">
+                    &bull; <em>Paddle Win:</em> Paddle produced a valid real word while ABBYY produced OCR noise.<br>
+                    &bull; <em>ABBYY Win:</em> ABBYY produced a valid real word while Paddle failed.<br>
+                    Win Rate = Paddle Wins &divide; (Paddle Wins + ABBYY Wins).
+                  </div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-win_rate">⇕</span>
+            </th>
+            <th onclick="sortTable('diffs')">
+              Diffs
+              <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Discrepancy Count</span>
+                  <div class="info-tooltip-body">Total number of word boxes where Paddle and ABBYY disagree on the text characters.</div>
+                  <div class="info-tooltip-highlight">
+                    Pages with high diff counts usually have degraded historical print or tight newspaper columns that benefit from side-by-side inspection.
+                  </div>
+                </span>
+              </span>
+              <span class="sort-icon" id="sort-diffs">⇕</span>
+            </th>
+            <th>
+              Action
+              <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
+                <span class="info-tooltip">
+                  <span class="info-tooltip-title">Interactive Viewer</span>
+                  <div class="info-tooltip-body">Opens the synchronized interactive side-by-side zoomable visual viewer for in-depth inspection and manual adjudication.</div>
+                </span>
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody id="pageTableBody"></tbody>
