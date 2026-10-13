@@ -84,6 +84,206 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any], lang: Optional[
             clamp_changed = clamp_adjacent_line_vertical_overlap(payload)
             changed = changed or clamp_changed
 
+        # Expand word boxes horizontally to recover truncated character widths and line bounds
+        if len(text_word) > 0 and len(text_word_boxes) > 0:
+            expand_changed = expand_word_boxes_horizontal(payload)
+            changed = changed or expand_changed
+
+    return changed
+
+
+def expand_word_boxes_horizontal(payload: dict[str, Any]) -> bool:
+    """Expand word bounding boxes horizontally to recover truncated character widths.
+
+    PaddleX computes word boxes from CTC timestep columns (`word_col`).
+    Because CTC neural responses peak at character centers rather than character
+    ink boundaries:
+    1. The first word in a line is indented into its first letter, starting after the line start.
+    2. The last word in a line ends before its last letter finishes.
+    3. Intermediate words are truncated horizontally on both sides into artificial gaps.
+
+    This function:
+    - Anchors the first word to the text line's detected left boundary (`line_min_x`).
+    - Anchors the last word to the text line's detected right boundary (`line_max_x`).
+    - For single-word lines, spans the full detected line width (`[line_min_x, line_max_x]`).
+    - For multi-word lines, expands the outer half-character widths into the inter-word gap
+      while preserving a clean minimum inter-word spacing (>= 35% of the original gap).
+    - Supports vertical text lines by expanding along the vertical axis instead.
+    """
+    rec_polys = payload.get("rec_polys")
+    text_word = payload.get("text_word")
+    text_word_boxes = payload.get("text_word_boxes")
+
+    if not isinstance(text_word, list) or not isinstance(text_word_boxes, list):
+        return False
+
+    n_lines = min(len(text_word), len(text_word_boxes))
+    if rec_polys and isinstance(rec_polys, list):
+        n_lines = min(n_lines, len(rec_polys))
+
+    if n_lines == 0:
+        return False
+
+    changed = False
+
+    for li in range(n_lines):
+        words = text_word[li]
+        boxes = text_word_boxes[li]
+
+        if not isinstance(words, list) or not isinstance(boxes, list) or len(words) != len(boxes) or not words:
+            continue
+
+        # Extract line polygon bounds
+        line_rect = None
+        if rec_polys and li < len(rec_polys) and rec_polys[li]:
+            poly = rec_polys[li]
+            if isinstance(poly[0], (int, float)) and len(poly) >= 4:
+                line_rect = (float(poly[0]), float(poly[1]), float(poly[2]), float(poly[3]))
+            elif isinstance(poly[0], (list, tuple)) and len(poly[0]) >= 2:
+                xs = [float(pt[0]) for pt in poly]
+                ys = [float(pt[1]) for pt in poly]
+                line_rect = (min(xs), min(ys), max(xs), max(ys))
+
+        # Check if line is vertical
+        is_vert = False
+        if line_rect:
+            w_line = line_rect[2] - line_rect[0]
+            h_line = line_rect[3] - line_rect[1]
+            if h_line > w_line * 1.5:
+                is_vert = True
+
+        if not is_vert:
+            # Horizontal line processing
+            valid_boxes = True
+            for b in boxes:
+                if not isinstance(b, list) or len(b) < 4:
+                    valid_boxes = False
+                    break
+            if not valid_boxes:
+                continue
+
+            idx_order = sorted(range(len(boxes)), key=lambda idx: boxes[idx][0])
+
+            if line_rect:
+                line_min_x, _, line_max_x, _ = line_rect
+                line_w = max(1.0, line_max_x - line_min_x)
+
+                # 1. Expand first word to line_min_x
+                first_i = idx_order[0]
+                if boxes[first_i][0] > line_min_x:
+                    boxes[first_i][0] = line_min_x
+                    changed = True
+
+                # 2. Expand last word to line_max_x
+                last_i = idx_order[-1]
+                if boxes[last_i][2] < line_max_x:
+                    boxes[last_i][2] = line_max_x
+                    changed = True
+            else:
+                line_w = max(1.0, boxes[idx_order[-1]][2] - boxes[idx_order[0]][0])
+
+            k = len(words)
+            total_chars = sum(max(1, len(str(w))) for w in words)
+            avg_char_w = line_w / max(1, total_chars + (k - 1))
+
+            # 3. Expand intermediate words into inter-word gaps
+            for step in range(len(idx_order) - 1):
+                i_curr = idx_order[step]
+                i_next = idx_order[step + 1]
+
+                x_curr_end = boxes[i_curr][2]
+                x_next_start = boxes[i_next][0]
+                gap = x_next_start - x_curr_end
+
+                if gap <= 1.0:
+                    continue
+
+                w_curr_str = str(words[i_curr])
+                w_next_str = str(words[i_next])
+
+                char_w_curr = (boxes[i_curr][2] - boxes[i_curr][0]) / max(1, len(w_curr_str))
+                char_w_next = (boxes[i_next][2] - boxes[i_next][0]) / max(1, len(w_next_str))
+
+                eff_curr = min(avg_char_w * 1.5, max(char_w_curr, avg_char_w * 0.7))
+                eff_next = min(avg_char_w * 1.5, max(char_w_next, avg_char_w * 0.7))
+
+                target_r = 0.38 * eff_curr
+                target_l = 0.38 * eff_next
+
+                max_exp = 0.65 * gap
+                if target_r + target_l > max_exp:
+                    scale = max_exp / (target_r + target_l)
+                    target_r *= scale
+                    target_l *= scale
+
+                if target_r > 0.05 or target_l > 0.05:
+                    boxes[i_curr][2] += target_r
+                    boxes[i_next][0] -= target_l
+                    changed = True
+
+        else:
+            # Vertical line processing
+            valid_boxes = True
+            for b in boxes:
+                if not isinstance(b, list) or len(b) < 4:
+                    valid_boxes = False
+                    break
+            if not valid_boxes:
+                continue
+
+            idx_order = sorted(range(len(boxes)), key=lambda idx: boxes[idx][1])
+
+            if line_rect:
+                _, line_min_y, _, line_max_y = line_rect
+                line_h = max(1.0, line_max_y - line_min_y)
+
+                first_i = idx_order[0]
+                if boxes[first_i][1] > line_min_y:
+                    boxes[first_i][1] = line_min_y
+                    changed = True
+
+                last_i = idx_order[-1]
+                if boxes[last_i][3] < line_max_y:
+                    boxes[last_i][3] = line_max_y
+                    changed = True
+            else:
+                line_h = max(1.0, boxes[idx_order[-1]][3] - boxes[idx_order[0]][1])
+
+            k = len(words)
+            total_chars = sum(max(1, len(str(w))) for w in words)
+            avg_char_h = line_h / max(1, total_chars + (k - 1))
+
+            for step in range(len(idx_order) - 1):
+                i_curr = idx_order[step]
+                i_next = idx_order[step + 1]
+
+                y_curr_end = boxes[i_curr][3]
+                y_next_start = boxes[i_next][1]
+                gap = y_next_start - y_curr_end
+
+                if gap <= 1.0:
+                    continue
+
+                char_h_curr = (boxes[i_curr][3] - boxes[i_curr][1]) / max(1, len(str(words[i_curr])))
+                char_h_next = (boxes[i_next][3] - boxes[i_next][1]) / max(1, len(str(words[i_next])))
+
+                eff_curr = min(avg_char_h * 1.5, max(char_h_curr, avg_char_h * 0.7))
+                eff_next = min(avg_char_h * 1.5, max(char_h_next, avg_char_h * 0.7))
+
+                target_d = 0.38 * eff_curr
+                target_u = 0.38 * eff_next
+
+                max_exp = 0.65 * gap
+                if target_d + target_u > max_exp:
+                    scale = max_exp / (target_d + target_u)
+                    target_d *= scale
+                    target_u *= scale
+
+                if target_d > 0.05 or target_u > 0.05:
+                    boxes[i_curr][3] += target_d
+                    boxes[i_next][1] -= target_u
+                    changed = True
+
     return changed
 
 

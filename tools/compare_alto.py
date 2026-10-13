@@ -651,7 +651,7 @@ def deduplicate_page_boxes(boxes: List[AltoBox], iou_thresh: float = 0.70) -> Li
                 is_dup = False
                 if iou_val >= iou_thresh:
                     is_dup = True
-                elif (iou_val >= 0.50 or cdist <= 0.02) and clean1 == clean2 and clean1 != "":
+                elif (iou_val >= 0.40 or (cdist <= 0.01 and iou_val >= 0.20)) and clean1 == clean2 and clean1 != "":
                     is_dup = True
                 elif (
                     abs(b1.norm_x - b2.norm_x) < 0.005
