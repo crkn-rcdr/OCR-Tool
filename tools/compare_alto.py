@@ -835,8 +835,21 @@ def generate_interactive_html(
     collection_name: str = ""
 ) -> Path:
     """Generates a standalone, rich HTML viewer with synchronized panning, zoom,
-    navigation breadcrumbs, lexical QA badges, and clickable word concordance cards.
+    navigation breadcrumbs, lexical QA badges, clickable word concordance cards,
+    and interactive winner adjudication for paired word entries.
     """
+    # Check for any existing adjudications file on disk
+    adj_file = output_html_path.parent / f"{result.item_name}_adjudications.json"
+    initial_manual_adjudications = {}
+    if adj_file.exists():
+        try:
+            adj_data = json.loads(adj_file.read_text(encoding="utf-8"))
+            for entry in adj_data.get("overrides", []):
+                if "idx" in entry and "adjudicated_verdict" in entry:
+                    initial_manual_adjudications[int(entry["idx"])] = entry["adjudicated_verdict"]
+        except Exception:
+            pass
+
     # Index discrepancies by normalized x/y to attach lexical adjudication
     disc_map = {}
     for d in result.discrepancies:
@@ -844,7 +857,7 @@ def generate_interactive_html(
         disc_map[key] = d
 
     matched_data = []
-    for m in result.matched_pairs:
+    for idx_pair, m in enumerate(result.matched_pairs):
         key = (round(m.pipeline_box.norm_x, 4), round(m.pipeline_box.norm_y, 4))
         d_info = disc_map.get(key)
         
@@ -852,7 +865,10 @@ def generate_interactive_html(
         p_val = d_info["pipeline_valid"] if d_info else is_lexically_valid_word(m.pipeline_box.content)
         b_val = d_info["benchmark_valid"] if d_info else is_lexically_valid_word(m.benchmark_box.content)
 
+        man_verd = initial_manual_adjudications.get(idx_pair)
+
         matched_data.append({
+            "idx": idx_pair,
             "p_text": m.pipeline_box.content,
             "b_text": m.benchmark_box.content,
             "p_box": [m.pipeline_box.norm_x, m.pipeline_box.norm_y, m.pipeline_box.norm_w, m.pipeline_box.norm_h],
@@ -865,7 +881,8 @@ def generate_interactive_html(
             "b_conf": m.benchmark_box.confidence,
             "p_valid": p_val,
             "b_valid": b_val,
-            "lexical_verdict": verdict
+            "lexical_verdict": verdict,
+            "manual_verdict": man_verd
         })
 
     p_only_data = [
@@ -941,7 +958,7 @@ def generate_interactive_html(
   rect.b-only {{ fill: rgba(239, 68, 68, 0.35); stroke: #ef4444; stroke-width: 1.5; cursor: pointer; }}
   rect:hover {{ fill-opacity: 0.7; stroke-width: 2.5; }}
   
-  /* Selected / Highlighted active word - completely transparent interior (fill: none) */
+  /* Selected / Highlighted active word - completely transparent interior */
   rect.highlighted {{
     stroke: #00ffff !important;
     stroke-width: 4 !important;
@@ -950,8 +967,198 @@ def generate_interactive_html(
     vector-effect: non-scaling-stroke;
   }}
   
-  .sidebar {{ width: 360px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }}
+  .sidebar {{ width: 370px; background: #1f242c; border-left: 1px solid #30363d; display: flex; flex-direction: column; }}
   .sidebar-header {{ padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #30363d; font-size: 0.88rem; background: #24292e; display: flex; justify-content: space-between; align-items: center; }}
+  
+  /* Pinned Inspector / Adjudicator Panel */
+  .inspector-panel {{
+    background: #161b22;
+    border-bottom: 2px solid #30363d;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: all 0.2s ease;
+  }}
+  .inspector-panel.empty {{
+    padding: 14px 12px;
+    color: #8b949e;
+    font-size: 0.78rem;
+    text-align: center;
+    background: #181c24;
+  }}
+  .inspector-hint {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: #8b949e;
+  }}
+  .inspector-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.78rem;
+    color: #c9d1d9;
+  }}
+  .inspector-title {{
+    font-weight: 600;
+    color: #58a6ff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }}
+  .inspector-metrics {{
+    color: #8b949e;
+    font-size: 0.74rem;
+  }}
+  .inspector-nav {{
+    display: flex;
+    gap: 4px;
+  }}
+  .inspector-nav button {{
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    padding: 1px 7px;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }}
+  .inspector-nav button:hover {{
+    background: #30363d;
+    color: #58a6ff;
+  }}
+  
+  .inspector-compare {{
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+  }}
+  .insp-row {{
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    word-break: break-all;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: background 0.1s ease;
+  }}
+  .insp-row:hover {{
+    background: rgba(255, 255, 255, 0.05);
+  }}
+  .insp-engine {{
+    font-size: 0.72rem;
+    font-weight: 600;
+    min-width: 74px;
+  }}
+  .insp-row.p-row .insp-engine {{ color: #f59e0b; }}
+  .insp-row.p-row .insp-text {{ color: #f0f6fc; font-weight: 600; }}
+  .insp-row.b-row .insp-engine {{ color: #ef4444; }}
+  .insp-row.b-row .insp-text {{ color: #f0f6fc; font-weight: 600; }}
+  
+  .inspector-prompt {{
+    font-size: 0.74rem;
+    color: #8b949e;
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }}
+  .inspector-actions {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }}
+  .adj-btn {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: 5px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }}
+  .adj-btn .adj-key {{
+    font-size: 0.65rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #8b949e;
+  }}
+  .adj-btn.btn-paddle {{ color: #3fb950; }}
+  .adj-btn.btn-paddle:hover, .adj-btn.btn-paddle.active {{
+    background: rgba(35, 134, 54, 0.35);
+    border-color: #3fb950;
+    box-shadow: 0 0 6px rgba(63, 185, 80, 0.4);
+  }}
+  .adj-btn.btn-paddle.active .adj-key {{
+    background: #238636;
+    color: #fff;
+  }}
+  .adj-btn.btn-abbyy {{ color: #f85149; }}
+  .adj-btn.btn-abbyy:hover, .adj-btn.btn-abbyy.active {{
+    background: rgba(218, 54, 51, 0.35);
+    border-color: #f85149;
+    box-shadow: 0 0 6px rgba(248, 81, 73, 0.4);
+  }}
+  .adj-btn.btn-abbyy.active .adj-key {{
+    background: #da3633;
+    color: #fff;
+  }}
+  .adj-btn.btn-both {{ color: #58a6ff; }}
+  .adj-btn.btn-both:hover, .adj-btn.btn-both.active {{
+    background: rgba(56, 139, 253, 0.3);
+    border-color: #58a6ff;
+    box-shadow: 0 0 6px rgba(88, 166, 255, 0.4);
+  }}
+  .adj-btn.btn-both.active .adj-key {{
+    background: #1f6feb;
+    color: #fff;
+  }}
+  .adj-btn.btn-neither {{ color: #8b949e; }}
+  .adj-btn.btn-neither:hover, .adj-btn.btn-neither.active {{
+    background: rgba(110, 118, 129, 0.3);
+    border-color: #8b949e;
+    box-shadow: 0 0 6px rgba(139, 148, 158, 0.4);
+  }}
+  .adj-btn.btn-neither.active .adj-key {{
+    background: #484f58;
+    color: #fff;
+  }}
+  .inspector-footer {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.72rem;
+    color: #8b949e;
+    padding-top: 2px;
+  }}
+  .insp-status.manual {{
+    color: #58a6ff;
+    font-weight: 600;
+  }}
+  .btn-reset-word {{
+    background: none;
+    border: none;
+    color: #8b949e;
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0;
+  }}
+  .btn-reset-word:hover {{ color: #f85149; }}
+
   .sidebar-filter-bar {{ padding: 8px 12px; background: #181b20; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }}
   .filter-dropdown {{ background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; width: 100%; }}
   .sidebar-list {{ flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }}
@@ -967,11 +1174,42 @@ def generate_interactive_html(
   .card-diff {{ font-weight: bold; color: #f59e0b; word-break: break-all; }}
   .card-label {{ color: #9ca3af; font-size: 0.75rem; }}
   
+  .card-quick-actions {{
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid #374151;
+  }}
+  .chip-btn {{
+    flex: 1;
+    padding: 2px 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    border-radius: 3px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.1s ease;
+  }}
+  .chip-btn.chip-p {{ color: #3fb950; }}
+  .chip-btn.chip-p:hover, .chip-btn.chip-p.active {{ background: rgba(35, 134, 54, 0.35); border-color: #3fb950; }}
+  .chip-btn.chip-b {{ color: #f85149; }}
+  .chip-btn.chip-b:hover, .chip-btn.chip-b.active {{ background: rgba(218, 54, 51, 0.35); border-color: #f85149; }}
+  .chip-btn.chip-both {{ color: #58a6ff; }}
+  .chip-btn.chip-both:hover, .chip-btn.chip-both.active {{ background: rgba(56, 139, 253, 0.25); border-color: #58a6ff; }}
+  .chip-btn.chip-neither {{ color: #8b949e; }}
+  .chip-btn.chip-neither:hover, .chip-btn.chip-neither.active {{ background: rgba(110, 118, 129, 0.25); border-color: #8b949e; }}
+  
   .verdict-tag {{ font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; }}
   .verdict-tag.paddle-win {{ background: rgba(35, 134, 54, 0.25); color: #3fb950; border: 1px solid #238636; }}
   .verdict-tag.abbyy-win {{ background: rgba(218, 54, 51, 0.25); color: #f85149; border: 1px solid #da3633; }}
   .verdict-tag.both-valid {{ background: rgba(56, 139, 253, 0.2); color: #58a6ff; border: 1px solid #1f6feb; }}
   .verdict-tag.neither-valid {{ background: rgba(110, 118, 129, 0.2); color: #8b949e; border: 1px solid #484f58; }}
+  .verdict-tag.manual {{
+    box-shadow: 0 0 5px rgba(88, 166, 255, 0.6);
+  }}
   
   .legend {{ display: flex; gap: 12px; font-size: 0.78rem; align-items: center; }}
   .legend-item {{ display: flex; align-items: center; gap: 5px; }}
@@ -995,9 +1233,9 @@ def generate_interactive_html(
   <div class="badges">
     <div class="badge {recall_badge_cls}" title="Recognized words: Pipeline {p_words} vs Benchmark {b_words} ({sign}{delta_pct}% recall advantage)">Words: {p_words} P / {b_words} B ({sign}{delta_pct}%)</div>
     <div class="badge success" title="Text Concordance (Cleaned)">Concordance: {result.clean_text_concordance_rate}%</div>
-    <div class="badge {lexical_badge_cls}" title="Paddle {result.paddle_lexical_wins} wins vs ABBYY {result.abbyy_lexical_wins} wins on disputed words">Paddle QA Win Rate: {result.lexical_win_rate_pct}%</div>
+    <div class="badge {lexical_badge_cls}" id="badgeQaWinRate" title="Paddle {result.paddle_lexical_wins} wins vs ABBYY {result.abbyy_lexical_wins} wins on disputed words">Paddle QA Win Rate: {result.lexical_win_rate_pct}%</div>
     <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: {result.spatial_match_rate_pipeline}%</div>
-    <div class="badge warning" title="Discrepant words count">Diffs: {len(result.discrepancies)}</div>
+    <div class="badge warning" id="badgeTopDiffs" title="Discrepant words count">Diffs: {len(result.discrepancies)}</div>
   </div>
 </header>
 
@@ -1052,17 +1290,29 @@ def generate_interactive_html(
     <div class="sidebar-header">
       <div>
         <span>Discrepancies</span>
-        <span class="badge warning" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">{len(result.discrepancies)}</span>
+        <span class="badge warning" id="badgeSidebarDiffCount" style="font-size:0.75rem;padding:2px 6px;margin-left:4px;">{len(result.discrepancies)}</span>
+        <span id="lblManualCount" style="display:none;font-size:0.72rem;color:#58a6ff;font-weight:600;margin-left:6px;"></span>
       </div>
-      <span style="font-size:0.75rem;color:#9ca3af;">Click card to inspect</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button id="btnExportAdjudications" title="Export manual adjudications to JSON" style="background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:2px 8px;border-radius:4px;font-size:0.72rem;cursor:pointer;font-weight:600;">Export JSON</button>
+      </div>
     </div>
+
+    <!-- Pinned Adjudication Inspector -->
+    <div id="inspectorPanel" class="inspector-panel empty">
+      <div class="inspector-hint">
+        <span style="font-size:1.1rem;">🔍</span>
+        <span>Click any word box or card to select winner</span>
+      </div>
+    </div>
+
     <div class="sidebar-filter-bar">
       <select id="selFilterDiscrepancies" class="filter-dropdown">
-        <option value="all">All Discrepancies ({len(result.discrepancies)})</option>
-        <option value="PADDLE_WIN">Paddle Wins ({result.paddle_lexical_wins})</option>
-        <option value="ABBYY_WIN">ABBYY Wins ({result.abbyy_lexical_wins})</option>
-        <option value="BOTH_VALID">Both Valid ({result.both_valid_count})</option>
-        <option value="NEITHER_VALID">Neither Valid ({result.neither_valid_count})</option>
+        <option value="all" id="optFilterAll">All Discrepancies ({len(result.discrepancies)})</option>
+        <option value="PADDLE_WIN" id="optFilterPaddle">Paddle Wins ({result.paddle_lexical_wins})</option>
+        <option value="ABBYY_WIN" id="optFilterAbbyy">ABBYY Wins ({result.abbyy_lexical_wins})</option>
+        <option value="BOTH_VALID" id="optFilterBoth">Both Valid ({result.both_valid_count})</option>
+        <option value="NEITHER_VALID" id="optFilterNeither">Neither Valid ({result.neither_valid_count})</option>
       </select>
     </div>
     <div class="sidebar-list" id="sidebarList"></div>
@@ -1075,6 +1325,9 @@ def generate_interactive_html(
   const bOnlyData = {json.dumps(b_only_data)};
   const pageWidth = {result.pipeline_page.width};
   const pageHeight = {result.pipeline_page.height};
+  const itemName = "{result.item_name}";
+  const collectionName = "{coll_disp}";
+  const STORAGE_KEY = `crkn_adj_${{itemName}}`;
 
   // SVGs & Sidebar
   const svgLeft = document.getElementById("svgLeft");
@@ -1082,7 +1335,66 @@ def generate_interactive_html(
   const sidebarList = document.getElementById("sidebarList");
   const cards = [];
 
+  function escapeHtml(str) {{
+    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }}
+
+  function formatVerdictLabel(v) {{
+    if (v === "PADDLE_WIN") return "Paddle Win";
+    if (v === "ABBYY_WIN") return "ABBYY Win";
+    if (v === "BOTH_VALID") return "Both Valid";
+    if (v === "NEITHER_VALID") return "Neither";
+    return v || "None";
+  }}
+
+  function buildVerdictBadgeHTML(v, isManual) {{
+    const star = isManual ? ' <span title="Manually Adjudicated">★</span>' : '';
+    const manCls = isManual ? ' manual' : '';
+    if (v === "PADDLE_WIN") {{
+      return `<span class="verdict-tag paddle-win${{manCls}}">Paddle Win${{star}}</span>`;
+    }} else if (v === "ABBYY_WIN") {{
+      return `<span class="verdict-tag abbyy-win${{manCls}}">ABBYY Win${{star}}</span>`;
+    }} else if (v === "BOTH_VALID") {{
+      return `<span class="verdict-tag both-valid${{manCls}}">Both Valid${{star}}</span>`;
+    }} else if (v === "NEITHER_VALID") {{
+      return `<span class="verdict-tag neither-valid${{manCls}}">Neither${{star}}</span>`;
+    }}
+    return '';
+  }}
+
+  function loadAdjudicationsFromStorage() {{
+    try {{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const map = JSON.parse(raw);
+      Object.keys(map).forEach(idxStr => {{
+        const idx = parseInt(idxStr, 10);
+        if (matchedData[idx]) {{
+          matchedData[idx].manual_verdict = map[idxStr];
+        }}
+      }});
+    }} catch (e) {{
+      console.warn("Failed to load adjudications from localStorage:", e);
+    }}
+  }}
+
+  function saveAdjudicationsToStorage() {{
+    const map = {{}};
+    matchedData.forEach((m, idx) => {{
+      if (m.manual_verdict) {{
+        map[idx] = m.manual_verdict;
+      }}
+    }});
+    try {{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    }} catch (e) {{
+      console.warn("localStorage quota exceeded or unavailable:", e);
+    }}
+  }}
+
   // Populate SVGs and Sidebar
+  loadAdjudicationsFromStorage();
+
   matchedData.forEach((m, idx) => {{
     const isAgree = m.clean_match;
     const cls = isAgree ? "agree" : "discrepancy";
@@ -1118,51 +1430,57 @@ def generate_interactive_html(
       const card = document.createElement("div");
       card.className = "card";
       card.id = "card-" + idx;
-      card.dataset.verdict = m.lexical_verdict || "NONE";
-
-      let verdictBadge = "";
-      if (m.lexical_verdict === "PADDLE_WIN") {{
-        verdictBadge = '<span class="verdict-tag paddle-win">Paddle Win</span>';
-      }} else if (m.lexical_verdict === "ABBYY_WIN") {{
-        verdictBadge = '<span class="verdict-tag abbyy-win">ABBYY Win</span>';
-      }} else if (m.lexical_verdict === "BOTH_VALID") {{
-        verdictBadge = '<span class="verdict-tag both-valid">Both Valid</span>';
-      }} else if (m.lexical_verdict === "NEITHER_VALID") {{
-        verdictBadge = '<span class="verdict-tag neither-valid">Neither</span>';
-      }}
+      const effVerdict = m.manual_verdict || m.lexical_verdict || "NONE";
+      card.dataset.verdict = effVerdict;
 
       const pCheck = m.p_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
       const bCheck = m.b_valid ? ' <span style="color:#3fb950;font-size:0.75rem;">✓</span>' : '';
 
       card.innerHTML = `
         <div class="card-row">
-          <span class="card-diff">P: ${{escapeHtml(m.p_text)}}${{pCheck}}</span>
-          ${{verdictBadge}}
+          <span class="card-diff" id="card-p-${{idx}}" title="Click to award Paddle Win">P: ${{escapeHtml(m.p_text)}}${{pCheck}}</span>
+          <span id="badge-container-${{idx}}">${{buildVerdictBadgeHTML(effVerdict, Boolean(m.manual_verdict))}}</span>
         </div>
         <div class="card-row">
-          <span style="color:#ef4444;">B: ${{escapeHtml(m.b_text)}}${{bCheck}}</span>
+          <span style="color:#ef4444;" id="card-b-${{idx}}" title="Click to award ABBYY Win">B: ${{escapeHtml(m.b_text)}}${{bCheck}}</span>
           <span class="card-label">IoU: ${{m.iou}} | Sim: ${{Math.round(m.sim * 100)}}%</span>
+        </div>
+        <div class="card-quick-actions" id="chips-${{idx}}">
+          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award Paddle Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
+          <button class="chip-btn chip-b ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" title="Award ABBYY Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'ABBYY_WIN');">B</button>
+          <button class="chip-btn chip-both ${{effVerdict === 'BOTH_VALID' ? 'active' : ''}}" title="Mark Both Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'BOTH_VALID');">Both</button>
+          <button class="chip-btn chip-neither ${{effVerdict === 'NEITHER_VALID' ? 'active' : ''}}" title="Mark Neither Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'NEITHER_VALID');">None</button>
         </div>
       `;
       card.onclick = () => selectWord(idx);
+      
+      // Row clicks also set winner directly
+      const pSpan = card.querySelector(`#card-p-${{idx}}`);
+      if (pSpan) pSpan.onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "PADDLE_WIN"); }};
+      const bSpan = card.querySelector(`#card-b-${{idx}}`);
+      if (bSpan) bSpan.onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "ABBYY_WIN"); }};
+
       sidebarList.appendChild(card);
-      cards.push({{ idx: idx, el: card, verdict: m.lexical_verdict }});
+      cards.push({{ idx: idx, el: card }});
     }}
   }});
 
   // Discrepancy filter
   const selFilter = document.getElementById("selFilterDiscrepancies");
   if (selFilter) {{
-    selFilter.onchange = (e) => {{
-      const val = e.target.value;
-      cards.forEach(c => {{
-        if (val === "all" || c.verdict === val) {{
-          c.el.style.display = "";
-        }} else {{
-          c.el.style.display = "none";
-        }}
-      }});
-    }};
+    selFilter.onchange = applyCurrentFilter;
+  }}
+
+  function applyCurrentFilter() {{
+    const val = selFilter ? selFilter.value : "all";
+    cards.forEach(c => {{
+      const eff = c.el.dataset.verdict;
+      if (val === "all" || eff === val) {{
+        c.el.style.display = "";
+      }} else {{
+        c.el.style.display = "none";
+      }}
+    }});
   }}
 
   // Pipeline-only boxes
@@ -1173,7 +1491,9 @@ def generate_interactive_html(
     rect.setAttribute("width", p.box[2] * pageWidth);
     rect.setAttribute("height", p.box[3] * pageHeight);
     rect.setAttribute("class", "p-only");
-    rect.innerHTML = `<title>Pipeline Only: "${{p.text}}"</title>`;
+    rect.id = "p-only-rect-" + pIdx;
+    rect.innerHTML = `<title>Pipeline Only: "${{escapeHtml(p.text)}}"</title>`;
+    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("P", pIdx); }};
     svgLeft.appendChild(rect);
   }});
 
@@ -1185,19 +1505,16 @@ def generate_interactive_html(
     rect.setAttribute("width", b.box[2] * pageWidth);
     rect.setAttribute("height", b.box[3] * pageHeight);
     rect.setAttribute("class", "b-only");
-    rect.innerHTML = `<title>ABBYY Only: "${{b.text}}"</title>`;
+    rect.id = "b-only-rect-" + bIdx;
+    rect.innerHTML = `<title>ABBYY Only: "${{escapeHtml(b.text)}}"</title>`;
+    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("B", bIdx); }};
     svgRight.appendChild(rect);
   }});
-
-  function escapeHtml(str) {{
-    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }}
 
   // Active word selection and highlighting
   let activeIdx = null;
 
   function selectWord(idx) {{
-    // Clear previously highlighted elements
     document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
     document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
 
@@ -1218,9 +1535,355 @@ def generate_interactive_html(
       cardEl.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
     }}
 
-    // Zoom and center into the box
+    renderInspector(idx);
     zoomToNormBox(m.p_box);
   }}
+
+  function selectSingleBox(engine, idx) {{
+    document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
+    document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+    activeIdx = null;
+
+    if (engine === "P") {{
+      const p = pOnlyData[idx];
+      if (!p) return;
+      const rect = document.getElementById("p-only-rect-" + idx);
+      if (rect) rect.classList.add("highlighted");
+      renderInspectorEngineOnly("P", p.text);
+      zoomToNormBox(p.box);
+    }} else {{
+      const b = bOnlyData[idx];
+      if (!b) return;
+      const rect = document.getElementById("b-only-rect-" + idx);
+      if (rect) rect.classList.add("highlighted");
+      renderInspectorEngineOnly("B", b.text);
+      zoomToNormBox(b.box);
+    }}
+  }}
+
+  function renderInspector(idx) {{
+    const insp = document.getElementById("inspectorPanel");
+    if (!insp) return;
+
+    const m = matchedData[idx];
+    if (!m) {{
+      insp.className = "inspector-panel empty";
+      insp.innerHTML = `
+        <div class="inspector-hint">
+          <span style="font-size:1.1rem;">🔍</span>
+          <span>Click any word box or card to select winner</span>
+        </div>
+      `;
+      return;
+    }}
+
+    insp.className = "inspector-panel";
+    const effVerdict = m.manual_verdict || m.lexical_verdict || (m.clean_match ? "BOTH_VALID" : "NEITHER_VALID");
+    const isManual = Boolean(m.manual_verdict);
+
+    const pCheck = m.p_valid ? ' <span style="color:#3fb950;">✓</span>' : '';
+    const bCheck = m.b_valid ? ' <span style="color:#3fb950;">✓</span>' : '';
+
+    insp.innerHTML = `
+      <div class="inspector-header">
+        <div class="inspector-title">
+          <span>Adjudicate Winner</span>
+          <span class="inspector-metrics">IoU: ${{m.iou}} | Sim: ${{Math.round(m.sim * 100)}}%</span>
+        </div>
+        <div class="inspector-nav">
+          <button id="btnPrevDisc" title="Previous Word (Key: K / Up)">◀</button>
+          <button id="btnNextDisc" title="Next Word (Key: J / Down)">▶</button>
+        </div>
+      </div>
+      <div class="inspector-compare">
+        <div class="insp-row p-row" id="inspRowP" title="Click to award win to Paddle">
+          <span class="insp-engine">Pipeline (P):</span>
+          <span class="insp-text">${{escapeHtml(m.p_text)}}${{pCheck}}</span>
+        </div>
+        <div class="insp-row b-row" id="inspRowB" title="Click to award win to ABBYY">
+          <span class="insp-engine">ABBYY (B):</span>
+          <span class="insp-text">${{escapeHtml(m.b_text)}}${{bCheck}}</span>
+        </div>
+      </div>
+      <div class="inspector-prompt">
+        <span>Who won this word?</span>
+        <span class="insp-status ${{isManual ? 'manual' : ''}}">
+          ${{isManual ? '★ Manual: ' + formatVerdictLabel(effVerdict) : 'Auto: ' + formatVerdictLabel(effVerdict)}}
+        </span>
+      </div>
+      <div class="inspector-actions">
+        <button class="adj-btn btn-paddle ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" id="btnAdjPaddle" title="Award win to Paddle (Key: P or 1)">
+          <span>Paddle Win</span> <span class="adj-key">P</span>
+        </button>
+        <button class="adj-btn btn-abbyy ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" id="btnAdjAbbyy" title="Award win to ABBYY (Key: B or A or 2)">
+          <span>ABBYY Win</span> <span class="adj-key">B</span>
+        </button>
+        <button class="adj-btn btn-both ${{effVerdict === 'BOTH_VALID' ? 'active' : ''}}" id="btnAdjBoth" title="Both variants are valid (Key: T or 3)">
+          <span>Both Valid</span> <span class="adj-key">T</span>
+        </button>
+        <button class="adj-btn btn-neither ${{effVerdict === 'NEITHER_VALID' ? 'active' : ''}}" id="btnAdjNeither" title="Neither recognized properly (Key: N or 4)">
+          <span>Neither</span> <span class="adj-key">N</span>
+        </button>
+      </div>
+      <div class="inspector-footer">
+        <span>Keys: P / B / T / N | J / K: Next/Prev</span>
+        ${{isManual ? `<button class="btn-reset-word" id="btnResetWord" title="Revert to auto dictionary decision">Reset to Auto</button>` : ''}}
+      </div>
+    `;
+
+    document.getElementById("btnAdjPaddle").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "PADDLE_WIN"); }};
+    document.getElementById("btnAdjAbbyy").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "ABBYY_WIN"); }};
+    document.getElementById("btnAdjBoth").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "BOTH_VALID"); }};
+    document.getElementById("btnAdjNeither").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "NEITHER_VALID"); }};
+
+    document.getElementById("inspRowP").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "PADDLE_WIN"); }};
+    document.getElementById("inspRowB").onclick = (e) => {{ e.stopPropagation(); setWinner(idx, "ABBYY_WIN"); }};
+
+    const btnReset = document.getElementById("btnResetWord");
+    if (btnReset) {{
+      btnReset.onclick = (e) => {{ e.stopPropagation(); resetWinner(idx); }};
+    }}
+
+    const btnPrev = document.getElementById("btnPrevDisc");
+    if (btnPrev) {{
+      btnPrev.onclick = (e) => {{ e.stopPropagation(); navigateDiscrepancy(-1); }};
+    }}
+    const btnNext = document.getElementById("btnNextDisc");
+    if (btnNext) {{
+      btnNext.onclick = (e) => {{ e.stopPropagation(); navigateDiscrepancy(1); }};
+    }}
+  }}
+
+  function renderInspectorEngineOnly(engine, boxText) {{
+    const insp = document.getElementById("inspectorPanel");
+    if (!insp) return;
+
+    insp.className = "inspector-panel";
+    const engineName = engine === "P" ? "Pipeline (PaddleOCR)" : "Benchmark (ABBYY)";
+    const color = engine === "P" ? "#38bdf8" : "#ef4444";
+
+    insp.innerHTML = `
+      <div class="inspector-header">
+        <div class="inspector-title" style="color:${{color}};">
+          <span>${{engineName}} Only</span>
+        </div>
+      </div>
+      <div class="inspector-compare">
+        <div class="insp-row">
+          <span class="insp-engine" style="color:${{color}};">${{engine === 'P' ? 'Pipeline:' : 'ABBYY:'}}</span>
+          <span class="insp-text">${{escapeHtml(boxText)}}</span>
+        </div>
+      </div>
+      <div class="inspector-footer" style="padding-top:6px;font-style:italic;">
+        <span>Only one engine recognized this box (no rival box to adjudicate).</span>
+      </div>
+    `;
+  }}
+
+  function setWinner(idx, winner) {{
+    const m = matchedData[idx];
+    if (!m) return;
+
+    m.manual_verdict = winner;
+    saveAdjudicationsToStorage();
+    updateCardUI(idx);
+    renderInspector(idx);
+    recalculateSummaryStats();
+    applyCurrentFilter();
+  }}
+
+  function resetWinner(idx) {{
+    const m = matchedData[idx];
+    if (!m) return;
+
+    delete m.manual_verdict;
+    saveAdjudicationsToStorage();
+    updateCardUI(idx);
+    renderInspector(idx);
+    recalculateSummaryStats();
+    applyCurrentFilter();
+  }}
+
+  function updateCardUI(idx) {{
+    const m = matchedData[idx];
+    if (!m) return;
+
+    const effVerdict = m.manual_verdict || m.lexical_verdict || (m.clean_match ? "BOTH_VALID" : "NEITHER_VALID");
+    const isManual = Boolean(m.manual_verdict);
+
+    let cardEl = document.getElementById("card-" + idx);
+    if (!cardEl && m.manual_verdict && m.manual_verdict !== "BOTH_VALID") {{
+      // Dynamically add card if user marked an agreed word as a discrepancy
+      cardEl = document.createElement("div");
+      cardEl.className = "card";
+      cardEl.id = "card-" + idx;
+      sidebarList.prepend(cardEl);
+      cards.unshift({{ idx: idx, el: cardEl }});
+      cardEl.onclick = () => selectWord(idx);
+    }}
+
+    if (cardEl) {{
+      cardEl.dataset.verdict = effVerdict;
+      const badgeContainer = document.getElementById("badge-container-" + idx);
+      if (badgeContainer) {{
+        badgeContainer.innerHTML = buildVerdictBadgeHTML(effVerdict, isManual);
+      }}
+      const chips = document.getElementById("chips-" + idx);
+      if (chips) {{
+        chips.innerHTML = `
+          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award Paddle Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
+          <button class="chip-btn chip-b ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" title="Award ABBYY Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'ABBYY_WIN');">B</button>
+          <button class="chip-btn chip-both ${{effVerdict === 'BOTH_VALID' ? 'active' : ''}}" title="Mark Both Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'BOTH_VALID');">Both</button>
+          <button class="chip-btn chip-neither ${{effVerdict === 'NEITHER_VALID' ? 'active' : ''}}" title="Mark Neither Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'NEITHER_VALID');">None</button>
+        `;
+      }}
+    }}
+  }}
+
+  function recalculateSummaryStats() {{
+    let pWins = 0;
+    let bWins = 0;
+    let bothValid = 0;
+    let neitherValid = 0;
+    let totalDiscrepancies = 0;
+    let manualCount = 0;
+
+    matchedData.forEach(m => {{
+      const isDisc = !m.clean_match || (m.manual_verdict && m.manual_verdict !== "BOTH_VALID");
+      const eff = m.manual_verdict || m.lexical_verdict || (m.clean_match ? "BOTH_VALID" : "NEITHER_VALID");
+      if (m.manual_verdict) manualCount++;
+
+      if (isDisc) {{
+        totalDiscrepancies++;
+        if (eff === "PADDLE_WIN") pWins++;
+        else if (eff === "ABBYY_WIN") bWins++;
+        else if (eff === "BOTH_VALID") bothValid++;
+        else if (eff === "NEITHER_VALID") neitherValid++;
+      }}
+    }});
+
+    const decisive = pWins + bWins;
+    const winRate = decisive > 0 ? ((pWins / decisive) * 100).toFixed(2) : "50.00";
+
+    const badgeQa = document.getElementById("badgeQaWinRate");
+    if (badgeQa) {{
+      badgeQa.textContent = `Paddle QA Win Rate: ${{winRate}}%`;
+      badgeQa.title = `Paddle ${{pWins}} wins vs ABBYY ${{bWins}} wins on disputed words (${{manualCount}} manual reviews)`;
+      badgeQa.className = `badge ${{parseFloat(winRate) >= 50.0 ? "qa-win" : "qa-loss"}}`;
+    }}
+
+    const badgeDiffs = document.getElementById("badgeSidebarDiffCount");
+    if (badgeDiffs) badgeDiffs.textContent = totalDiscrepancies;
+    const badgeTopDiffs = document.getElementById("badgeTopDiffs");
+    if (badgeTopDiffs) badgeTopDiffs.textContent = `Diffs: ${{totalDiscrepancies}}`;
+
+    const optAll = document.getElementById("optFilterAll");
+    const optP = document.getElementById("optFilterPaddle");
+    const optB = document.getElementById("optFilterAbbyy");
+    const optBoth = document.getElementById("optFilterBoth");
+    const optNeither = document.getElementById("optFilterNeither");
+    if (optAll) optAll.textContent = `All Discrepancies (${{totalDiscrepancies}})`;
+    if (optP) optP.textContent = `Paddle Wins (${{pWins}})`;
+    if (optB) optB.textContent = `ABBYY Wins (${{bWins}})`;
+    if (optBoth) optBoth.textContent = `Both Valid (${{bothValid}})`;
+    if (optNeither) optNeither.textContent = `Neither Valid (${{neitherValid}})`;
+
+    const lblManual = document.getElementById("lblManualCount");
+    if (lblManual) {{
+      if (manualCount > 0) {{
+        lblManual.textContent = `(${{manualCount}} manual)`;
+        lblManual.style.display = "inline";
+      }} else {{
+        lblManual.style.display = "none";
+      }}
+    }}
+  }}
+
+  function navigateDiscrepancy(direction) {{
+    if (cards.length === 0) return;
+    let currCardIndex = cards.findIndex(c => c.idx === activeIdx);
+    if (currCardIndex === -1) {{
+      currCardIndex = direction > 0 ? -1 : cards.length;
+    }}
+    let nextCardIndex = currCardIndex + direction;
+    if (nextCardIndex >= 0 && nextCardIndex < cards.length) {{
+      selectWord(cards[nextCardIndex].idx);
+    }}
+  }}
+
+  function exportAdjudications() {{
+    const overrides = [];
+    matchedData.forEach((m, idx) => {{
+      if (m.manual_verdict) {{
+        overrides.push({{
+          idx: idx,
+          p_text: m.p_text,
+          b_text: m.b_text,
+          p_box: m.p_box,
+          b_box: m.b_box,
+          iou: m.iou,
+          original_verdict: m.lexical_verdict,
+          adjudicated_verdict: m.manual_verdict,
+        }});
+      }}
+    }});
+
+    const payload = {{
+      item_name: itemName,
+      collection: collectionName,
+      exported_at: new Date().toISOString(),
+      total_manual_adjudications: overrides.length,
+      overrides: overrides,
+    }};
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {{ type: "application/json" }});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${{itemName}}_adjudications.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }}
+
+  const btnExport = document.getElementById("btnExportAdjudications");
+  if (btnExport) {{
+    btnExport.onclick = exportAdjudications;
+  }}
+
+  // Keyboard navigation and winner selection
+  window.addEventListener("keydown", (e) => {{
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+
+    if (activeIdx !== null && matchedData[activeIdx]) {{
+      const key = e.key.toUpperCase();
+      if (key === "P" || key === "1") {{
+        e.preventDefault();
+        setWinner(activeIdx, "PADDLE_WIN");
+      }} else if (key === "B" || key === "A" || key === "2") {{
+        e.preventDefault();
+        setWinner(activeIdx, "ABBYY_WIN");
+      }} else if (key === "T" || key === "3") {{
+        e.preventDefault();
+        setWinner(activeIdx, "BOTH_VALID");
+      }} else if (key === "N" || key === "4") {{
+        e.preventDefault();
+        setWinner(activeIdx, "NEITHER_VALID");
+      }} else if (key === "R") {{
+        e.preventDefault();
+        resetWinner(activeIdx);
+      }}
+    }}
+
+    if (e.key === "ArrowDown" || e.key.toUpperCase() === "J") {{
+      e.preventDefault();
+      navigateDiscrepancy(1);
+    }} else if (e.key === "ArrowUp" || e.key.toUpperCase() === "K") {{
+      e.preventDefault();
+      navigateDiscrepancy(-1);
+    }}
+  }});
 
   // Synchronized Pan & Zoom
   let scale = 1.0;
@@ -1295,10 +1958,20 @@ def generate_interactive_html(
     fitToView();
     document.querySelectorAll(".highlighted").forEach(el => el.classList.remove("highlighted"));
     document.querySelectorAll(".card.active").forEach(el => el.classList.remove("active"));
+    activeIdx = null;
+    const insp = document.getElementById("inspectorPanel");
+    if (insp) {{
+      insp.className = "inspector-panel empty";
+      insp.innerHTML = `
+        <div class="inspector-hint">
+          <span style="font-size:1.1rem;">🔍</span>
+          <span>Click any word box or card to select winner</span>
+        </div>
+      `;
+    }}
   }};
 
   function zoomToNormBox(box) {{
-    // Center exactly on the word's pixel center: cx = (box[0] + box[2]/2) * pageWidth
     scale = 3.5;
     const panelW = panelLeft.clientWidth;
     const panelH = panelLeft.clientHeight;
@@ -1339,6 +2012,12 @@ def generate_interactive_html(
 
   chkBgImage.onchange = updateBgImageStyle;
   rngOpacity.oninput = updateBgImageStyle;
+
+  // Initialize summary stats on load and auto-select first discrepancy if available
+  recalculateSummaryStats();
+  if (cards.length > 0) {{
+    selectWord(cards[0].idx);
+  }}
 </script>
 </body>
 </html>
@@ -2304,7 +2983,18 @@ def main() -> int:
 
         if args.render_html:
             out_html = out_dir / f"{stem}_comparison.html"
-            generate_interactive_html(res, None, out_html)
+            img_rel = None
+            if args.image and args.image.exists():
+                img_dest = out_dir / f"{stem}{args.image.suffix}"
+                if not img_dest.exists() or img_dest.resolve() != args.image.resolve():
+                    import shutil
+                    shutil.copy2(args.image, img_dest)
+                img_rel = f"{stem}{args.image.suffix}"
+            elif (out_dir / f"{stem}.jpg").exists():
+                img_rel = f"{stem}.jpg"
+            elif (out_dir / f"{stem}.png").exists():
+                img_rel = f"{stem}.png"
+            generate_interactive_html(res, img_rel, out_html)
             print(f"Generated HTML: {out_html}")
         if args.sync_docs:
             sync_to_evaluations_repo(out_dir, auto_push=not args.no_push)
