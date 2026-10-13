@@ -2322,11 +2322,14 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     avg_dx = (sum(r.get("mean_dx", 0) for r in summary_records) / total_pages) if total_pages else 0.0
     avg_dy = (sum(r.get("mean_dy", 0) for r in summary_records) / total_pages) if total_pages else 0.0
 
-    # Group by collection
+    # Group by collection and compute top-level collection counts
+    top_collections_counts: Dict[str, int] = defaultdict(int)
     collections_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for r in summary_records:
-        col = r.get("collection", "Root") or "Root"
-        collections_map[col].append(r)
+        raw_col = r.get("collection", "Root") or "Root"
+        top_col = raw_col.replace("\\", "/").split("/")[0]
+        top_collections_counts[top_col] += 1
+        collections_map[raw_col].append(r)
 
     collection_summaries = []
     for col_name, recs in sorted(collections_map.items()):
@@ -2368,17 +2371,20 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     # Prepare table records JSON with normalized link paths
     records_for_table = []
     for r in summary_records:
-        col = r.get("collection", "")
+        raw_col = r.get("collection", "")
+        # Keep only the highest level folder (e.g. Newspapers, Annuals, Heritage)
+        top_col = raw_col.replace("\\", "/").split("/")[0] if raw_col else "Root"
         stem = r.get("item_name", "")
         html_link = r.get("html_path", "")
         if not html_link:
-            html_link = f"{col}/{stem}_comparison.html" if col else f"{stem}_comparison.html"
+            html_link = f"{raw_col}/{stem}_comparison.html" if raw_col else f"{stem}_comparison.html"
 
         p_w = r.get("pipeline_words", 0)
         b_w = r.get("benchmark_words", 0)
         records_for_table.append({
             "name": stem,
-            "collection": col,
+            "collection": top_col,
+            "sub_collection": raw_col,
             "p_words": p_w,
             "b_words": b_w,
             "word_diff": p_w - b_w,
@@ -2754,8 +2760,8 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
       <input type="text" id="txtSearch" class="search-box" placeholder="Search page name or collection...">
       
       <select id="selCollection" class="filter-select">
-        <option value="">All Collections ({len(collections_map)})</option>
-        {"".join(f'<option value="{c["name"]}">{c["name"]} ({c["pages"]} pages)</option>' for c in collection_summaries)}
+        <option value="">All Collections ({total_pages:,} pages)</option>
+        {"".join(f'<option value="{name}">{name} ({cnt:,} pages)</option>' for name, cnt in sorted(top_collections_counts.items()))}
       </select>
 
       <select id="selConcordance" class="filter-select">
@@ -2934,10 +2940,10 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     const deltaTier = selWordDelta ? selWordDelta.value : "all";
 
     filteredRecords = allRecords.filter(r => {{
-      if (query && !r.name.toLowerCase().includes(query) && !r.collection.toLowerCase().includes(query)) {{
+      if (query && !r.name.toLowerCase().includes(query) && !r.collection.toLowerCase().includes(query) && !(r.sub_collection && r.sub_collection.toLowerCase().includes(query))) {{
         return false;
       }}
-      if (coll && r.collection !== coll) {{
+      if (coll && r.collection !== coll && r.sub_collection !== coll) {{
         return false;
       }}
       if (concTier === "high" && r.clean_conc < 90) return false;
@@ -3054,7 +3060,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
       tr.innerHTML = `
         <td style="font-weight:600;color:#f0f6fc;">${{r.name}}${{manualBadge}}</td>
-        <td style="color:#8b949e;font-size:0.8rem;">${{r.collection}}</td>
+        <td style="color:#8b949e;font-size:0.8rem;" title="${{r.sub_collection || r.collection}}">${{r.collection}}</td>
         <td><strong>${{r.p_words}}</strong> <span style="color:#6e7681;">/ ${{r.b_words}}</span> <span style="font-size:0.75rem;font-weight:600;color:${{wColor}};" title="Delta: ${{wSign}}${{wordDelta}} words (${{wSign}}${{wordPct}}%)">(${{wSign}}${{wordDelta}})</span></td>
         <td>${{r.match_rate.toFixed(1)}}%</td>
         <td><span class="badge-conc ${{concCls}}">${{r.clean_conc.toFixed(1)}}%</span></td>
