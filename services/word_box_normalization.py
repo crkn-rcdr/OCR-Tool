@@ -74,6 +74,136 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any], lang: Optional[
             hyphen_changed = reconcile_cross_line_hyphens(text_word, text_word_boxes, lang=lang)
             changed = changed or hyphen_changed
 
+        # Deduplicate cross-line word boxes (e.g. redundant duplicate words from tile overlap or layout overlap)
+        if len(text_word) > 1 and len(text_word_boxes) > 1:
+            dedupe_changed = deduplicate_cross_line_word_boxes(payload)
+            changed = changed or dedupe_changed
+
+    return changed
+
+
+def deduplicate_cross_line_word_boxes(payload: dict[str, Any]) -> bool:
+    """Eliminate redundant duplicate word boxes across lines caused by tile overlap.
+
+    When adjacent tiles overlap, identical words can be detected in multiple tiles
+    and end up in different line entries. If two word boxes across lines share
+    matching normalized text and have high spatial overlap (IoU >= 0.40 or
+    near-identical coordinates), keep the higher-scoring or more contextually intact
+    word and drop the duplicate.
+    """
+    rec_texts = payload.get("rec_texts")
+    text_word = payload.get("text_word")
+    text_word_boxes = payload.get("text_word_boxes")
+
+    if not isinstance(rec_texts, list) or not isinstance(text_word, list) or not isinstance(text_word_boxes, list):
+        return False
+
+    n_lines = min(len(text_word), len(text_word_boxes))
+    if n_lines < 2:
+        return False
+
+    changed = False
+
+    all_words = []
+    for li in range(n_lines):
+        w_list = text_word[li]
+        b_list = text_word_boxes[li]
+        if not isinstance(w_list, list) or not isinstance(b_list, list):
+            continue
+        for wi in range(min(len(w_list), len(b_list))):
+            w = w_list[wi]
+            b = b_list[wi]
+            if w and b and len(b) >= 4:
+                all_words.append((li, wi, str(w), b))
+
+    to_remove = set()
+
+    for i in range(len(all_words)):
+        li1, wi1, w1, b1 = all_words[i]
+        if (li1, wi1) in to_remove:
+            continue
+        norm1 = "".join(c.lower() for c in w1 if c.isalnum())
+        if not norm1:
+            continue
+
+        for j in range(i + 1, len(all_words)):
+            li2, wi2, w2, b2 = all_words[j]
+            if li1 == li2 or (li2, wi2) in to_remove:
+                continue
+            norm2 = "".join(c.lower() for c in w2 if c.isalnum())
+            if not norm2:
+                continue
+
+            if norm1 != norm2 and not (norm1 in norm2 or norm2 in norm1):
+                continue
+
+            x_ov = max(0.0, min(b1[2], b2[2]) - max(b1[0], b2[0]))
+            y_ov = max(0.0, min(b1[3], b2[3]) - max(b1[1], b2[1]))
+            inter = x_ov * y_ov
+            a1 = max(1.0, (b1[2] - b1[0]) * (b1[3] - b1[1]))
+            a2 = max(1.0, (b2[2] - b2[0]) * (b2[3] - b2[1]))
+            union = a1 + a2 - inter
+            iou = inter / union if union > 0 else 0.0
+
+            is_dup = False
+            if norm1 == norm2:
+                min_w = min(b1[2] - b1[0], b2[2] - b2[0])
+                min_h = min(b1[3] - b1[1], b2[3] - b2[1])
+                if iou >= 0.40 or (x_ov >= 0.50 * min_w and y_ov >= 0.40 * min_h):
+                    is_dup = True
+            elif iou >= 0.65:
+                is_dup = True
+
+            if is_dup:
+                len_line1 = len(text_word[li1])
+                len_line2 = len(text_word[li2])
+                if len_line1 > len_line2:
+                    drop_li, drop_wi = li2, wi2
+                elif len_line2 > len_line1:
+                    drop_li, drop_wi = li1, wi1
+                else:
+                    drop_li, drop_wi = li2, wi2
+                to_remove.add((drop_li, drop_wi))
+                if drop_li == li1 and drop_wi == wi1:
+                    break
+
+    if not to_remove:
+        return False
+
+    removals_by_line = {}
+    for li, wi in to_remove:
+        removals_by_line.setdefault(li, set()).add(wi)
+
+    lines_to_delete = set()
+    for li, wis in removals_by_line.items():
+        w_list = text_word[li]
+        b_list = text_word_boxes[li]
+        new_w = [w for wi, w in enumerate(w_list) if wi not in wis]
+        new_b = [b for wi, b in enumerate(b_list) if wi not in wis]
+        text_word[li] = new_w
+        text_word_boxes[li] = new_b
+        if not new_w:
+            lines_to_delete.add(li)
+        else:
+            if li < len(rec_texts) and isinstance(rec_texts[li], str):
+                rec_texts[li] = " ".join(new_w)
+        changed = True
+
+    if lines_to_delete:
+        indices_to_keep = [i for i in range(len(rec_texts)) if i not in lines_to_delete]
+        for key in (
+            "rec_texts",
+            "rec_scores",
+            "rec_polys",
+            "rec_boxes",
+            "dt_polys",
+            "text_word",
+            "text_word_boxes",
+            "textline_orientation_angles",
+        ):
+            if isinstance(payload.get(key), list) and len(payload[key]) >= len(rec_texts):
+                payload[key] = [payload[key][i] for i in indices_to_keep]
+
     return changed
 
 

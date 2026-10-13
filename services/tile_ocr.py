@@ -2044,7 +2044,31 @@ def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[fl
             touches_seam = touches_vertical_seam(cur_bbox, nxt_bbox, seam_x, char_w)
             overlap_text = overlapping_fragment_text(cur_text, nxt_text, cur_bbox, nxt_bbox)
 
-            if overlap_text is not None:
+            splice_res = splice_overlapping_seam_fragments(
+                cur_text,
+                nxt_text,
+                cur_bbox,
+                nxt_bbox,
+                cur_text_words,
+                cur_text_word_boxes,
+                s["entry"].get("text_word"),
+                s["entry"].get("text_word_boxes"),
+                touches_seam,
+            )
+
+            if splice_res is not None:
+                cur_text, cur_bbox, cur_text_words, cur_text_word_boxes = splice_res
+                cur_changed = True
+
+                if cur_score is None:
+                    cur_score = s["entry"].get("score")
+                elif s["entry"].get("score") is not None:
+                    cur_score = (cur_score + s["entry"].get("score")) / 2.0
+
+                if cur_angle is None and "angle" in s["entry"]:
+                    cur_angle = s["entry"].get("angle")
+
+            elif overlap_text is not None:
                 if overlap_text != cur_text:
                     cur_text = overlap_text
                     cur_bbox[2] = max(cur_bbox[2], nxt_bbox[2])
@@ -2195,18 +2219,123 @@ def touches_vertical_seam(
     char_w: float,
 ) -> bool:
     """Return whether a bounding box touches a vertical tile seam."""
-    if seam_x is None:
+    if seam_x is None or not seam_x:
         return True
 
-    if not seam_x:
-        return False
-
     eps = max(2.0, char_w * 0.35)
+    max_overlap = 250.0
     return any(
-        abs(left_bbox[2] - sx) <= eps
-        or abs(right_bbox[0] - sx) <= eps
+        (left_bbox[0] - eps <= sx <= right_bbox[2] + eps)
+        and (right_bbox[0] - max_overlap <= sx <= left_bbox[2] + max_overlap)
+        or abs(left_bbox[2] - sx) <= max_overlap
+        or abs(right_bbox[0] - sx) <= max_overlap
         for sx in seam_x
     )
+
+
+def reconstruct_spliced_text(
+    cur_text: str,
+    nxt_text: str,
+    cur_words: list[str],
+    nxt_words: list[str],
+    i_cut: int,
+    j_cut: int,
+) -> str:
+    """Reconstruct a unified text string across spliced OCR line fragments."""
+    import re
+
+    w2_target = nxt_words[j_cut]
+    m_nxt = list(re.finditer(re.escape(w2_target), nxt_text))
+    if m_nxt:
+        match_idx = min(
+            len(m_nxt) - 1,
+            max(0, int(round((j_cut / max(1, len(nxt_words) - 1)) * (len(m_nxt) - 1)))),
+        )
+        suffix = nxt_text[m_nxt[match_idx].end() :].lstrip()
+        sep = " " if suffix and not cur_text.endswith((" ", "-", "—")) else ""
+        return f"{cur_text}{sep}{suffix}"
+    return " ".join(cur_words[: i_cut + 1] + nxt_words[j_cut + 1 :])
+
+
+def splice_overlapping_seam_fragments(
+    cur_text: str,
+    nxt_text: str,
+    cur_bbox: list[float],
+    nxt_bbox: list[float],
+    cur_words: list[str] | None,
+    cur_boxes: list[list[float]] | None,
+    nxt_words: list[str] | None,
+    nxt_boxes: list[list[float]] | None,
+    touches_seam: bool,
+) -> tuple[str, list[float], list[str], list[list[float]]] | None:
+    """Splice two line fragments that overlap horizontally across a vertical seam."""
+    if not touches_seam:
+        return None
+
+    # Must have horizontal overlap
+    if cur_bbox[2] <= nxt_bbox[0]:
+        return None
+
+    w1 = list(cur_words) if cur_words else []
+    b1 = [list(b) for b in cur_boxes] if cur_boxes else []
+    w2 = list(nxt_words) if nxt_words else []
+    b2 = [list(b) for b in nxt_boxes] if nxt_boxes else []
+
+    if not w1 or not b1:
+        syn_w, syn_b = synthesize_word_boxes_for_text(cur_text, cur_bbox)
+        w1, b1 = syn_w, syn_b
+
+    if not w2 or not b2:
+        syn_w, syn_b = synthesize_word_boxes_for_text(nxt_text, nxt_bbox)
+        w2, b2 = syn_w, syn_b
+
+    if not w1 or not w2 or not b1 or not b2:
+        return None
+
+    matches = []
+    for i, (word1, box1) in enumerate(zip(w1, b1)):
+        norm1 = normalize_for_dedupe(word1)
+        for j, (word2, box2) in enumerate(zip(w2, b2)):
+            norm2 = normalize_for_dedupe(word2)
+            x_ov = max(0.0, min(box1[2], box2[2]) - max(box1[0], box2[0]))
+            y_ov = max(0.0, min(box1[3], box2[3]) - max(box1[1], box2[1]))
+            inter = x_ov * y_ov
+            a1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+            a2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+            union = a1 + a2 - inter
+            iou = inter / union if union > 0 else 0.0
+
+            is_match = False
+            if norm1 and norm2:
+                if norm1 == norm2 and (iou >= 0.20 or x_ov >= 0.35 * min(box1[2] - box1[0], box2[2] - box2[0])):
+                    is_match = True
+                elif iou >= 0.40:
+                    is_match = True
+            elif iou >= 0.50:
+                is_match = True
+
+            if is_match:
+                matches.append((i, j, iou, norm1 == norm2))
+
+    if not matches:
+        return None
+
+    exact_matches = [m for m in matches if m[3]]
+    best = exact_matches[-1] if exact_matches else matches[-1]
+    i_cut, j_cut = best[0], best[1]
+
+    merged_words = w1[: i_cut + 1] + w2[j_cut + 1 :]
+    merged_boxes = b1[: i_cut + 1] + b2[j_cut + 1 :]
+
+    merged_bbox = [
+        min(cur_bbox[0], nxt_bbox[0]),
+        min(cur_bbox[1], nxt_bbox[1]),
+        max(cur_bbox[2], nxt_bbox[2]),
+        max(cur_bbox[3], nxt_bbox[3]),
+    ]
+
+    merged_text = reconstruct_spliced_text(cur_text, nxt_text, w1, w2, i_cut, j_cut)
+    return merged_text, merged_bbox, merged_words, merged_boxes
 
 
 def should_merge_across_seam(
@@ -2221,7 +2350,7 @@ def should_merge_across_seam(
     if not left_text or not right_text or left_text.endswith(" "):
         return False
 
-    if gap < 0:
+    if gap < -max(8.0, char_w * 0.65):
         return False
 
     if seam_x is not None and not touches_seam:
