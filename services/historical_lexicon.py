@@ -500,7 +500,13 @@ _SP_INSTANCES: Dict[str, Any] = {}
 def get_shared_spellchecker(lang: str = "en") -> Optional[Any]:
     """Lazy initialize and cache spellcheckers for supported Canadiana languages."""
     global _SP_INSTANCES
-    code = (lang or "en").lower().strip()
+    raw = (lang or "en").lower().strip()
+    from services.canadiana_languages import get_canadiana_language, is_spellcheck_authorized
+    if not is_spellcheck_authorized(raw):
+        return None
+
+    cl = get_canadiana_language(raw)
+    code = cl.spellcheck_lang_code if cl and cl.spellcheck_lang_code else raw
     if code in {"english", "en_ca", "en_us", "en_gb"}:
         code = "en"
     elif code in {"french", "fr_ca", "fr_fr"}:
@@ -511,6 +517,15 @@ def get_shared_spellchecker(lang: str = "en") -> Optional[Any]:
         code = "de"
     elif code in {"spanish", "espanol"}:
         code = "es"
+    elif code in {"dutch", "nederlands"}:
+        code = "nl"
+    elif code in {"portuguese", "portugues"}:
+        code = "pt"
+    elif code in {"russian", "russkiy"}:
+        code = "ru"
+
+    if code not in {"en", "fr", "it", "de", "es", "nl", "pt", "ru"}:
+        return None
 
     if code not in _SP_INSTANCES:
         try:
@@ -614,6 +629,17 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
         return True
     if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
         return True
+
+    from services.canadiana_languages import (
+        is_spellcheck_authorized,
+        get_canadiana_language,
+        detect_canadiana_script,
+    )
+
+    # Indigenous and non-Latin writing scripts
+    if detect_canadiana_script(clean):
+        return True
+
     if len(clean) == 1:
         return clean in {"a", "i", "o", "y", "à", "è", "é", "d", "l", "s", "n", "m", "j", "t", "c", "e", "u"}
     if clean in ALL_CANADIAN_LEXICON_TOKENS:
@@ -621,8 +647,14 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
     if clean in HISTORICAL_OPTICAL_CORRECTIONS.values():
         return True
 
-    # 1. Check language-specific dictionary first when document language is known
     norm_l = (lang or "").lower().strip()
+
+    # For languages without authorized spellchecking dictionaries (e.g. Indigenous, Ukrainian, Yiddish),
+    # never reject valid alphabetic OCR tokens
+    if norm_l and not is_spellcheck_authorized(norm_l):
+        return True
+
+    # 1. Check language-specific dictionary first when document language is known
     if norm_l in {"it", "italian"}:
         sp_it = get_shared_spellchecker("it")
         if sp_it and clean in sp_it:
@@ -636,6 +668,18 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
     elif norm_l in {"es", "spanish"}:
         sp_es = get_shared_spellchecker("es")
         if sp_es and clean in sp_es:
+            return True
+    elif norm_l in {"nl", "dutch"}:
+        sp_nl = get_shared_spellchecker("nl")
+        if sp_nl and clean in sp_nl:
+            return True
+    elif norm_l in {"pt", "portuguese"}:
+        sp_pt = get_shared_spellchecker("pt")
+        if sp_pt and clean in sp_pt:
+            return True
+    elif norm_l in {"ru", "russian"}:
+        sp_ru = get_shared_spellchecker("ru")
+        if sp_ru and clean in sp_ru:
             return True
     elif norm_l in {"fr", "french"}:
         sp_fr = get_shared_spellchecker("fr")
@@ -653,7 +697,7 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
 
     # 2. Multi-lingual lookup fallback ONLY if language is unspecified or bilingual
     if not norm_l or norm_l in {"bilingual", "all", "auto"}:
-        for check_code in ("en", "fr", "it", "de", "es"):
+        for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
             sp = get_shared_spellchecker(check_code)
             if sp and clean in sp:
                 return True
@@ -683,15 +727,23 @@ def regularize_broken_historical_word(
 
     norm_l = (lang or "").lower().strip()
 
-    # 1. Deterministic historical optical corrections
-    if clean in HISTORICAL_OPTICAL_CORRECTIONS:
-        target = HISTORICAL_OPTICAL_CORRECTIONS[clean]
-        if word.istitle():
-            return target.capitalize()
-        elif word.isupper():
-            return target.upper()
-        return target
+    from services.canadiana_languages import (
+        is_spellcheck_authorized,
+        get_canadiana_language,
+        detect_canadiana_script,
+    )
 
+    # 0. STRICT CANADIANA POLICY: If the language is specified and NOT authorized
+    # for spellchecking (e.g. Indigenous languages like Cree, Inuktitut, Mohawk;
+    # or non-Latin/unverified languages like Chinese, Ukrainian, Yiddish, Latin, etc.),
+    # BYPASS all dictionary regularizations so raw OCR tokens are NEVER mutated into English/French.
+    if norm_l and not is_spellcheck_authorized(norm_l):
+        return word
+
+    if detect_canadiana_script(clean):
+        return word
+
+    # 1. Deterministic historical optical corrections by language
     if norm_l in {"it", "italian"}:
         if clean in ITALIAN_OPTICAL_CORRECTIONS:
             target = ITALIAN_OPTICAL_CORRECTIONS[clean]
@@ -700,7 +752,7 @@ def regularize_broken_historical_word(
             elif word.isupper():
                 return target.upper()
             return target
-    elif norm_l in {"fr", "french", "bilingual", ""}:
+    elif norm_l in {"fr", "french"}:
         if clean in FRENCH_OPTICAL_CORRECTIONS:
             target = FRENCH_OPTICAL_CORRECTIONS[clean]
             if word.istitle():
@@ -708,15 +760,23 @@ def regularize_broken_historical_word(
             elif word.isupper():
                 return target.upper()
             return target
+    elif norm_l in {"en", "english", "bilingual", ""}:
+        if clean in HISTORICAL_OPTICAL_CORRECTIONS:
+            target = HISTORICAL_OPTICAL_CORRECTIONS[clean]
+            if word.istitle():
+                return target.capitalize()
+            elif word.isupper():
+                return target.upper()
+            return target
 
     # 2. CRITICAL SAFEGUARD: If already a valid canonical Canadian historical word
-    # or recognized dictionary word in ANY supported language (EN, FR, IT, DE, ES),
-    # NEVER mutate it! This guarantees valid Italian words (e.g. 'località', 'qualche',
-    # 'scheda') will never be swapped for spurious English or French words.
+    # or recognized dictionary word in ANY supported language, NEVER mutate it!
+    # This guarantees valid Italian words ('località', 'qualche', 'scheda') will
+    # never be swapped for spurious English or French words.
     if clean in ALL_CANADIAN_LEXICON_TOKENS:
         return word
 
-    for check_code in ("en", "fr", "it", "de", "es"):
+    for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
         sp = get_shared_spellchecker(check_code)
         if sp and clean in sp:
             return word
@@ -749,6 +809,18 @@ def regularize_broken_historical_word(
         sp_es = get_shared_spellchecker("es")
         if sp_es:
             cand_sps.append(sp_es)
+    elif norm_l in {"nl", "dutch"}:
+        sp_nl = get_shared_spellchecker("nl")
+        if sp_nl:
+            cand_sps.append(sp_nl)
+    elif norm_l in {"pt", "portuguese"}:
+        sp_pt = get_shared_spellchecker("pt")
+        if sp_pt:
+            cand_sps.append(sp_pt)
+    elif norm_l in {"ru", "russian"}:
+        sp_ru = get_shared_spellchecker("ru")
+        if sp_ru:
+            cand_sps.append(sp_ru)
     elif norm_l in {"fr", "french"}:
         sp_fr = get_shared_spellchecker("fr")
         if sp_fr:

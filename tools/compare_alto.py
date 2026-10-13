@@ -114,7 +114,16 @@ def get_spellchecker(lang: str = "en") -> Optional[Any]:
     global _SP_REGISTRY
     if not HAS_SPELLCHECKER:
         return None
-    code = (lang or "en").lower().strip()
+    raw = (lang or "en").lower().strip()
+    try:
+        from services.canadiana_languages import get_canadiana_language, is_spellcheck_authorized
+        if not is_spellcheck_authorized(raw):
+            return None
+        cl = get_canadiana_language(raw)
+        code = cl.spellcheck_lang_code if cl and cl.spellcheck_lang_code else raw
+    except ImportError:
+        code = raw
+
     if code in {"english", "en_ca", "en_us", "en_gb"}:
         code = "en"
     elif code in {"french", "fr_ca", "fr_fr"}:
@@ -125,6 +134,15 @@ def get_spellchecker(lang: str = "en") -> Optional[Any]:
         code = "de"
     elif code in {"spanish", "espanol"}:
         code = "es"
+    elif code in {"dutch", "nederlands"}:
+        code = "nl"
+    elif code in {"portuguese", "portugues"}:
+        code = "pt"
+    elif code in {"russian", "russkiy"}:
+        code = "ru"
+
+    if code not in {"en", "fr", "it", "de", "es", "nl", "pt", "ru"}:
+        return None
 
     if code not in _SP_REGISTRY:
         try:
@@ -197,6 +215,17 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
             _LEXICAL_CACHE[cache_key] = True
             return True
 
+    try:
+        from services.canadiana_languages import detect_canadiana_script, is_spellcheck_authorized
+        if detect_canadiana_script(clean):
+            _LEXICAL_CACHE[cache_key] = True
+            return True
+        if norm_l and not is_spellcheck_authorized(norm_l):
+            _LEXICAL_CACHE[cache_key] = True
+            return True
+    except ImportError:
+        pass
+
     norm_l = (lang or "").lower().strip()
     is_valid = False
 
@@ -213,6 +242,18 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
         sp_es = get_spellchecker("es")
         if sp_es and clean in sp_es:
             is_valid = True
+    elif norm_l in {"nl", "dutch"}:
+        sp_nl = get_spellchecker("nl")
+        if sp_nl and clean in sp_nl:
+            is_valid = True
+    elif norm_l in {"pt", "portuguese"}:
+        sp_pt = get_spellchecker("pt")
+        if sp_pt and clean in sp_pt:
+            is_valid = True
+    elif norm_l in {"ru", "russian"}:
+        sp_ru = get_spellchecker("ru")
+        if sp_ru and clean in sp_ru:
+            is_valid = True
     elif norm_l in {"fr", "french"}:
         sp_fr = get_spellchecker("fr")
         if sp_fr and clean in sp_fr:
@@ -227,7 +268,7 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
             is_valid = True
     elif not norm_l or norm_l in {"bilingual", "all", "auto"}:
         # Multi-lingual lookup across supported Canadiana languages
-        for check_code in ("en", "fr", "it", "de", "es"):
+        for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
             sp = get_spellchecker(check_code)
             if sp and clean in sp:
                 is_valid = True
@@ -675,13 +716,13 @@ def compare_pages(
     sample_tokens = [b.content for b in p_boxes if len(b.content) > 3 and b.content.isalpha()]
     if not sample_tokens:
         sample_tokens = [b.content for b in b_boxes if len(b.content) > 3 and b.content.isalpha()]
+    source_p = pipeline_page.source_path or benchmark_page.source_path or item_name
     doc_lang = "en"
-    if sample_tokens:
-        try:
-            from services.language_detection import detect_document_language
-            doc_lang = detect_document_language(" ".join(sample_tokens[:250]), fallback="en")
-        except Exception:
-            doc_lang = "en"
+    try:
+        from services.language_detection import resolve_effective_language
+        doc_lang = resolve_effective_language(None, source_p, " ".join(sample_tokens[:250]))
+    except Exception:
+        doc_lang = "en"
 
     # Collect discrepancies (words with spatial alignment but textual divergence)
     # and perform automated lexical QA adjudication

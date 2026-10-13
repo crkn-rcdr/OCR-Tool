@@ -11,6 +11,13 @@ import re
 from pathlib import Path
 from typing import List, Optional, Union
 
+from services.canadiana_languages import (
+    CANADIANA_LANGUAGE_CATALOG,
+    get_canadiana_language,
+    is_spellcheck_authorized,
+    detect_canadiana_script,
+)
+
 CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 
 # Collection IDs and path markers for Traditional Chinese Canadiana collections
@@ -158,12 +165,29 @@ def detect_document_language(
     if not text:
         return fallback
 
-    # 1. CJK detection for Chinese Canadiana serials
+    # 1. Script detection for Indigenous and international non-Latin archives
+    script = detect_canadiana_script(text)
+    if script == "canadian_syllabics":
+        return "cr"  # Cree is the predominant Canadian Syllabics corpus (257 docs)
+    elif script == "hebrew":
+        return "yi"  # Yiddish diaspora press is predominant (5,516 docs)
+    elif script == "cyrillic":
+        return "uk"  # Ukrainian Prairie press is predominant (3,245 docs)
+    elif script == "greek":
+        return "el"
+    elif script == "arabic":
+        return "fa"
+    elif script == "indic":
+        return "hi"
+    elif script == "bengali":
+        return "bn"
+
+    # 2. CJK detection for Chinese Canadiana serials (e.g. SFU Chinese Times)
     cjk_count = sum(1 for ch in text if CJK_CHAR_RE.match(ch))
     if cjk_count >= 10 or (len(text) > 0 and cjk_count / len(text) > 0.15):
         return "chinese_cht"
 
-    # 2. Extract alphabetical words for statistical n-gram language detection
+    # 3. Extract alphabetical words for statistical n-gram language detection
     words = [w for w in text.split() if len(w) > 2 and w.isalpha()]
     sample = " ".join(words[:250])
     if len(sample) < 20:
@@ -183,10 +207,10 @@ def detect_document_language(
             if lang_probs["en"] >= 0.20 and lang_probs["fr"] >= 0.20:
                 return "bilingual"
 
-        # Check high-confidence detections
-        if top.lang in {"it", "fr", "en", "de", "es", "pt"}:
-            if top.prob >= 0.50:
-                return top.lang
+        # Match detected code against the Canadiana language catalog
+        cl = get_canadiana_language(top.lang)
+        if cl:
+            return cl.iso639_1 or cl.iso639_2 or top.lang
 
         # Return top language code
         return top.lang
@@ -199,18 +223,11 @@ def map_lang_to_alto_code(lang: Optional[str]) -> str:
     if not lang:
         return "en"
     l = lang.lower().strip()
-    if l in {"chinese_cht", "ch", "zh-cn", "zh-tw", "zh_cht", "zh"}:
-        return "zh"
-    if l in {"it", "italian", "italiano"}:
-        return "it"
-    if l in {"fr", "french", "francais"}:
-        return "fr"
-    if l in {"de", "german", "deutsch"}:
-        return "de"
-    if l in {"es", "spanish", "espanol"}:
-        return "es"
     if l in {"bilingual"}:
         return "en"
+    cl = get_canadiana_language(l)
+    if cl:
+        return cl.alto_code
     return l
 
 
@@ -223,14 +240,11 @@ def map_lang_to_paddle_code(lang: Optional[str]) -> str:
         return "chinese_cht"
     if l in {"ch", "zh-cn", "zh_cn", "zh"}:
         return "ch"
-    if l in {"it", "italian", "italiano"}:
-        return "it"
-    if l in {"fr", "french", "bilingual"}:
+    if l in {"bilingual"}:
         return "fr"
-    if l in {"de", "german", "deutsch"}:
-        return "german"
-    if l in {"es", "spanish"}:
-        return "es"
+    cl = get_canadiana_language(l)
+    if cl:
+        return cl.paddle_code
     return "en"
 
 

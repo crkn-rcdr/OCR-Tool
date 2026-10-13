@@ -331,6 +331,12 @@ Historical typography contains contractions and ligatures that standard OCR engi
 In 18th- and early 19th-century Canadian gazettes, the historical medial long-s (`ſ`) is transcribed by modern OCR models as `'f'` (e.g., *firft* $\rightarrow$ *first*, *houfe* $\rightarrow$ *house*, *caufe* $\rightarrow$ *cause*, *congrefs* $\rightarrow$ *congress*).
 - Modern English collisions (*fame*, *cafe*, *fend*) are protected. Phrase-level bigrams (*"the fame"* $\rightarrow$ *"the same"*, *"in cafe"* $\rightarrow$ *"in case"*) and unambiguous words (*"bufinefs"* $\rightarrow$ *"business"*, *"majefty"* $\rightarrow$ *"majesty"*) are resolved automatically.
 
+### 10. Official Canadiana 54-Language Census & Golden Spellcheck Policy (`services/canadiana_languages.py`)
+The CRKN collections encompass 54 distinct languages, from predominant national collections down to single-document historical records:
+- **Census Volume**: English (287,983 docs), French (87,877), Undetermined (46,263), Traditional Chinese (23,006), German (5,540), Yiddish (5,516), Ukrainian (3,245), Italian (1,747), Finnish (606), Latin (546), Icelandic (459), Hungarian (383), Indigenous languages (Cree, Chinook Jargon, Mi'kmaq, Ojibwa, Mohawk, Inuktitut, Tsimshian, Siksika, Chipewyan, Delaware, Haida, Slave), Dutch (108), Spanish (76), Russian (28), Gaelic (23), and more.
+- **The Golden Spellcheck Policy**: Full dictionary regularization runs **strictly** for verified languages (`en`, `fr`, `it`, `de`, `es`, `nl`, `pt`, `ru`, bilingual `en`/`fr`).
+- **Zero-Corruption Guardrail for 46 Canadiana Languages**: For Indigenous languages, Undetermined records, Ukrainian, Yiddish, Latin, and all unverified languages, automated spellchecking is **completely bypassed**. Raw OCR tokens are preserved intact without risk of being corrupted into foreign English or French words (e.g. Italian `località` is never mutated to English `locality`).
+
 ---
 
 ## Stage 5: Output Generation & 1:1 Coordinate Fidelity
@@ -376,6 +382,7 @@ flowchart LR
 ### Key Evaluation Capabilities
 - **Phrase-Aware Lexical QA**: If a comparison token contains spaces, the arbiter evaluates whether all constituent words are valid dictionary entries (`all(is_valid(w) for w in token.split())`), preventing false error penalties on compound or hyphenated phrases.
 - **Word Recall & Total Word Count Reporting**: Accurately tracks recognized word count and word recall rates alongside dictionary precision, providing a balanced, transparent comparison against ABBYY FineReader.
+- **Interactive Word & Discrepancy Adjudication**: In each page comparison viewer (`*_comparison.html`), reviewers can click any word bounding box or discrepancy sidebar card to select/override the winner (Paddle Win, ABBYY Win, Both Valid, Neither Valid). Concordance rates, win totals, and progress meters update in real-time with browser storage persistence.
 - **Resilient Multi-Repository Synchronization (`--sync-docs` & `tools/sync_evaluations.py`)**:
   - Evaluation results and interactive inspection viewers can be synchronized directly to the CRKN `OCR-Evaluations` repository.
   - To prevent GitHub HTTPS timeouts on multi-gigabyte historical scan datasets (~7 GiB), synchronization stages and pushes in granular publication-by-publication batches with exponential backoff and retry.
