@@ -2727,16 +2727,21 @@ def compare_directory_batch(
                 cand_img = p_img
                 break
 
-        if collection_name is not None:
-            item_rel = Path(collection_name)
-        else:
-            try:
-                item_rel = p_file.parent.relative_to(pipeline_dir)
-            except ValueError:
-                item_rel = rel_d if rel_d is not None else Path("")
+        try:
+            rel_within = p_file.parent.relative_to(pipeline_dir)
+        except ValueError:
+            rel_within = Path("")
 
-            if item_rel == Path("") and rel_d is not None:
-                item_rel = rel_d
+        if collection_name is not None:
+            if rel_within != Path("") and str(rel_within) not in collection_name:
+                item_rel = Path(collection_name) / rel_within
+            else:
+                item_rel = Path(collection_name)
+        elif pipeline_dir.name.lower() in {"newspapers", "annuals", "heritage"}:
+            coll_prefix = "Newspapers" if pipeline_dir.name.lower() == "newspapers" else ("Annuals" if pipeline_dir.name.lower() == "annuals" else "Heritage")
+            item_rel = Path(coll_prefix) / rel_within if rel_within != Path("") else Path(coll_prefix)
+        else:
+            item_rel = rel_within if rel_within != Path("") else (rel_d if rel_d is not None else Path(""))
 
         items_to_compare.append((stem, p_file, b_file, cand_img, item_rel))
 
@@ -3015,15 +3020,25 @@ def main() -> int:
     # Directory mode (defaults to standard CRKN evaluation folders)
     parser.add_argument(
         "--pipeline-dir",
+        "--pipeline",
+        dest="pipeline_dir",
         type=Path,
         default=DEFAULT_PIPELINE_DIR,
         help=f"Directory containing pipeline outputs (default: {DEFAULT_PIPELINE_DIR})"
     )
     parser.add_argument(
         "--benchmark-dir",
+        "--benchmark",
+        dest="benchmark_dir",
         type=Path,
         default=DEFAULT_BENCHMARK_DIR,
         help=f"Directory containing benchmark outputs (default: {DEFAULT_BENCHMARK_DIR})"
+    )
+    parser.add_argument(
+        "--collection-name",
+        type=str,
+        default=None,
+        help="Optional collection namespace (e.g. Newspapers/qmbn.00001_19560615)",
     )
 
     # Output options
@@ -3104,6 +3119,7 @@ def main() -> int:
             pipeline_dir=args.pipeline_dir,
             benchmark_dir=args.benchmark_dir,
             output_dir=out_dir,
+            collection_name=args.collection_name,
             render_html=args.render_html,
             render_image=args.render_image,
             min_iou=args.min_iou,
