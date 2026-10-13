@@ -200,7 +200,12 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
         _LEXICAL_CACHE[cache_key] = True
         return True
 
-    if is_valid_historical_word is not None and is_valid_historical_word(clean, lang=lang):
+    clean_exp = clean.replace("æ", "ae").replace("œ", "oe")
+
+    if is_valid_historical_word is not None and (
+        is_valid_historical_word(clean, lang=lang)
+        or (clean_exp != clean and is_valid_historical_word(clean_exp, lang=lang))
+    ):
         _LEXICAL_CACHE[cache_key] = True
         return True
 
@@ -232,45 +237,45 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
     # 1. Target language check
     if norm_l in {"it", "italian"}:
         sp_it = get_spellchecker("it")
-        if sp_it and clean in sp_it:
+        if sp_it and (clean in sp_it or clean_exp in sp_it):
             is_valid = True
     elif norm_l in {"de", "german"}:
         sp_de = get_spellchecker("de")
-        if sp_de and clean in sp_de:
+        if sp_de and (clean in sp_de or clean_exp in sp_de):
             is_valid = True
     elif norm_l in {"es", "spanish"}:
         sp_es = get_spellchecker("es")
-        if sp_es and clean in sp_es:
+        if sp_es and (clean in sp_es or clean_exp in sp_es):
             is_valid = True
     elif norm_l in {"nl", "dutch"}:
         sp_nl = get_spellchecker("nl")
-        if sp_nl and clean in sp_nl:
+        if sp_nl and (clean in sp_nl or clean_exp in sp_nl):
             is_valid = True
     elif norm_l in {"pt", "portuguese"}:
         sp_pt = get_spellchecker("pt")
-        if sp_pt and clean in sp_pt:
+        if sp_pt and (clean in sp_pt or clean_exp in sp_pt):
             is_valid = True
     elif norm_l in {"ru", "russian"}:
         sp_ru = get_spellchecker("ru")
-        if sp_ru and clean in sp_ru:
+        if sp_ru and (clean in sp_ru or clean_exp in sp_ru):
             is_valid = True
     elif norm_l in {"fr", "french"}:
         sp_fr = get_spellchecker("fr")
-        if sp_fr and clean in sp_fr:
+        if sp_fr and (clean in sp_fr or clean_exp in sp_fr):
             is_valid = True
         else:
             sp_en = get_spellchecker("en")
-            if sp_en and clean in sp_en:
+            if sp_en and (clean in sp_en or clean_exp in sp_en):
                 is_valid = True
     elif norm_l in {"en", "english"}:
         sp_en = get_spellchecker("en")
-        if sp_en and clean in sp_en:
+        if sp_en and (clean in sp_en or clean_exp in sp_en):
             is_valid = True
     elif not norm_l or norm_l in {"bilingual", "all", "auto"}:
         # Multi-lingual lookup across supported Canadiana languages
         for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
             sp = get_spellchecker(check_code)
-            if sp and clean in sp:
+            if sp and (clean in sp or clean_exp in sp):
                 is_valid = True
                 break
 

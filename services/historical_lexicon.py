@@ -610,6 +610,98 @@ ITALIAN_OPTICAL_CORRECTIONS: Dict[str, str] = {
     "propriet": "proprietà",
 }
 
+# Taxonomic suffixes established by international codes of nomenclature (ICZN, ICN, ICNP)
+TAXONOMIC_BIOLOGICAL_SUFFIXES: tuple[str, ...] = (
+    "idae", "inae", "oidea", "ini", "ina",  # Animal family, subfamily, superfamily, tribe, subtribe
+    "aceae", "ales", "oideae", "phyta", "phytina",  # Plant/fungal family, order, subfamily, division
+    "ptera", "formes", "poda", "stoma", "thorax",  # Animal orders, anatomical morphology
+    "branchia", "cera", "morpha", "dactyla", "carpa", "gastra", "stega",
+)
+
+LATIN_BIOLOGICAL_TERMS: Set[str] = {
+    # Higher taxa (Phyla, Classes, Orders)
+    "mollusca", "arthropoda", "annelida", "cnidaria", "porifera", "echinodermata", "chordata",
+    "platyhelminthes", "nematoda", "rotifera", "bryozoa", "brachiopoda",
+    "crustacea", "myriapoda", "insecta", "hexapoda", "arachnida", "chilopoda", "diplopoda",
+    "mammalia", "aves", "reptilia", "amphibia", "pisces", "actinopterygii", "chondrichthyes", "osteichthyes",
+    "protozoa", "coelenterata", "ctenophora", "rhizopoda", "infusoria", "flagellata", "sporozoa",
+    "bryophyta", "pteridophyta", "spermatophyta", "gymnospermae", "angiospermae", "monocotyledones", "dicotyledones",
+    # Orders
+    "lepidoptera", "coleoptera", "diptera", "hymenoptera", "hemiptera", "homoptera", "heteroptera",
+    "orthoptera", "neuroptera", "odonata", "trichoptera", "ephemeroptera", "plecoptera", "thysanoptera",
+    "siphonaptera", "dermaptera", "dictyoptera", "isoptera", "collembola", "thysanura", "strepsiptera", "mecoptera", "psocoptera",
+    "carnivora", "rodentia", "artiodactyla", "perissodactyla", "chiroptera", "cetacea", "primates", "insectivora",
+    "marsupialia", "monotremata", "lagomorpha", "proboscidea", "sirenia", "edentata",
+    "passeriformes", "columbiformes", "falconiformes", "anseriformes", "galliformes", "charadriiformes",
+    "strigiformes", "piciformes", "coraciiformes", "ciconiiformes", "pelecaniformes", "gaviiformes",
+    "podicipediformes", "gruiformes", "caprimulgiformes", "apodiformes", "cuculiformes", "psittaciformes",
+    # Major Families & Genera in Canadian natural history / entomology
+    "nymphalidae", "papilionidae", "pieridae", "lycaenidae", "hesperiidae", "satyridae", "sphingidae",
+    "noctuidae", "geometridae", "arctiidae", "tortricidae", "tineidae", "pyralidae", "bombycidae", "saturniidae",
+    "carabidae", "curculionidae", "cerambycidae", "chrysomelidae", "buprestidae", "elateridae", "scarabaeidae",
+    "staphylinidae", "dytiscidae", "coccinellidae", "tenebrionidae", "silphidae", "dermestidae", "hydrophilidae",
+    "formicidae", "apidae", "vespidae", "ichneumonidae", "braconidae", "sphecidae", "halictidae", "andrenidae", "megachilidae",
+    "culicidae", "muscidae", "syrphidae", "tachinidae", "tabanidae", "tipulidae", "calliphoridae", "sarcophagidae", "cecidomyiidae",
+    "cicadidae", "cicadellidae", "aphididae", "coccidae", "pentatomidae", "miridae", "lygaeidae", "coreidae", "tingidae", "reduviidae",
+    "acrididae", "gryllidae", "tettigoniidae", "blattidae", "mantidae", "phasmatidae", "forficulidae",
+    "libellulidae", "aeshnidae", "coenagrionidae", "agrionidae",
+    "papilio", "vanessa", "danaus", "pieris", "colias", "argynnis", "melitaea", "limenitis", "grapta", "polygonia",
+    "lycaena", "thecla", "hesperia", "sphinx", "samia", "telea", "actias", "antheraea", "callosamia",
+    "apis", "bombus", "vespa", "polistes", "formica", "camponotus", "myrmica", "ichneumon", "bracon",
+    "musca", "culex", "anopheles", "aedes", "tabanus", "syrphus", "tachina", "tipula", "calliphora",
+    "carabus", "cicindela", "harpalus", "pterostichus", "calosoma", "dytiscus", "hydrophilus", "silpha", "necrophorus",
+    "staphylinus", "coccinella", "hippodamia", "dermestes", "elater", "agriotes", "buprestis", "melanophila", "chrysobothris",
+    "tenebrio", "eleodes", "scarabaeus", "phyllophaga", "macrodactylus", "cerambyx", "monochamus", "saperda", "leptura",
+    "chrysomela", "leptinotarsa", "diabrotica", "crepidodera", "curculio", "anthonomus", "conotrachelus", "sphenophorus",
+    "gryllus", "nemobius", "oecanthus", "melanoplus", "dissosteira", "oedipoda", "camnula", "microcentrum", "conocephalus",
+    "aeshna", "anax", "libellula", "sympetrum", "agrion", "calopteryx", "lestes", "enallagma",
+    "cicada", "tibicen", "aphis", "myzus", "schizoneura", "phylloxera", "psylla", "lecanium", "aspidiotus", "chionaspis",
+    "lygaeus", "blissus", "capsus", "lygus", "podisus", "euschistus", "pentatoma", "anasa",
+    "muricea", "gorgonia", "amoeba", "paramecium", "vorticella", "euglena", "hydra", "actinia",
+    # Anatomical & Morphological Latin terms
+    "ocelli", "ocellus", "elytra", "elytron", "thorax", "prothorax", "mesothorax", "metathorax", "metastoma",
+    "pronotum", "mesonotum", "metanotum", "prosternum", "mesosternum", "metasternum", "pleuron", "episternum", "epimeron",
+    "antenna", "antennae", "palpus", "palpi", "mandible", "mandibles", "maxilla", "maxillae", "labrum", "labium",
+    "clypeus", "frons", "vertex", "gena", "occiput", "proboscis", "haustellum",
+    "abdomen", "tergum", "tergite", "tergites", "sternum", "sternite", "sternites", "spiracle", "spiracles",
+    "ovipositor", "cercus", "cerci", "pygidium", "aedeagus",
+    "coxa", "coxae", "trochanter", "femur", "femora", "tibia", "tibiae", "tarsus", "tarsi",
+    "pulvillus", "arolium", "ungues", "calcar", "calcaria",
+    "tegmina", "halteres", "costa", "subcosta", "radius", "media", "cubitus", "stigma", "pterostigma",
+    "larva", "larvae", "pupa", "pupae", "chrysalis", "chrysalides", "chrysalids", "imago", "imagines",
+    "instar", "instars", "ovum", "ova", "cocoon", "milliped", "millipede",
+    # Classical, legal, academic Latin in Canadiana
+    "anno", "domini", "ad", "hoc", "et", "cetera", "ibidem", "ibid", "idem", "in", "situ", "camera", "vivo", "vitro",
+    "ut", "infra", "supra", "prima", "facie", "habeas", "corpus", "ex", "officio", "post", "facto", "de", "facto",
+    "jure", "inter", "alia", "mutatis", "mutandis", "ultra", "vires", "intra", "sine", "die", "qua", "non", "status",
+    "quo", "vice", "versa", "per", "se", "capita", "diem", "annum", "curia", "regina", "rex", "pro", "forma", "bono",
+    "tanto", "tempore", "locus", "sigilli", "viva", "voce", "subpoena", "affidavit", "mandamus", "certiorari", "caveat",
+    "emptor", "mens", "rea", "actus", "reus", "bona", "fide", "fides", "nemine", "contradicente", "res", "judicata",
+    "stare", "decisis", "amicus", "curiae", "species", "genus", "genera", "ordo", "classis", "regnum", "phylum", "familia",
+    "varietas", "forma", "typus", "nomen", "novum", "nudum", "dubium", "sensu", "stricto", "lato", "secundum", "apud",
+    "teste", "loco", "citato", "opere", "citato"
+}
+
+
+def is_valid_latin_or_biological_word(clean: str) -> bool:
+    """Check if a token represents valid Latin vocabulary or scientific/taxonomic biological nomenclature."""
+    if not clean or len(clean) < 2:
+        return False
+
+    clean_norm = clean.lower()
+    clean_exp = clean_norm.replace("æ", "ae").replace("œ", "oe")
+
+    if clean_norm in LATIN_BIOLOGICAL_TERMS or clean_exp in LATIN_BIOLOGICAL_TERMS:
+        return True
+
+    # Suffix morphology for taxonomic ranks
+    if len(clean_exp) >= 5:
+        for suf in TAXONOMIC_BIOLOGICAL_SUFFIXES:
+            if clean_exp.endswith(suf) and len(clean_exp) >= len(suf) + 3:
+                return True
+
+    return False
+
 
 def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
     """Check if a word token is recognized in historical Canadian vocabulary or standard dictionaries."""
@@ -642,9 +734,16 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
 
     if len(clean) == 1:
         return clean in {"a", "i", "o", "y", "à", "è", "é", "d", "l", "s", "n", "m", "j", "t", "c", "e", "u"}
-    if clean in ALL_CANADIAN_LEXICON_TOKENS:
+
+    clean_exp = clean.replace("æ", "ae").replace("œ", "oe")
+
+    if clean in ALL_CANADIAN_LEXICON_TOKENS or clean_exp in ALL_CANADIAN_LEXICON_TOKENS:
         return True
-    if clean in HISTORICAL_OPTICAL_CORRECTIONS.values():
+    if clean in HISTORICAL_OPTICAL_CORRECTIONS.values() or clean_exp in HISTORICAL_OPTICAL_CORRECTIONS.values():
+        return True
+
+    # Biological and Latin taxonomy check
+    if is_valid_latin_or_biological_word(clean) or is_valid_latin_or_biological_word(clean_exp):
         return True
 
     norm_l = (lang or "").lower().strip()
@@ -657,49 +756,49 @@ def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
     # 1. Check language-specific dictionary first when document language is known
     if norm_l in {"it", "italian"}:
         sp_it = get_shared_spellchecker("it")
-        if sp_it and clean in sp_it:
+        if sp_it and (clean in sp_it or clean_exp in sp_it):
             return True
-        if clean in ITALIAN_OPTICAL_CORRECTIONS.values():
+        if clean in ITALIAN_OPTICAL_CORRECTIONS.values() or clean_exp in ITALIAN_OPTICAL_CORRECTIONS.values():
             return True
     elif norm_l in {"de", "german"}:
         sp_de = get_shared_spellchecker("de")
-        if sp_de and clean in sp_de:
+        if sp_de and (clean in sp_de or clean_exp in sp_de):
             return True
     elif norm_l in {"es", "spanish"}:
         sp_es = get_shared_spellchecker("es")
-        if sp_es and clean in sp_es:
+        if sp_es and (clean in sp_es or clean_exp in sp_es):
             return True
     elif norm_l in {"nl", "dutch"}:
         sp_nl = get_shared_spellchecker("nl")
-        if sp_nl and clean in sp_nl:
+        if sp_nl and (clean in sp_nl or clean_exp in sp_nl):
             return True
     elif norm_l in {"pt", "portuguese"}:
         sp_pt = get_shared_spellchecker("pt")
-        if sp_pt and clean in sp_pt:
+        if sp_pt and (clean in sp_pt or clean_exp in sp_pt):
             return True
     elif norm_l in {"ru", "russian"}:
         sp_ru = get_shared_spellchecker("ru")
-        if sp_ru and clean in sp_ru:
+        if sp_ru and (clean in sp_ru or clean_exp in sp_ru):
             return True
     elif norm_l in {"fr", "french"}:
         sp_fr = get_shared_spellchecker("fr")
-        if sp_fr and clean in sp_fr:
+        if sp_fr and (clean in sp_fr or clean_exp in sp_fr):
             return True
-        if clean in FRENCH_OPTICAL_CORRECTIONS.values():
+        if clean in FRENCH_OPTICAL_CORRECTIONS.values() or clean_exp in FRENCH_OPTICAL_CORRECTIONS.values():
             return True
         sp_en = get_shared_spellchecker("en")
-        if sp_en and clean in sp_en:
+        if sp_en and (clean in sp_en or clean_exp in sp_en):
             return True
     elif norm_l in {"en", "english"}:
         sp_en = get_shared_spellchecker("en")
-        if sp_en and clean in sp_en:
+        if sp_en and (clean in sp_en or clean_exp in sp_en):
             return True
 
     # 2. Multi-lingual lookup fallback ONLY if language is unspecified or bilingual
     if not norm_l or norm_l in {"bilingual", "all", "auto"}:
         for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
             sp = get_shared_spellchecker(check_code)
-            if sp and clean in sp:
+            if sp and (clean in sp or clean_exp in sp):
                 return True
 
     return False
