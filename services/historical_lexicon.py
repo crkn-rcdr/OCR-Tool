@@ -868,16 +868,40 @@ def regularize_broken_historical_word(
                 return target.upper()
             return target
 
-    # 2. CRITICAL SAFEGUARD: If already a valid canonical Canadian historical word
-    # or recognized dictionary word in ANY supported language, NEVER mutate it!
-    # This guarantees valid Italian words ('località', 'qualche', 'scheda') will
-    # never be swapped for spurious English or French words.
-    if clean in ALL_CANADIAN_LEXICON_TOKENS:
+    # 2. CRITICAL SAFEGUARD: If already a valid canonical Canadian historical word,
+    # valid Latin/biological term, or recognized dictionary word in ANY supported language,
+    # NEVER mutate it!
+    # This guarantees valid Latin terms ('Ocelli', 'Metathorax') and Italian words ('località')
+    # will never be swapped for spurious English or French words.
+    clean_exp = clean.replace("æ", "ae").replace("œ", "oe")
+    if is_valid_latin_or_biological_word(clean) or is_valid_latin_or_biological_word(clean_exp):
         return word
+
+    if clean in ALL_CANADIAN_LEXICON_TOKENS or clean_exp in ALL_CANADIAN_LEXICON_TOKENS:
+        return word
+
+    # Latin ligature restoration: Paddle frequently predicts 'é' when encountering 'æ' ligatures
+    # in scientific biological publications (e.g. 'Nymphalidé' -> 'Nymphalidæ').
+    if norm_l not in {"fr", "french"}:
+        if clean.endswith("idé"):
+            cand = clean[:-3] + "idæ"
+            if is_valid_latin_or_biological_word(cand):
+                suffix = "idæ" if word.endswith("idé") else "idae"
+                return word[:-3] + suffix
+        elif clean.endswith("iné"):
+            cand = clean[:-3] + "inæ"
+            if is_valid_latin_or_biological_word(cand):
+                suffix = "inæ" if word.endswith("iné") else "inae"
+                return word[:-3] + suffix
+        elif clean.endswith("acé"):
+            cand = clean[:-3] + "aceæ"
+            if is_valid_latin_or_biological_word(cand):
+                suffix = "aceæ" if word.endswith("acé") else "aceae"
+                return word[:-3] + suffix
 
     for check_code in ("en", "fr", "it", "de", "es", "nl", "pt", "ru"):
         sp = get_shared_spellchecker(check_code)
-        if sp and clean in sp:
+        if sp and (clean in sp or clean_exp in sp):
             return word
 
     # Words under 4 chars must not be heuristically spell-checked to avoid corrupting short words
