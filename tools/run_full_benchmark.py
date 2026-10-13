@@ -95,10 +95,16 @@ def build_options() -> dict:
 
 def main():
     input_path = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else DEFAULT_INPUT_DIR
-    if input_path == Path(r"C:\Users\blapierre\Documents\PDF Test"):
+    if len(sys.argv) > 2 and sys.argv[2]:
+        output_path = Path(sys.argv[2])
+    elif input_path == Path(r"C:\Users\blapierre\Documents\PDF Test"):
         output_path = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
     else:
-        output_path = DEFAULT_OUTPUT_DIR
+        try:
+            rel = input_path.relative_to(Path(r"C:\Users\blapierre\Documents\PDF Test"))
+            output_path = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final") / rel
+        except ValueError:
+            output_path = DEFAULT_OUTPUT_DIR
     compare_root = DEFAULT_COMPARE_DIR
 
     print("==================================================================")
