@@ -170,6 +170,7 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
     if len(subwords) > 1:
         return all(is_lexically_valid_word(sw, lang=lang) for sw in subwords)
 
+    norm_l = (lang or "").lower().strip()
     clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", word.lower().strip())
     if not clean:
         return False
@@ -226,7 +227,6 @@ def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
     except ImportError:
         pass
 
-    norm_l = (lang or "").lower().strip()
     is_valid = False
 
     # 1. Target language check
@@ -613,6 +613,61 @@ def levenshtein_similarity(s1: str, s2: str) -> float:
     return max(0.0, 1.0 - (dist / max_len))
 
 
+def deduplicate_page_boxes(boxes: List[AltoBox], iou_thresh: float = 0.70) -> List[AltoBox]:
+    """Coalesces duplicate or near-identical bounding boxes within a single page's boxes.
+
+    If two boxes on the same page overlap heavily (IoU >= iou_thresh, or IoU >= 0.50
+    with matching clean text), keeps the one with higher confidence (or longer content).
+    """
+    if len(boxes) <= 1:
+        return boxes
+
+    bins = defaultdict(list)
+    for idx, b in enumerate(boxes):
+        bin_k = int(b.norm_y / 0.04)
+        bins[bin_k].append((idx, b))
+
+    suppressed = set()
+    for idx1, b1 in enumerate(boxes):
+        if idx1 in suppressed:
+            continue
+        b1_bin = int(b1.norm_y / 0.04)
+        clean1 = clean_text_for_comparison(b1.content)
+
+        for cand_bin in (b1_bin - 1, b1_bin, b1_bin + 1):
+            for idx2, b2 in bins.get(cand_bin, []):
+                if idx2 <= idx1 or idx2 in suppressed:
+                    continue
+
+                iou_val = calculate_iou(b1, b2)
+                cdist = calculate_center_distance(b1, b2)
+                clean2 = clean_text_for_comparison(b2.content)
+
+                is_dup = False
+                if iou_val >= iou_thresh:
+                    is_dup = True
+                elif (iou_val >= 0.50 or cdist <= 0.02) and clean1 == clean2 and clean1 != "":
+                    is_dup = True
+                elif (
+                    abs(b1.norm_x - b2.norm_x) < 0.005
+                    and abs(b1.norm_y - b2.norm_y) < 0.005
+                    and abs(b1.norm_w - b2.norm_w) < 0.005
+                    and abs(b1.norm_h - b2.norm_h) < 0.005
+                ):
+                    is_dup = True
+
+                if is_dup:
+                    c1 = b1.confidence if b1.confidence is not None else 0.5
+                    c2 = b2.confidence if b2.confidence is not None else 0.5
+                    if c2 > c1:
+                        suppressed.add(idx1)
+                        break
+                    else:
+                        suppressed.add(idx2)
+
+    return [b for idx, b in enumerate(boxes) if idx not in suppressed]
+
+
 def compare_pages(
     pipeline_page: PageData,
     benchmark_page: PageData,
@@ -621,8 +676,8 @@ def compare_pages(
     max_center_dist: float = 0.05
 ) -> PageComparisonResult:
     """Compare a single pipeline page against a benchmark page."""
-    p_boxes = list(pipeline_page.boxes)
-    b_boxes = list(benchmark_page.boxes)
+    p_boxes = deduplicate_page_boxes(list(pipeline_page.boxes))
+    b_boxes = deduplicate_page_boxes(list(benchmark_page.boxes))
 
     matched_pairs: List[MatchedPair] = []
     matched_p_indices = set()
@@ -693,6 +748,34 @@ def compare_pages(
 
     p_only = [pb for idx, pb in enumerate(p_boxes) if idx not in matched_p_indices]
     b_only = [bb for idx, bb in enumerate(b_boxes) if idx not in matched_b_indices]
+
+    # Prune any remaining p_only boxes that heavily overlap an already-matched pipeline box
+    p_matched_boxes = [m.pipeline_box for m in matched_pairs]
+    p_only_pruned: List[AltoBox] = []
+    for pb in p_only:
+        has_overlap = False
+        for mb in p_matched_boxes:
+            if abs(pb.norm_y - mb.norm_y) < 0.08:
+                if calculate_iou(pb, mb) >= 0.40 or (calculate_center_distance(pb, mb) <= 0.025 and calculate_iou(pb, mb) > 0.10):
+                    has_overlap = True
+                    break
+        if not has_overlap:
+            p_only_pruned.append(pb)
+    p_only = p_only_pruned
+
+    # Prune any remaining b_only boxes that heavily overlap an already-matched benchmark box
+    b_matched_boxes = [m.benchmark_box for m in matched_pairs]
+    b_only_pruned: List[AltoBox] = []
+    for bb in b_only:
+        has_overlap = False
+        for mb in b_matched_boxes:
+            if abs(bb.norm_y - mb.norm_y) < 0.08:
+                if calculate_iou(bb, mb) >= 0.40 or (calculate_center_distance(bb, mb) <= 0.025 and calculate_iou(bb, mb) > 0.10):
+                    has_overlap = True
+                    break
+        if not has_overlap:
+            b_only_pruned.append(bb)
+    b_only = b_only_pruned
 
     num_matched = len(matched_pairs)
     total_p = max(1, len(p_boxes))
@@ -861,7 +944,14 @@ def render_comparison_image(
     color_b_only = (220, 53, 69, 160)
     color_b_only_outline = (180, 20, 40, 255)
 
-    # 1. Draw Pipeline boxes on Left Panel
+    # 1. Draw Pipeline boxes on Left Panel (engine-only first, matched pairs on top)
+    for pb in result.pipeline_only_boxes:
+        x1 = pb.norm_x * target_width
+        y1 = pb.norm_y * canvas_h
+        x2 = (pb.norm_x + pb.norm_w) * target_width
+        y2 = (pb.norm_y + pb.norm_h) * canvas_h
+        draw_left.rectangle([x1, y1, x2, y2], fill=color_p_only, outline=color_p_only_outline, width=2)
+
     for m in result.matched_pairs:
         pb = m.pipeline_box
         x1 = pb.norm_x * target_width
@@ -873,14 +963,14 @@ def render_comparison_image(
         outline = color_agree_outline if m.text_clean_match else color_diff_outline
         draw_left.rectangle([x1, y1, x2, y2], fill=fill, outline=outline, width=2)
 
-    for pb in result.pipeline_only_boxes:
-        x1 = pb.norm_x * target_width
-        y1 = pb.norm_y * canvas_h
-        x2 = (pb.norm_x + pb.norm_w) * target_width
-        y2 = (pb.norm_y + pb.norm_h) * canvas_h
-        draw_left.rectangle([x1, y1, x2, y2], fill=color_p_only, outline=color_p_only_outline, width=2)
+    # 2. Draw Benchmark boxes on Right Panel (engine-only first, matched pairs on top)
+    for bb in result.benchmark_only_boxes:
+        x1 = bb.norm_x * target_width
+        y1 = bb.norm_y * canvas_h
+        x2 = (bb.norm_x + bb.norm_w) * target_width
+        y2 = (bb.norm_y + bb.norm_h) * canvas_h
+        draw_right.rectangle([x1, y1, x2, y2], fill=color_b_only, outline=color_b_only_outline, width=2)
 
-    # 2. Draw Benchmark boxes on Right Panel
     for m in result.matched_pairs:
         bb = m.benchmark_box
         x1 = bb.norm_x * target_width
@@ -891,13 +981,6 @@ def render_comparison_image(
         fill = color_agree if m.text_clean_match else color_diff
         outline = color_agree_outline if m.text_clean_match else color_diff_outline
         draw_right.rectangle([x1, y1, x2, y2], fill=fill, outline=outline, width=2)
-
-    for bb in result.benchmark_only_boxes:
-        x1 = bb.norm_x * target_width
-        y1 = bb.norm_y * canvas_h
-        x2 = (bb.norm_x + bb.norm_w) * target_width
-        y2 = (bb.norm_y + bb.norm_h) * canvas_h
-        draw_right.rectangle([x1, y1, x2, y2], fill=color_b_only, outline=color_b_only_outline, width=2)
 
     # Header bar
     header_h = 60
@@ -982,14 +1065,37 @@ def generate_interactive_html(
             "manual_verdict": man_verd
         })
 
-    p_only_data = [
-        {"text": b.content, "box": [b.norm_x, b.norm_y, b.norm_w, b.norm_h], "conf": b.confidence}
-        for b in result.pipeline_only_boxes
-    ]
-    b_only_data = [
-        {"text": b.content, "box": [b.norm_x, b.norm_y, b.norm_w, b.norm_h], "conf": b.confidence}
-        for b in result.benchmark_only_boxes
-    ]
+    p_only_clean = []
+    for b in result.pipeline_only_boxes:
+        overlaps = False
+        for m in result.matched_pairs:
+            if abs(b.norm_y - m.pipeline_box.norm_y) < 0.08:
+                if calculate_iou(b, m.pipeline_box) >= 0.35:
+                    overlaps = True
+                    break
+        if not overlaps:
+            p_only_clean.append({
+                "text": b.content,
+                "box": [b.norm_x, b.norm_y, b.norm_w, b.norm_h],
+                "conf": b.confidence
+            })
+    p_only_data = p_only_clean
+
+    b_only_clean = []
+    for b in result.benchmark_only_boxes:
+        overlaps = False
+        for m in result.matched_pairs:
+            if abs(b.norm_y - m.benchmark_box.norm_y) < 0.08:
+                if calculate_iou(b, m.benchmark_box) >= 0.35:
+                    overlaps = True
+                    break
+        if not overlaps:
+            b_only_clean.append({
+                "text": b.content,
+                "box": [b.norm_x, b.norm_y, b.norm_w, b.norm_h],
+                "conf": b.confidence
+            })
+    b_only_data = b_only_clean
 
     lexical_badge_cls = "qa-win" if result.lexical_win_rate_pct >= 50.0 else "qa-loss"
     coll_disp = collection_name if collection_name else "Collection"
@@ -1493,6 +1599,35 @@ def generate_interactive_html(
   // Populate SVGs and Sidebar
   loadAdjudicationsFromStorage();
 
+  // 1. Pipeline-only boxes (rendered in background)
+  pOnlyData.forEach((p, pIdx) => {{
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", p.box[0] * pageWidth);
+    rect.setAttribute("y", p.box[1] * pageHeight);
+    rect.setAttribute("width", p.box[2] * pageWidth);
+    rect.setAttribute("height", p.box[3] * pageHeight);
+    rect.setAttribute("class", "p-only");
+    rect.id = "p-only-rect-" + pIdx;
+    rect.innerHTML = `<title>Pipeline Only: "${{escapeHtml(p.text)}}"</title>`;
+    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("P", pIdx); }};
+    svgLeft.appendChild(rect);
+  }});
+
+  // 2. Benchmark-only boxes (rendered in background)
+  bOnlyData.forEach((b, bIdx) => {{
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", b.box[0] * pageWidth);
+    rect.setAttribute("y", b.box[1] * pageHeight);
+    rect.setAttribute("width", b.box[2] * pageWidth);
+    rect.setAttribute("height", b.box[3] * pageHeight);
+    rect.setAttribute("class", "b-only");
+    rect.id = "b-only-rect-" + bIdx;
+    rect.innerHTML = `<title>ABBYY Only: "${{escapeHtml(b.text)}}"</title>`;
+    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("B", bIdx); }};
+    svgRight.appendChild(rect);
+  }});
+
+  // 3. Matched Data (rendered on top so matched pairs always capture events)
   matchedData.forEach((m, idx) => {{
     const isAgree = m.clean_match;
     const cls = isAgree ? "agree" : "discrepancy";
@@ -1580,34 +1715,6 @@ def generate_interactive_html(
       }}
     }});
   }}
-
-  // Pipeline-only boxes
-  pOnlyData.forEach((p, pIdx) => {{
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    rect.setAttribute("x", p.box[0] * pageWidth);
-    rect.setAttribute("y", p.box[1] * pageHeight);
-    rect.setAttribute("width", p.box[2] * pageWidth);
-    rect.setAttribute("height", p.box[3] * pageHeight);
-    rect.setAttribute("class", "p-only");
-    rect.id = "p-only-rect-" + pIdx;
-    rect.innerHTML = `<title>Pipeline Only: "${{escapeHtml(p.text)}}"</title>`;
-    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("P", pIdx); }};
-    svgLeft.appendChild(rect);
-  }});
-
-  // Benchmark-only boxes
-  bOnlyData.forEach((b, bIdx) => {{
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    rect.setAttribute("x", b.box[0] * pageWidth);
-    rect.setAttribute("y", b.box[1] * pageHeight);
-    rect.setAttribute("width", b.box[2] * pageWidth);
-    rect.setAttribute("height", b.box[3] * pageHeight);
-    rect.setAttribute("class", "b-only");
-    rect.id = "b-only-rect-" + bIdx;
-    rect.innerHTML = `<title>ABBYY Only: "${{escapeHtml(b.text)}}"</title>`;
-    rect.onclick = (e) => {{ e.stopPropagation(); selectSingleBox("B", bIdx); }};
-    svgRight.appendChild(rect);
-  }});
 
   // Active word selection and highlighting
   let activeIdx = null;
