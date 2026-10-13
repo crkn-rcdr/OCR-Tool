@@ -2374,11 +2374,14 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         if not html_link:
             html_link = f"{col}/{stem}_comparison.html" if col else f"{stem}_comparison.html"
 
+        p_w = r.get("pipeline_words", 0)
+        b_w = r.get("benchmark_words", 0)
         records_for_table.append({
             "name": stem,
             "collection": col,
-            "p_words": r.get("pipeline_words", 0),
-            "b_words": r.get("benchmark_words", 0),
+            "p_words": p_w,
+            "b_words": b_w,
+            "word_diff": p_w - b_w,
             "match_rate": r.get("spatial_match_rate_pct", 0),
             "exact_conc": r.get("text_concordance_exact_pct", 0),
             "clean_conc": r.get("text_concordance_clean_pct", 0),
@@ -2462,6 +2465,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left; }}
   th {{ background: #0d1117; color: #8b949e; font-weight: 600; padding: 10px 14px; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; white-space: nowrap; }}
   th:hover {{ color: #58a6ff; }}
+  .sort-icon {{ font-size: 0.75rem; margin-left: 4px; color: #8b949e; }}
   td {{ padding: 10px 14px; border-bottom: 1px solid #21262d; }}
   tr:hover td {{ background: #1c2128; }}
   
@@ -2620,19 +2624,26 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         <option value="paddle">Paddle Advantage (≥ 50%)</option>
         <option value="abbyy">ABBYY Advantage (&lt; 50%)</option>
       </select>
+
+      <select id="selWordDelta" class="filter-select">
+        <option value="all">All Word Deltas</option>
+        <option value="paddle_plus">Paddle Added Words (Delta &gt; 0)</option>
+        <option value="paddle_minus">Paddle Fewer Words (Delta &lt; 0)</option>
+        <option value="equal">Equal Word Count (Delta = 0)</option>
+      </select>
     </div>
 
     <div class="table-responsive">
       <table id="pageTable">
         <thead>
           <tr>
-            <th onclick="sortTable('name')">Page / Item Name ⇕</th>
-            <th onclick="sortTable('collection')">Collection ⇕</th>
-            <th onclick="sortTable('p_words')">Words (P / B) ⇕</th>
-            <th onclick="sortTable('match_rate')">Spatial Align ⇕</th>
-            <th onclick="sortTable('clean_conc')">Concordance ⇕</th>
-            <th onclick="sortTable('win_rate')">Paddle QA Win ⇕</th>
-            <th onclick="sortTable('diffs')">Diffs ⇕</th>
+            <th onclick="sortTable('name')">Page / Item Name <span class="sort-icon" id="sort-name">▲</span></th>
+            <th onclick="sortTable('collection')">Collection <span class="sort-icon" id="sort-collection">⇕</span></th>
+            <th onclick="sortTable('word_diff')" title="Sort by total added words (Paddle minus ABBYY delta)">Words: P / B (Delta) <span class="sort-icon" id="sort-word_diff">⇕</span></th>
+            <th onclick="sortTable('match_rate')">Spatial Align <span class="sort-icon" id="sort-match_rate">⇕</span></th>
+            <th onclick="sortTable('clean_conc')">Concordance <span class="sort-icon" id="sort-clean_conc">⇕</span></th>
+            <th onclick="sortTable('win_rate')">Paddle QA Win <span class="sort-icon" id="sort-win_rate">⇕</span></th>
+            <th onclick="sortTable('diffs')">Diffs <span class="sort-icon" id="sort-diffs">⇕</span></th>
             <th>Action</th>
           </tr>
         </thead>
@@ -2667,6 +2678,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   const selCollection = document.getElementById("selCollection");
   const selConcordance = document.getElementById("selConcordance");
   const selQAWin = document.getElementById("selQAWin");
+  const selWordDelta = document.getElementById("selWordDelta");
   const tableBody = document.getElementById("pageTableBody");
   const pageInfo = document.getElementById("pageInfo");
   const btnPrev = document.getElementById("btnPrevPage");
@@ -2677,6 +2689,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     const coll = selCollection.value;
     const concTier = selConcordance.value;
     const qaTier = selQAWin.value;
+    const deltaTier = selWordDelta ? selWordDelta.value : "all";
 
     filteredRecords = allRecords.filter(r => {{
       if (query && !r.name.toLowerCase().includes(query) && !r.collection.toLowerCase().includes(query)) {{
@@ -2691,6 +2704,11 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
       if (qaTier === "paddle" && r.win_rate < 50) return false;
       if (qaTier === "abbyy" && r.win_rate >= 50) return false;
+
+      const delta = (r.word_diff !== undefined) ? r.word_diff : (r.p_words - r.b_words);
+      if (deltaTier === "paddle_plus" && delta <= 0) return false;
+      if (deltaTier === "paddle_minus" && delta >= 0) return false;
+      if (deltaTier === "equal" && delta !== 0) return false;
 
       return true;
     }});
@@ -2708,15 +2726,33 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     }}
 
     filteredRecords.sort((a, b) => {{
-      let vA = a[col];
-      let vB = b[col];
+      let vA = (col === "word_diff") ? ((a.word_diff !== undefined) ? a.word_diff : (a.p_words - a.b_words)) : a[col];
+      let vB = (col === "word_diff") ? ((b.word_diff !== undefined) ? b.word_diff : (b.p_words - b.b_words)) : b[col];
       if (typeof vA === "string") {{
         return sortAsc ? vA.localeCompare(vB) : vB.localeCompare(vA);
       }}
       return sortAsc ? (vA - vB) : (vB - vA);
     }});
 
+    updateSortIcons();
+    currentPage = 1;
     renderTable();
+  }}
+
+  function updateSortIcons() {{
+    const cols = ['name', 'collection', 'word_diff', 'match_rate', 'clean_conc', 'win_rate', 'diffs'];
+    cols.forEach(c => {{
+      const el = document.getElementById('sort-' + c);
+      if (el) {{
+        if (sortCol === c) {{
+          el.textContent = sortAsc ? " ▲" : " ▼";
+          el.style.color = "#58a6ff";
+        }} else {{
+          el.textContent = " ⇕";
+          el.style.color = "#8b949e";
+        }}
+      }}
+    }});
   }}
 
   function renderTable() {{
@@ -2755,10 +2791,10 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         }}
       }}
 
-      const wordDelta = r.p_words - r.b_words;
+      const wordDelta = (r.word_diff !== undefined) ? r.word_diff : (r.p_words - r.b_words);
       const wordPct = r.b_words > 0 ? ((wordDelta / r.b_words) * 100).toFixed(0) : "0";
       const wSign = wordDelta > 0 ? "+" : "";
-      const wColor = wordDelta > 0 ? "#3fb950" : (wordDelta < -5 ? "#f85149" : "#8b949e");
+      const wColor = wordDelta > 0 ? "#3fb950" : (wordDelta < 0 ? "#f85149" : "#8b949e");
 
       // Check for manual review stored in localStorage
       let manualBadge = "";
@@ -2777,7 +2813,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
       tr.innerHTML = `
         <td style="font-weight:600;color:#f0f6fc;">${{r.name}}${{manualBadge}}</td>
         <td style="color:#8b949e;font-size:0.8rem;">${{r.collection}}</td>
-        <td><strong>${{r.p_words}}</strong> <span style="color:#6e7681;">/ ${{r.b_words}}</span> <span style="font-size:0.75rem;font-weight:600;color:${{wColor}};">(${{wSign}}${{wordPct}}%)</span></td>
+        <td><strong>${{r.p_words}}</strong> <span style="color:#6e7681;">/ ${{r.b_words}}</span> <span style="font-size:0.75rem;font-weight:600;color:${{wColor}};" title="Delta: ${{wSign}}${{wordDelta}} words (${{wSign}}${{wordPct}}%)">(${{wSign}}${{wordDelta}})</span></td>
         <td>${{r.match_rate.toFixed(1)}}%</td>
         <td><span class="badge-conc ${{concCls}}">${{r.clean_conc.toFixed(1)}}%</span></td>
         <td><span class="badge-qa ${{qaCls}}">${{r.win_rate.toFixed(1)}}% (${{r.p_wins}}P vs ${{r.b_wins}}B)</span></td>
@@ -2910,11 +2946,13 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   selCollection.onchange = applyFilters;
   selConcordance.onchange = applyFilters;
   selQAWin.onchange = applyFilters;
+  if (selWordDelta) selWordDelta.onchange = applyFilters;
 
   btnPrev.onclick = () => {{ if (currentPage > 1) {{ currentPage--; renderTable(); }} }};
   btnNext.onclick = () => {{ if ((currentPage * pageSize) < filteredRecords.length) {{ currentPage++; renderTable(); }} }};
 
   // Initial render
+  updateSortIcons();
   renderTable();
   updateDashboardManualBadge();
 </script>
