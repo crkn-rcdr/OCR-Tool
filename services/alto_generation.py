@@ -168,10 +168,21 @@ def extract_paddlevl_lines(data):
     return sort_lines_reading_order(lines)
 
 
-def extract_word_level_lines(ocr_payload):
+def extract_word_level_lines(ocr_payload, lang: str | None = None):
     """Build line structures directly from word-level OCR arrays when available."""
+    if lang is None:
+        lang = ocr_payload.get("detected_language") or ocr_payload.get("lang")
+    if (not lang or lang in {"auto", "None", "none"}) and ocr_payload.get("rec_texts"):
+        try:
+            from services.language_detection import detect_document_language
+            lang = detect_document_language(ocr_payload.get("rec_texts"))
+        except Exception:
+            pass
+    if lang:
+        ocr_payload["detected_language"] = lang
+
     try:
-        normalize_ocr_word_boxes_in_payload(ocr_payload)
+        normalize_ocr_word_boxes_in_payload(ocr_payload, lang=lang)
     except Exception:
         pass
     rec_texts = ocr_payload.get("rec_texts", [])
@@ -218,6 +229,7 @@ def extract_word_level_lines(ocr_payload):
             boxes,
             line_text=line_text,
             line_score=line_score,
+            lang=lang,
         )
         string_items = []
 
@@ -322,7 +334,7 @@ def extract_line_level_items(source_payload):
     return items
 
 
-def build_alto_lines(data):
+def build_alto_lines(data, lang: str | None = None):
     """Build normalized ALTO-style lines from the available OCR structures."""
     if "result" in data:
         return extract_paddlevl_lines(data)
@@ -339,7 +351,7 @@ def build_alto_lines(data):
 
     source_payload = extract_source_ocr_payload(data)
 
-    word_lines = extract_word_level_lines(source_payload)
+    word_lines = extract_word_level_lines(source_payload, lang=lang)
     if word_lines:
         return word_lines
 
@@ -1268,7 +1280,17 @@ def generate_alto(
     else:
         data = data_payload
 
-    lines = build_alto_lines(data)
+    # Resolve effective language for ALTO:
+    from services.language_detection import detect_document_language, map_lang_to_alto_code
+    eff_lang = lang
+    if not eff_lang or eff_lang in {"auto", "None", "none"}:
+        eff_lang = data.get("detected_language") or data.get("lang")
+    if (not eff_lang or eff_lang in {"auto", "None", "none"}) and data.get("rec_texts"):
+        eff_lang = detect_document_language(data.get("rec_texts"))
+
+    alto_lang = map_lang_to_alto_code(eff_lang)
+
+    lines = build_alto_lines(data, lang=eff_lang)
 
     # Use fileName from JSON if available; otherwise fall back to image name.
     file_name = data.get("fileName", image.name)
@@ -1347,8 +1369,8 @@ def generate_alto(
         tb_attrs = box_to_alto_attrs(block["box"], scale)
         tb_attrs["ID"] = f"Page1_Block{block_index}"
         tb_attrs["STYLEREFS"] = block_style_id(block)
-        if lang:
-            tb_attrs["LANG"] = lang
+        if alto_lang:
+            tb_attrs["LANG"] = alto_lang
         if profile == ALTO_PROFILE_LEGACY:
             tb_attrs[f"{{{XLINK_NS}}}type"] = "simple"
 
@@ -1407,8 +1429,8 @@ def generate_alto(
                     **box_to_alto_attrs(string_item["box"], scale),
                 }
 
-                if lang:
-                    attrs["LANG"] = lang
+                if alto_lang:
+                    attrs["LANG"] = alto_lang
 
                 wc = string_item.get("score")
                 if wc is not None:

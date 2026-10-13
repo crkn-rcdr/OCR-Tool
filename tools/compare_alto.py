@@ -107,36 +107,50 @@ except ImportError:
 SINGLE_LETTER_VALID = {"a", "i", "y", "à", "ô", "o", "d", "l"}
 
 
-def get_spellcheckers() -> Tuple[Any, Any]:
-    """Lazy initialize English and French spellcheckers."""
-    global _SP_EN, _SP_FR
+_SP_REGISTRY: Dict[str, Any] = {}
+
+def get_spellchecker(lang: str = "en") -> Optional[Any]:
+    """Lazy initialize and cache spellcheckers for supported Canadiana languages."""
+    global _SP_REGISTRY
     if not HAS_SPELLCHECKER:
-        return None, None
-    if _SP_EN is None:
+        return None
+    code = (lang or "en").lower().strip()
+    if code in {"english", "en_ca", "en_us", "en_gb"}:
+        code = "en"
+    elif code in {"french", "fr_ca", "fr_fr"}:
+        code = "fr"
+    elif code in {"italian", "italiano"}:
+        code = "it"
+    elif code in {"german", "deutsch"}:
+        code = "de"
+    elif code in {"spanish", "espanol"}:
+        code = "es"
+
+    if code not in _SP_REGISTRY:
         try:
-            _SP_EN = SpellChecker(language="en")
+            _SP_REGISTRY[code] = SpellChecker(language=code)
         except Exception:
-            _SP_EN = None
-    if _SP_FR is None:
-        try:
-            _SP_FR = SpellChecker(language="fr")
-        except Exception:
-            _SP_FR = None
-    return _SP_EN, _SP_FR
+            _SP_REGISTRY[code] = None
+    return _SP_REGISTRY.get(code)
 
 
-def is_lexically_valid_word(word: str) -> bool:
-    """Check if a word token is recognized in English or French dictionaries or standard abbreviations.
+def get_spellcheckers() -> Tuple[Any, Any]:
+    """Return shared EN and FR spellcheckers for backwards compatibility."""
+    return get_spellchecker("en"), get_spellchecker("fr")
+
+
+def is_lexically_valid_word(word: str, lang: Optional[str] = None) -> bool:
+    """Check if a word token is recognized in historical Canadian vocabulary or standard dictionaries.
     
-    Used to resolve OCR discrepancies: when Pipeline and Benchmark disagree,
-    determines which engine produced a genuine lexical word vs garbled OCR artifacts.
+    Supports English, French, Italian, German, and Spanish. When language is specified
+    (e.g., lang='it' for Italian newspapers), prioritizes that language's dictionary.
     """
     if not word:
         return False
 
     subwords = str(word).strip().split()
     if len(subwords) > 1:
-        return all(is_lexically_valid_word(sw) for sw in subwords)
+        return all(is_lexically_valid_word(sw, lang=lang) for sw in subwords)
 
     clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", word.lower().strip())
     if not clean:
@@ -145,17 +159,13 @@ def is_lexically_valid_word(word: str) -> bool:
         return True
 
     # Numeric tokens, date ranges, page spans, currency amounts, section numbers
-    # e.g., "1-20", "1914-1918", "25-30", "1/2", "3:15", "$10.50", "no.1", "1st", "2nd"
     if clean.isdigit() or (re.match(r"^[\d,.\-/:#]+$", clean) and any(ch.isdigit() for ch in clean)):
-        _LEXICAL_CACHE[clean] = True
         return True
     if re.match(r"^\d+(st|nd|rd|th)$", clean):
-        _LEXICAL_CACHE[clean] = True
         return True
 
     # CJK characters (Chinese/Japanese/Korean) are natural-language word tokens
     if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
-        _LEXICAL_CACHE[clean] = True
         return True
 
     # Single-letter tokens
@@ -163,36 +173,67 @@ def is_lexically_valid_word(word: str) -> bool:
         return clean in SINGLE_LETTER_VALID
 
     # Check cache
-    if clean in _LEXICAL_CACHE:
-        return _LEXICAL_CACHE[clean]
+    cache_key = (clean, lang)
+    if cache_key in _LEXICAL_CACHE:
+        return _LEXICAL_CACHE[cache_key]
 
     if clean in COMMON_VALID_TOKENS:
-        _LEXICAL_CACHE[clean] = True
+        _LEXICAL_CACHE[cache_key] = True
+        return True
+
+    if is_valid_historical_word is not None and is_valid_historical_word(clean, lang=lang):
+        _LEXICAL_CACHE[cache_key] = True
         return True
 
     if resolve_archaic_long_s is not None:
         long_s_cand = resolve_archaic_long_s(clean)
-        if long_s_cand and long_s_cand != clean and is_lexically_valid_word(long_s_cand):
-            _LEXICAL_CACHE[clean] = True
+        if long_s_cand and long_s_cand != clean and is_lexically_valid_word(long_s_cand, lang=lang):
+            _LEXICAL_CACHE[cache_key] = True
             return True
 
-    if regularize_french_diacritics is not None:
+    if regularize_french_diacritics is not None and lang in {"fr", "french", "bilingual", None}:
         diacritic_cand = regularize_french_diacritics(clean)
-        if diacritic_cand and diacritic_cand != clean and is_lexically_valid_word(diacritic_cand):
-            _LEXICAL_CACHE[clean] = True
+        if diacritic_cand and diacritic_cand != clean and is_lexically_valid_word(diacritic_cand, lang=lang):
+            _LEXICAL_CACHE[cache_key] = True
             return True
 
-    sp_en, sp_fr = get_spellcheckers()
-    if sp_en is None and sp_fr is None:
-        return False
-
+    norm_l = (lang or "").lower().strip()
     is_valid = False
-    if sp_en and clean in sp_en:
-        is_valid = True
-    elif sp_fr and clean in sp_fr:
-        is_valid = True
 
-    _LEXICAL_CACHE[clean] = is_valid
+    # 1. Target language check
+    if norm_l in {"it", "italian"}:
+        sp_it = get_spellchecker("it")
+        if sp_it and clean in sp_it:
+            is_valid = True
+    elif norm_l in {"de", "german"}:
+        sp_de = get_spellchecker("de")
+        if sp_de and clean in sp_de:
+            is_valid = True
+    elif norm_l in {"es", "spanish"}:
+        sp_es = get_spellchecker("es")
+        if sp_es and clean in sp_es:
+            is_valid = True
+    elif norm_l in {"fr", "french"}:
+        sp_fr = get_spellchecker("fr")
+        if sp_fr and clean in sp_fr:
+            is_valid = True
+        else:
+            sp_en = get_spellchecker("en")
+            if sp_en and clean in sp_en:
+                is_valid = True
+    elif norm_l in {"en", "english"}:
+        sp_en = get_spellchecker("en")
+        if sp_en and clean in sp_en:
+            is_valid = True
+    elif not norm_l or norm_l in {"bilingual", "all", "auto"}:
+        # Multi-lingual lookup across supported Canadiana languages
+        for check_code in ("en", "fr", "it", "de", "es"):
+            sp = get_spellchecker(check_code)
+            if sp and clean in sp:
+                is_valid = True
+                break
+
+    _LEXICAL_CACHE[cache_key] = is_valid
     return is_valid
 
 
@@ -265,6 +306,7 @@ class PageComparisonResult:
     lexical_win_rate_pct: float = 50.0
     paddle_valid_words: int = 0
     abbyy_valid_words: int = 0
+    detected_language: str = "en"
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +671,18 @@ def compare_pages(
     concordance_rate = (exact_matches / num_matched * 100.0) if num_matched else 0.0
     clean_concordance_rate = (clean_matches / num_matched * 100.0) if num_matched else 0.0
 
+    # Detect document primary natural language from recognized token distribution
+    sample_tokens = [b.content for b in p_boxes if len(b.content) > 3 and b.content.isalpha()]
+    if not sample_tokens:
+        sample_tokens = [b.content for b in b_boxes if len(b.content) > 3 and b.content.isalpha()]
+    doc_lang = "en"
+    if sample_tokens:
+        try:
+            from services.language_detection import detect_document_language
+            doc_lang = detect_document_language(" ".join(sample_tokens[:250]), fallback="en")
+        except Exception:
+            doc_lang = "en"
+
     # Collect discrepancies (words with spatial alignment but textual divergence)
     # and perform automated lexical QA adjudication
     discrepancies = []
@@ -639,8 +693,8 @@ def compare_pages(
 
     for m in matched_pairs:
         if not m.text_clean_match:
-            p_val = is_lexically_valid_word(m.pipeline_box.content)
-            b_val = is_lexically_valid_word(m.benchmark_box.content)
+            p_val = is_lexically_valid_word(m.pipeline_box.content, lang=doc_lang)
+            b_val = is_lexically_valid_word(m.benchmark_box.content, lang=doc_lang)
 
             if p_val and not b_val:
                 verdict = "PADDLE_WIN"
@@ -676,8 +730,8 @@ def compare_pages(
     decisive_disputes = p_lex_wins + b_lex_wins
     lexical_win_rate = round(p_lex_wins / decisive_disputes * 100.0, 2) if decisive_disputes > 0 else 50.0
 
-    p_valid_words_tot = sum(1 for m in matched_pairs if is_lexically_valid_word(m.pipeline_box.content))
-    b_valid_words_tot = sum(1 for m in matched_pairs if is_lexically_valid_word(m.benchmark_box.content))
+    p_valid_words_tot = sum(1 for m in matched_pairs if is_lexically_valid_word(m.pipeline_box.content, lang=doc_lang))
+    b_valid_words_tot = sum(1 for m in matched_pairs if is_lexically_valid_word(m.benchmark_box.content, lang=doc_lang))
 
     return PageComparisonResult(
         item_name=item_name,
@@ -703,7 +757,8 @@ def compare_pages(
         neither_valid_count=neither_valid,
         lexical_win_rate_pct=lexical_win_rate,
         paddle_valid_words=p_valid_words_tot,
-        abbyy_valid_words=b_valid_words_tot
+        abbyy_valid_words=b_valid_words_tot,
+        detected_language=doc_lang,
     )
 
 
@@ -861,9 +916,10 @@ def generate_interactive_html(
         key = (round(m.pipeline_box.norm_x, 4), round(m.pipeline_box.norm_y, 4))
         d_info = disc_map.get(key)
         
+        doc_lang = getattr(result, "detected_language", "en")
         verdict = d_info["lexical_verdict"] if d_info else ""
-        p_val = d_info["pipeline_valid"] if d_info else is_lexically_valid_word(m.pipeline_box.content)
-        b_val = d_info["benchmark_valid"] if d_info else is_lexically_valid_word(m.benchmark_box.content)
+        p_val = d_info["pipeline_valid"] if d_info else is_lexically_valid_word(m.pipeline_box.content, lang=doc_lang)
+        b_val = d_info["benchmark_valid"] if d_info else is_lexically_valid_word(m.benchmark_box.content, lang=doc_lang)
 
         man_verd = initial_manual_adjudications.get(idx_pair)
 
@@ -1231,6 +1287,7 @@ def generate_interactive_html(
     {'<a href="' + next_page_url + '" class="nav-page-btn">Next ›</a>' if next_page_url else '<span class="nav-page-btn disabled">Next ›</span>'}
   </div>
   <div class="badges">
+    <div class="badge info" title="Detected Document Language">Lang: {getattr(result, 'detected_language', 'en').upper()}</div>
     <div class="badge {recall_badge_cls}" title="Recognized words: Pipeline {p_words} vs Benchmark {b_words} ({sign}{delta_pct}% recall advantage)">Words: {p_words} P / {b_words} B ({sign}{delta_pct}%)</div>
     <div class="badge success" title="Text Concordance (Cleaned)">Concordance: {result.clean_text_concordance_rate}%</div>
     <div class="badge {lexical_badge_cls}" id="badgeQaWinRate" title="Paddle {result.paddle_lexical_wins} wins vs ABBYY {result.abbyy_lexical_wins} wins on disputed words">Paddle QA Win Rate: {result.lexical_win_rate_pct}%</div>

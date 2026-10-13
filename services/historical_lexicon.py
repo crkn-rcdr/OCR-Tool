@@ -162,11 +162,26 @@ CANADIAN_HISTORICAL_NAMES_AND_SURNAMES: Set[str] = {
     "mfg", "tel", "ave", "boul", "bvd", "blvd", "bldg", "san", "francisco",
 }
 
+# ---------------------------------------------------------------------------
+# 3c. Historical Italian Canadian Newspapers & Cultural Terms (Il Cittadino Canadese, etc.)
+# ---------------------------------------------------------------------------
+
+CANADIAN_ITALIAN_TERMS: Set[str] = {
+    "cittadino", "cittadini", "canadese", "canadesi", "italia", "italiano",
+    "italiana", "italiani", "italiane", "corriere", "tribuna", "voce",
+    "stampa", "messaggero", "comunitario", "comunitaria", "emigrazione",
+    "emigrati", "colonia", "coloniale", "patria", "montreale", "montreal",
+    "toronto", "ottawa", "vancouver", "quebec", "ontario", "canada",
+    "roma", "milano", "napoli", "palermo", "genova", "venezia", "trieste",
+    "località", "qualità", "società", "attività", "capacità", "proprietà",
+}
+
 ALL_CANADIAN_LEXICON_TOKENS: Set[str] = (
     CANADIAN_HISTORICAL_PLACES
     | CANADIAN_HISTORICAL_TERMS
     | CANADIAN_HISTORICAL_ABBREVIATIONS
     | CANADIAN_HISTORICAL_NAMES_AND_SURNAMES
+    | CANADIAN_ITALIAN_TERMS
 )
 
 # ---------------------------------------------------------------------------
@@ -480,24 +495,35 @@ def normalize_historical_orthography(text: str, is_french: bool = False) -> str:
     return updated
 
 
-_SP_EN_INSTANCE = None
-_SP_FR_INSTANCE = None
+_SP_INSTANCES: Dict[str, Any] = {}
+
+def get_shared_spellchecker(lang: str = "en") -> Optional[Any]:
+    """Lazy initialize and cache spellcheckers for supported Canadiana languages."""
+    global _SP_INSTANCES
+    code = (lang or "en").lower().strip()
+    if code in {"english", "en_ca", "en_us", "en_gb"}:
+        code = "en"
+    elif code in {"french", "fr_ca", "fr_fr"}:
+        code = "fr"
+    elif code in {"italian", "italiano"}:
+        code = "it"
+    elif code in {"german", "deutsch"}:
+        code = "de"
+    elif code in {"spanish", "espanol"}:
+        code = "es"
+
+    if code not in _SP_INSTANCES:
+        try:
+            from spellchecker import SpellChecker
+            _SP_INSTANCES[code] = SpellChecker(language=code)
+        except Exception:
+            _SP_INSTANCES[code] = None
+    return _SP_INSTANCES.get(code)
+
 
 def _get_shared_spellcheckers():
-    global _SP_EN_INSTANCE, _SP_FR_INSTANCE
-    if _SP_EN_INSTANCE is None:
-        try:
-            from spellchecker import SpellChecker
-            _SP_EN_INSTANCE = SpellChecker(language="en")
-        except Exception:
-            pass
-    if _SP_FR_INSTANCE is None:
-        try:
-            from spellchecker import SpellChecker
-            _SP_FR_INSTANCE = SpellChecker(language="fr")
-        except Exception:
-            pass
-    return _SP_EN_INSTANCE, _SP_FR_INSTANCE
+    """Return shared EN and FR spellcheckers for backwards compatibility."""
+    return get_shared_spellchecker("en"), get_shared_spellchecker("fr")
 
 
 # High-confidence optical confusion and abbreviation mappings common to historical print
@@ -545,25 +571,38 @@ HISTORICAL_OPTICAL_CORRECTIONS: Dict[str, str] = {
     "carryin": "carrying",
     "senching": "searching",
     # French historical dropouts & faint terminal accents
+    "fraichement": "fraîchement",
+    "deyenir": "devenir",
+    "deyenant": "devenant",
+}
+
+FRENCH_OPTICAL_CORRECTIONS: Dict[str, str] = {
     "qualit": "qualité",
     "societ": "société",
     "activit": "activité",
     "comptabilit": "comptabilité",
     "capacit": "capacité",
     "propriet": "propriété",
-    "fraichement": "fraîchement",
-    "deyenir": "devenir",
-    "deyenant": "devenant",
+}
+
+ITALIAN_OPTICAL_CORRECTIONS: Dict[str, str] = {
+    "localit": "località",
+    "qualit": "qualità",
+    "societ": "società",
+    "activit": "attività",
+    "comptabilit": "contabilità",
+    "capacit": "capacità",
+    "propriet": "proprietà",
 }
 
 
-def is_valid_historical_word(word: str) -> bool:
-    """Check if a word token is recognized in historical Canadian vocabulary or standard EN/FR dictionaries."""
+def is_valid_historical_word(word: str, lang: Optional[str] = None) -> bool:
+    """Check if a word token is recognized in historical Canadian vocabulary or standard dictionaries."""
     if not word:
         return False
     subwords = str(word).strip().split()
     if len(subwords) > 1:
-        return all(is_valid_historical_word(sw) for sw in subwords)
+        return all(is_valid_historical_word(sw, lang=lang) for sw in subwords)
     clean = re.sub(r"^[^\w\d&]+|[^\w\d]+$", "", str(word).lower().strip())
     if not clean:
         return False
@@ -576,20 +615,58 @@ def is_valid_historical_word(word: str) -> bool:
     if any("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf" for ch in clean):
         return True
     if len(clean) == 1:
-        return clean in {"a", "i", "o", "y", "à", "d", "l", "s", "n", "m", "j", "t", "c"}
+        return clean in {"a", "i", "o", "y", "à", "è", "é", "d", "l", "s", "n", "m", "j", "t", "c", "e", "u"}
     if clean in ALL_CANADIAN_LEXICON_TOKENS:
         return True
     if clean in HISTORICAL_OPTICAL_CORRECTIONS.values():
         return True
-    sp_en, sp_fr = _get_shared_spellcheckers()
-    if sp_en and clean in sp_en:
-        return True
-    if sp_fr and clean in sp_fr:
-        return True
+
+    # 1. Check language-specific dictionary first when document language is known
+    norm_l = (lang or "").lower().strip()
+    if norm_l in {"it", "italian"}:
+        sp_it = get_shared_spellchecker("it")
+        if sp_it and clean in sp_it:
+            return True
+        if clean in ITALIAN_OPTICAL_CORRECTIONS.values():
+            return True
+    elif norm_l in {"de", "german"}:
+        sp_de = get_shared_spellchecker("de")
+        if sp_de and clean in sp_de:
+            return True
+    elif norm_l in {"es", "spanish"}:
+        sp_es = get_shared_spellchecker("es")
+        if sp_es and clean in sp_es:
+            return True
+    elif norm_l in {"fr", "french"}:
+        sp_fr = get_shared_spellchecker("fr")
+        if sp_fr and clean in sp_fr:
+            return True
+        if clean in FRENCH_OPTICAL_CORRECTIONS.values():
+            return True
+        sp_en = get_shared_spellchecker("en")
+        if sp_en and clean in sp_en:
+            return True
+    elif norm_l in {"en", "english"}:
+        sp_en = get_shared_spellchecker("en")
+        if sp_en and clean in sp_en:
+            return True
+
+    # 2. Multi-lingual lookup fallback ONLY if language is unspecified or bilingual
+    if not norm_l or norm_l in {"bilingual", "all", "auto"}:
+        for check_code in ("en", "fr", "it", "de", "es"):
+            sp = get_shared_spellchecker(check_code)
+            if sp and clean in sp:
+                return True
+
     return False
 
 
-def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_confidence: float = 0.88) -> str:
+def regularize_broken_historical_word(
+    word: str,
+    confidence: float = 0.75,
+    max_confidence: float = 0.88,
+    lang: Optional[str] = None,
+) -> str:
     """1-edit Levenshtein dictionary regularizer and optical confusion resolver for broken microfilm letterforms.
     
     Snaps single-character split or broken strokes (e.g., 'resering' -> 'reserving', 'sd' -> 'said',
@@ -604,7 +681,9 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
     if not clean.isalpha():
         return word
 
-    # 1. Deterministic historical optical corrections (e.g. sd -> said, thie -> this, resering -> reserving)
+    norm_l = (lang or "").lower().strip()
+
+    # 1. Deterministic historical optical corrections
     if clean in HISTORICAL_OPTICAL_CORRECTIONS:
         target = HISTORICAL_OPTICAL_CORRECTIONS[clean]
         if word.istitle():
@@ -613,18 +692,41 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
             return target.upper()
         return target
 
-    # 2. If already a valid canonical Canadian historical word or dictionary word, do not change
+    if norm_l in {"it", "italian"}:
+        if clean in ITALIAN_OPTICAL_CORRECTIONS:
+            target = ITALIAN_OPTICAL_CORRECTIONS[clean]
+            if word.istitle():
+                return target.capitalize()
+            elif word.isupper():
+                return target.upper()
+            return target
+    elif norm_l in {"fr", "french", "bilingual", ""}:
+        if clean in FRENCH_OPTICAL_CORRECTIONS:
+            target = FRENCH_OPTICAL_CORRECTIONS[clean]
+            if word.istitle():
+                return target.capitalize()
+            elif word.isupper():
+                return target.upper()
+            return target
+
+    # 2. CRITICAL SAFEGUARD: If already a valid canonical Canadian historical word
+    # or recognized dictionary word in ANY supported language (EN, FR, IT, DE, ES),
+    # NEVER mutate it! This guarantees valid Italian words (e.g. 'località', 'qualche',
+    # 'scheda') will never be swapped for spurious English or French words.
     if clean in ALL_CANADIAN_LEXICON_TOKENS:
         return word
 
-    sp_en, sp_fr = _get_shared_spellcheckers()
-    if sp_en and clean in sp_en:
-        return word
-    if sp_fr and clean in sp_fr:
-        return word
+    for check_code in ("en", "fr", "it", "de", "es"):
+        sp = get_shared_spellchecker(check_code)
+        if sp and clean in sp:
+            return word
 
     # Words under 4 chars must not be heuristically spell-checked to avoid corrupting short words
     if len(clean) < 4:
+        return word
+
+    # Non-Latin languages (e.g. Chinese) must never have Latin dictionary regularizer applied
+    if norm_l in {"zh", "chinese", "chinese_cht", "ch"}:
         return word
 
     # 3. Fuzzy 1-edit Levenshtein regularizer:
@@ -634,12 +736,46 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
     if confidence > max_confidence and len(clean) < 5:
         return word
 
+    cand_sps = []
+    if norm_l in {"it", "italian"}:
+        sp_it = get_shared_spellchecker("it")
+        if sp_it:
+            cand_sps.append(sp_it)
+    elif norm_l in {"de", "german"}:
+        sp_de = get_shared_spellchecker("de")
+        if sp_de:
+            cand_sps.append(sp_de)
+    elif norm_l in {"es", "spanish"}:
+        sp_es = get_shared_spellchecker("es")
+        if sp_es:
+            cand_sps.append(sp_es)
+    elif norm_l in {"fr", "french"}:
+        sp_fr = get_shared_spellchecker("fr")
+        if sp_fr:
+            cand_sps.append(sp_fr)
+        sp_en = get_shared_spellchecker("en")
+        if sp_en:
+            cand_sps.append(sp_en)
+    elif norm_l in {"en", "english"}:
+        sp_en = get_shared_spellchecker("en")
+        if sp_en:
+            cand_sps.append(sp_en)
+    else:
+        # Default / bilingual fallback: English and French
+        sp_en = get_shared_spellchecker("en")
+        sp_fr = get_shared_spellchecker("fr")
+        if sp_en:
+            cand_sps.append(sp_en)
+        if sp_fr:
+            cand_sps.append(sp_fr)
+
     import difflib
     candidates = []
-    if sp_en:
-        candidates.extend(list(sp_en.candidates(clean) or []))
-    if sp_fr and len(candidates) < 3:
-        candidates.extend(list(sp_fr.candidates(clean) or []))
+    for sp in cand_sps:
+        cands = list(sp.candidates(clean) or [])
+        candidates.extend(cands)
+        if len(candidates) >= 5:
+            break
 
     scored = []
     for c in candidates:
@@ -648,10 +784,11 @@ def regularize_broken_historical_word(word: str, confidence: float = 0.75, max_c
             # Require tight 1-edit similarity
             if ratio >= min_ratio:
                 freq = 0
-                if sp_en:
-                    freq = max(freq, sp_en.word_frequency[c] or 0)
-                if sp_fr:
-                    freq = max(freq, sp_fr.word_frequency[c] or 0)
+                for sp in cand_sps:
+                    try:
+                        freq = max(freq, sp.word_frequency[c] or 0)
+                    except Exception:
+                        pass
                 if c in ALL_CANADIAN_LEXICON_TOKENS:
                     freq += 1000000
                 if freq > 0:

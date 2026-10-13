@@ -20,7 +20,7 @@ COMMON_ABBREVIATIONS = {
 ORPHAN_PUNCTUATION_RE = re.compile(r"^[.,;:!?—–\-]+$")
 
 
-def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
+def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any], lang: Optional[str] = None) -> bool:
     """Merge split word-box metadata (apostrophes, abbreviations, orphan punctuation).
 
     PaddleX treats punctuation as standalone symbols when building `text_word`.
@@ -29,8 +29,19 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
     """
     changed = False
 
+    if lang is None:
+        lang = payload.get("detected_language") or payload.get("lang")
+    if not lang and payload.get("rec_texts"):
+        try:
+            from services.language_detection import detect_document_language
+            lang = detect_document_language(payload.get("rec_texts"))
+        except Exception:
+            pass
+    if lang:
+        payload["detected_language"] = lang
+
     if isinstance(payload.get("overall_ocr_res"), dict):
-        changed = normalize_ocr_word_boxes_in_payload(payload["overall_ocr_res"]) or changed
+        changed = normalize_ocr_word_boxes_in_payload(payload["overall_ocr_res"], lang=lang) or changed
 
     if (
         isinstance(payload.get("rec_texts"), list)
@@ -51,6 +62,7 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
                 text_word_boxes[index],
                 line_text=line_text,
                 line_score=line_score,
+                lang=lang,
             )
             if merged_words != text_word[index] or merged_boxes != text_word_boxes[index]:
                 text_word[index] = merged_words
@@ -59,13 +71,13 @@ def normalize_ocr_word_boxes_in_payload(payload: dict[str, Any]) -> bool:
 
         # Reconcile cross-line soft hyphens (e.g. 'occupa-' on line i + 'tion' on line i+1)
         if len(text_word) > 1 and len(text_word_boxes) > 1:
-            hyphen_changed = reconcile_cross_line_hyphens(text_word, text_word_boxes)
+            hyphen_changed = reconcile_cross_line_hyphens(text_word, text_word_boxes, lang=lang)
             changed = changed or hyphen_changed
 
     return changed
 
 
-def reconcile_cross_line_hyphens(text_word: list[Any], text_word_boxes: list[Any]) -> bool:
+def reconcile_cross_line_hyphens(text_word: list[Any], text_word_boxes: list[Any], lang: Optional[str] = None) -> bool:
     """Reconcile split cross-line hyphenated words so the root word is evaluated as a full lexical term.
     
     When a line ends with a soft hyphen (e.g. 'occupa-') and the next line begins with a continuation
@@ -105,7 +117,7 @@ def reconcile_cross_line_hyphens(text_word: list[Any], text_word_boxes: list[Any
                 # Check if combined word is a valid lexical word
                 try:
                     from services.historical_lexicon import is_valid_historical_word
-                    valid = is_valid_historical_word(combined)
+                    valid = is_valid_historical_word(combined, lang=lang)
                 except Exception:
                     valid = True
 
@@ -597,6 +609,7 @@ def merge_word_boxes_advanced(
     boxes: Any,
     line_text: Any = None,
     line_score: Any = None,
+    lang: Optional[str] = None,
 ) -> tuple[Any, Any]:
     """Execute complete token consolidation pipeline."""
     # 0. Fast-path for CJK: chunk CJK tokens into separate character words with partitioned geometry immediately
@@ -620,13 +633,13 @@ def merge_word_boxes_advanced(
     # 7. Attach orphan trailing punctuation to preceding word tokens
     words, boxes = merge_orphan_punctuation_word_boxes(words, boxes, line_text=line_text)
     # 8. Regularize broken microfilm words and French dropouts (e.g. qualit -> qualité, resering -> reserving)
-    words = regularize_word_tokens(words, line_score=line_score)
+    words = regularize_word_tokens(words, line_score=line_score, lang=lang)
     # 9. Final safeguard: ensure no compound whitespace tokens remain
     words, boxes = split_whitespace_word_tokens(words, boxes, line_text=line_text)
     return words, boxes
 
 
-def regularize_word_tokens(words: Any, line_score: Any = None) -> Any:
+def regularize_word_tokens(words: Any, line_score: Any = None, lang: Optional[str] = None) -> Any:
     """Apply 1-edit historical dictionary regularizer to low-confidence or broken tokens."""
     if not isinstance(words, list) or not words:
         return words
@@ -640,7 +653,7 @@ def regularize_word_tokens(words: Any, line_score: Any = None) -> Any:
     if isinstance(line_score, (int, float)):
         score = float(line_score)
 
-    return [regularize_broken_historical_word(str(w), confidence=score) if w else w for w in words]
+    return [regularize_broken_historical_word(str(w), confidence=score, lang=lang) if w else w for w in words]
 
 
 def consolidate_words_to_line_text(
