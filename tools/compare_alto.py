@@ -1503,7 +1503,9 @@ def generate_interactive_html(
         <span id="lblManualCount" style="display:none;font-size:0.72rem;color:#58a6ff;font-weight:600;margin-left:6px;"></span>
       </div>
       <div style="display:flex;align-items:center;gap:6px;">
-        <button id="btnExportAdjudications" title="Export manual adjudications to JSON" style="background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:2px 8px;border-radius:4px;font-size:0.72rem;cursor:pointer;font-weight:600;">Export JSON</button>
+        <button id="btnImportAdjudications" title="Import manual adjudications from JSON file" style="background:#21262d;color:#7ee787;border:1px solid #30363d;padding:2px 8px;border-radius:4px;font-size:0.72rem;cursor:pointer;font-weight:600;">Import JSON</button>
+        <button id="btnExportAdjudications" title="Export manual adjudications to JSON file" style="background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:2px 8px;border-radius:4px;font-size:0.72rem;cursor:pointer;font-weight:600;">Export JSON</button>
+        <input type="file" id="fileImportAdjudications" accept=".json" style="display:none;" />
       </div>
     </div>
 
@@ -2062,6 +2064,61 @@ def generate_interactive_html(
     btnExport.onclick = exportAdjudications;
   }}
 
+  const btnImport = document.getElementById("btnImportAdjudications");
+  const fileInput = document.getElementById("fileImportAdjudications");
+  if (btnImport && fileInput) {{
+    btnImport.onclick = () => fileInput.click();
+    fileInput.onchange = (e) => {{
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {{
+        try {{
+          const parsed = JSON.parse(evt.target.result);
+          let loaded = 0;
+          const overrides = Array.isArray(parsed.overrides)
+            ? parsed.overrides
+            : (Array.isArray(parsed.adjudications) ? parsed.adjudications : null);
+
+          if (overrides) {{
+            overrides.forEach(entry => {{
+              const idx = typeof entry.idx === "number" ? entry.idx : parseInt(entry.idx, 10);
+              const verdict = entry.adjudicated_verdict || entry.verdict;
+              if (!isNaN(idx) && verdict && matchedData[idx]) {{
+                matchedData[idx].manual_verdict = verdict;
+                updateWordCard(idx);
+                loaded++;
+              }}
+            }});
+          }} else if (typeof parsed === "object" && parsed !== null) {{
+            Object.keys(parsed).forEach(k => {{
+              const idx = parseInt(k, 10);
+              if (!isNaN(idx) && matchedData[idx] && typeof parsed[k] === "string") {{
+                matchedData[idx].manual_verdict = parsed[k];
+                updateWordCard(idx);
+                loaded++;
+              }}
+            }});
+          }}
+
+          if (loaded > 0) {{
+            saveAdjudicationsToStorage();
+            recalculateSummaryStats();
+            applyCurrentFilter();
+            if (activeIdx !== null) renderInspector(activeIdx);
+            alert(`Successfully imported ${{loaded}} manual adjudications!`);
+          }} else {{
+            alert("No matching adjudications found in the imported JSON file for this page.");
+          }}
+        }} catch (err) {{
+          alert("Error parsing adjudications JSON file: " + err.message);
+        }}
+        fileInput.value = "";
+      }};
+      reader.readAsText(file);
+    }};
+  }}
+
   // Keyboard navigation and winner selection
   window.addEventListener("keydown", (e) => {{
     if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
@@ -2440,6 +2497,10 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     <span class="brand-title">OCR Quality Benchmark Dashboard</span>
   </div>
   <div class="nav-links">
+    <button id="btnExportAllManual" class="nav-btn" title="Export all manual adjudications across all pages from this browser as JSON" style="background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:5px 12px;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">Export All Reviews</button>
+    <button id="btnImportAllManual" class="nav-btn" title="Import manual adjudications JSON file into this browser" style="background:#21262d;color:#7ee787;border:1px solid #30363d;padding:5px 12px;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">Import Reviews</button>
+    <input type="file" id="fileImportAllManual" accept=".json" style="display:none;" />
+    <span id="lblDashboardManualReviews" style="display:none;font-size:0.82rem;color:#bc8cff;font-weight:600;"></span>
     <a href="comparison_summary.csv" class="nav-link" download>Download CSV</a>
     <a href="comparison_summary.json" class="nav-link" download>Download JSON</a>
     <a href="https://github.com/crkn-rcdr/OCR-Tool" class="nav-link" target="_blank" rel="noopener">GitHub Repository</a>
@@ -2699,8 +2760,22 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
       const wSign = wordDelta > 0 ? "+" : "";
       const wColor = wordDelta > 0 ? "#3fb950" : (wordDelta < -5 ? "#f85149" : "#8b949e");
 
+      // Check for manual review stored in localStorage
+      let manualBadge = "";
+      const storageKey = "crkn_adj_" + r.name;
+      const rawAdj = localStorage.getItem(storageKey);
+      if (rawAdj) {{
+        try {{
+          const adjMap = JSON.parse(rawAdj);
+          const adjCount = Object.keys(adjMap).length;
+          if (adjCount > 0) {{
+            manualBadge = ` <span title="${{adjCount}} manual adjudications in this browser" style="background:rgba(188,140,255,0.2);color:#bc8cff;border:1px solid #bc8cff;font-size:0.72rem;padding:1px 6px;border-radius:4px;margin-left:4px;font-weight:600;">✍️ ${{adjCount}} manual</span>`;
+          }}
+        }} catch(e) {{}}
+      }}
+
       tr.innerHTML = `
-        <td style="font-weight:600;color:#f0f6fc;">${{r.name}}</td>
+        <td style="font-weight:600;color:#f0f6fc;">${{r.name}}${{manualBadge}}</td>
         <td style="color:#8b949e;font-size:0.8rem;">${{r.collection}}</td>
         <td><strong>${{r.p_words}}</strong> <span style="color:#6e7681;">/ ${{r.b_words}}</span> <span style="font-size:0.75rem;font-weight:600;color:${{wColor}};">(${{wSign}}${{wordPct}}%)</span></td>
         <td>${{r.match_rate.toFixed(1)}}%</td>
@@ -2717,6 +2792,120 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     btnNext.disabled = (endIdx >= total);
   }}
 
+  function updateDashboardManualBadge() {{
+    let totalPagesWithManual = 0;
+    let totalManualWords = 0;
+    for (let i = 0; i < localStorage.length; i++) {{
+      const key = localStorage.key(i);
+      if (key && key.startsWith("crkn_adj_")) {{
+        try {{
+          const map = JSON.parse(localStorage.getItem(key));
+          const count = Object.keys(map).length;
+          if (count > 0) {{
+            totalPagesWithManual++;
+            totalManualWords += count;
+          }}
+        }} catch(e) {{}}
+      }}
+    }}
+    const lbl = document.getElementById("lblDashboardManualReviews");
+    if (lbl) {{
+      if (totalManualWords > 0) {{
+        lbl.textContent = `✍️ ${{totalManualWords}} reviews across ${{totalPagesWithManual}} pages`;
+        lbl.style.display = "inline";
+      }} else {{
+        lbl.style.display = "none";
+      }}
+    }}
+  }}
+
+  const btnExportAll = document.getElementById("btnExportAllManual");
+  if (btnExportAll) {{
+    btnExportAll.onclick = () => {{
+      const pagesMap = {{}};
+      let count = 0;
+      for (let i = 0; i < localStorage.length; i++) {{
+        const key = localStorage.key(i);
+        if (key && key.startsWith("crkn_adj_")) {{
+          try {{
+            const map = JSON.parse(localStorage.getItem(key));
+            if (Object.keys(map).length > 0) {{
+              const pName = key.replace("crkn_adj_", "");
+              pagesMap[pName] = map;
+              count++;
+            }}
+          }} catch(e) {{}}
+        }}
+      }}
+      if (count === 0) {{
+        alert("No manual adjudications found stored in this browser.");
+        return;
+      }}
+      const exportData = {{
+        source: "CRKN OCR Quality Benchmark",
+        exported_at: new Date().toISOString(),
+        total_pages: count,
+        pages: pagesMap,
+      }};
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], {{ type: "application/json" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "crkn_all_manual_adjudications.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }};
+  }}
+
+  const btnImportAll = document.getElementById("btnImportAllManual");
+  const fileImportAll = document.getElementById("fileImportAllManual");
+  if (btnImportAll && fileImportAll) {{
+    btnImportAll.onclick = () => fileImportAll.click();
+    fileImportAll.onchange = (e) => {{
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {{
+        try {{
+          const parsed = JSON.parse(evt.target.result);
+          let loadedPages = 0;
+          if (parsed && typeof parsed.pages === "object" && parsed.pages !== null) {{
+            Object.keys(parsed.pages).forEach(pName => {{
+              const map = parsed.pages[pName];
+              if (map && typeof map === "object") {{
+                localStorage.setItem("crkn_adj_" + pName, JSON.stringify(map));
+                loadedPages++;
+              }}
+            }});
+          }} else if (parsed && parsed.item_name && (parsed.overrides || parsed.adjudications)) {{
+            const map = {{}};
+            const arr = parsed.overrides || parsed.adjudications;
+            arr.forEach(entry => {{
+              if (entry.idx !== undefined && entry.adjudicated_verdict) {{
+                map[entry.idx] = entry.adjudicated_verdict;
+              }}
+            }});
+            localStorage.setItem("crkn_adj_" + parsed.item_name, JSON.stringify(map));
+            loadedPages = 1;
+          }}
+          if (loadedPages > 0) {{
+            updateDashboardManualBadge();
+            renderTable();
+            alert(`Successfully imported adjudications for ${{loadedPages}} pages into this browser!`);
+          }} else {{
+            alert("No recognized adjudication pages found in the JSON file.");
+          }}
+        }} catch(err) {{
+          alert("Error parsing adjudications JSON: " + err.message);
+        }}
+        fileImportAll.value = "";
+      }};
+      reader.readAsText(file);
+    }};
+  }}
+
   txtSearch.oninput = applyFilters;
   selCollection.onchange = applyFilters;
   selConcordance.onchange = applyFilters;
@@ -2727,6 +2916,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
   // Initial render
   renderTable();
+  updateDashboardManualBadge();
 </script>
 </body>
 </html>
