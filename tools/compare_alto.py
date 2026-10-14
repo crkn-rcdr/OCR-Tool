@@ -2391,7 +2391,8 @@ def build_ai_executive_verdict(
             f"<strong>{news_win:.1f}% lexical win rate on Newspapers</strong>). In degraded archival microfilm (Heritage), deep-learning text detection "
             f"unlocks <strong>{her_extra_words:+,} additional words ({her_sign}{her_recall:.1f}% recall expansion)</strong>, recovering faded ink, stamps, "
             f"and handwritten margins where ABBYY binarization failed entirely. However, this aggressive sensitivity requires downstream dictionary "
-            f"validation to suppress marginal noise, and multi-pass quadrant tiling introduces significant compute overhead on GPU hardware."
+            f"validation to suppress marginal noise, and multi-pass quadrant tiling demands dedicated GPU acceleration "
+            f"(~7–18s per broadsheet, ~1s per monograph)."
         )
         points = f"""
       <div class="ai-point">
@@ -2403,8 +2404,8 @@ def build_ai_executive_verdict(
         On high-density multi-column broadsheets, 3×2 quadrant tiling and reading-order arbitration eliminate column-bleed and preserve natural reading flow. Paddle decisively outperforms ABBYY in lexical disputes (<strong>{news_p_wins:,} vs {news_b_wins:,} wins</strong>, {news_win:.1f}%), cleanly resolving tight classified advertisements.
       </div>
       <div class="ai-point">
-        <strong style="color:#f85149;">⚠️ GPU Footprint & Tiling Latency (~25–70s per Broadsheet):</strong>
-        Unlike CPU-native engines (e.g. Indra), Paddle requires dedicated CUDA acceleration and substantial VRAM (~2–4 GB per worker). Furthermore, large 24MP newspaper broadsheets undergoing 3×2 quadrant tiling require multi-pass inference (6 sub-tiles + full pass), pushing single-page latency to <strong>25–70 seconds</strong> unless accelerated with batch pipelining.
+        <strong style="color:#f85149;">⚠️ GPU Footprint & Tiling Latency (~7–18s Broadsheet, ~1.0s Monograph):</strong>
+        Unlike CPU-native engines (e.g. Indra), Paddle requires dedicated CUDA hardware and substantial VRAM (~2–4 GB per worker). With our staged batch-32 pipeline, standard monograph pages process in <strong>~0.9–1.2s</strong>, while dense 24MP newspaper broadsheets undergoing 3×2 quadrant tiling (6 sub-tiles + full pass) complete in <strong>~7–18s per page</strong> (down from unbatched ~25–70s). While 3–4x faster, multi-pass tiling remains a compute-intensive workload compared to single-pass processing.
       </div>
       <div class="ai-point">
         <strong style="color:#d29922;">⚖️ High Recall vs. Marginal Noise ({kpi_w_sign}{kpi_w_pct:.1f}% Word Expansion):</strong>
