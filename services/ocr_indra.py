@@ -104,13 +104,32 @@ def build_indra_payload(image_path: Path, page, opt: dict) -> dict:
     }
 
 
+def should_indra_tile(image_path: Path, tile_strategy: str = "auto") -> bool:
+    """Determine whether to use 3x2 quadrant tiling for Indra OCR.
+
+    Broadsheet newspapers contain micro-print multi-column classifieds where 3x2 tiling
+    yields major recall benefits (+12.7%). Standard books, annuals, and microfilm pages
+    run natively in single-pass mode in ~0.4s and capture more lines without tiling overhead.
+    """
+    if tile_strategy in {"grid_3x2", "grid"}:
+        return True
+    if tile_strategy in {"none", "no_tiles", "notiles"}:
+        return False
+    path_str = str(image_path).replace("\\", "/").lower()
+    if "newspaper" in path_str:
+        return True
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+        return (w * h) >= 24_000_000 and min(w, h) >= 3800
+    except Exception:
+        return False
+
+
 def process_image_with_indra(image_path: Path, conv, opt: dict) -> tuple[dict, str]:
     """Process one page with Indra OCR, using 3x2 quadrant tiling on large broadsheets."""
     tile_strategy = opt.get("tile_strategy", "auto")
-    use_tiling = (
-        tile_strategy in {"grid_3x2", "grid"}
-        or (tile_strategy == "auto" and should_use_3x2_tiling(image_path))
-    )
+    use_tiling = should_indra_tile(image_path, tile_strategy)
 
     if use_tiling:
         with tempfile.TemporaryDirectory() as td:

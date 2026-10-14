@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
@@ -84,10 +85,16 @@ def parse_args():
         help="Optional maximum number of pages to process per collection (useful for quick validation).",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=6,
+        help="Number of concurrent worker processes for page-level parallelism (default: 6).",
+    )
+    parser.add_argument(
         "--threads",
         type=int,
-        default=DEFAULT_INDRA_THREADS,
-        help=f"Number of CPU threads for Indra OCR (default: {DEFAULT_INDRA_THREADS}).",
+        default=1,
+        help="Number of CPU threads per worker for intra-op ONNX execution (default: 1).",
     )
     parser.add_argument(
         "--tile-strategy",
@@ -126,67 +133,131 @@ def find_target_images(input_dir: Path, max_pages: Optional[int] = None) -> List
     return images
 
 
+_worker_conv = None
+
+
+def _init_worker(model_dir_str: Optional[str] = None, threads_per_worker: int = 1):
+    global _worker_conv
+    import indra_ocr
+    model_path = Path(model_dir_str) if model_dir_str else None
+    _worker_conv = indra_ocr.load(path=model_path, threads=threads_per_worker)
+
+
+def _process_page_worker_task(task_args: tuple) -> dict:
+    img_path, input_root, output_root, opt = task_args
+    global _worker_conv
+    if _worker_conv is None:
+        import indra_ocr
+        local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
+        m_path = local_model_dir if local_model_dir.exists() else None
+        _worker_conv = indra_ocr.load(path=m_path, threads=1)
+
+    try:
+        rel_dir = img_path.parent.relative_to(input_root)
+    except ValueError:
+        rel_dir = Path("")
+
+    target_out_dir = output_root / rel_dir
+    target_out_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = img_path.stem
+    json_file = target_out_dir / f"{stem}.json"
+    xml_file = target_out_dir / f"{stem}.xml"
+
+    if json_file.exists() and xml_file.exists():
+        return {
+            "success": True,
+            "skipped": True,
+            "stem": stem,
+            "rel_dir": str(rel_dir),
+            "file_name": img_path.name,
+        }
+
+    t0 = time.perf_counter()
+    try:
+        payload, mode_desc = process_image_with_indra(img_path, _worker_conv, opt)
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+        pdf_res = build_pdf(
+            json_file,
+            img_path.parent,
+            method="IndraOCR",
+            lang="en",
+            select="IndraOCR",
+        )
+
+        rec_count = len(payload.get("rec_texts", []))
+        elapsed = time.perf_counter() - t0
+        alto_success = bool(pdf_res.get("alto_success"))
+        return {
+            "success": True,
+            "skipped": False,
+            "stem": stem,
+            "rel_dir": str(rel_dir),
+            "file_name": img_path.name,
+            "rec_count": rec_count,
+            "mode_desc": mode_desc,
+            "elapsed": elapsed,
+            "alto_success": alto_success,
+        }
+    except Exception as exc:
+        elapsed = time.perf_counter() - t0
+        return {
+            "success": False,
+            "skipped": False,
+            "stem": stem,
+            "rel_dir": str(rel_dir),
+            "file_name": img_path.name,
+            "elapsed": elapsed,
+            "error": str(exc),
+        }
+
+
 def run_ocr_phase(
     images: List[Path],
     input_root: Path,
     output_root: Path,
-    threads: int,
+    workers: int = 6,
+    threads_per_worker: int = 1,
     tile_strategy: str = "auto",
 ) -> tuple[int, int]:
-    """Execute Indra OCR on list of images and produce ALTO XML + PDF files."""
-    print(f"\n[Indra OCR] Initializing Indra Converter (threads={threads})...")
-    conv = get_indra_converter(threads=threads)
+    """Execute Indra OCR on list of images in parallel across worker processes."""
+    local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
+    m_dir_str = str(local_model_dir) if local_model_dir.exists() else None
     opt = {"tile_strategy": tile_strategy, "lang": "auto"}
+
+    tasks = [(img, input_root, output_root, opt) for img in images]
+    total_imgs = len(tasks)
+    print(f"\n[Indra OCR] Starting ProcessPoolExecutor ({workers} parallel worker processes, {threads_per_worker} thread/worker)...", flush=True)
 
     success_count = 0
     fail_count = 0
-    total_imgs = len(images)
+    t_start = time.perf_counter()
 
-    for idx, img_path in enumerate(images, 1):
-        try:
-            rel_dir = img_path.parent.relative_to(input_root)
-        except ValueError:
-            rel_dir = Path("")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_init_worker,
+        initargs=(m_dir_str, threads_per_worker),
+    ) as executor:
+        futures = {executor.submit(_process_page_worker_task, t): t[0] for t in tasks}
+        completed = 0
+        for fut in concurrent.futures.as_completed(futures):
+            completed += 1
+            res = fut.result()
+            overall_elapsed = time.perf_counter() - t_start
+            rate = completed / overall_elapsed if overall_elapsed > 0 else 0.0
 
-        target_out_dir = output_root / rel_dir
-        target_out_dir.mkdir(parents=True, exist_ok=True)
-
-        stem = img_path.stem
-        json_file = target_out_dir / f"{stem}.json"
-        xml_file = target_out_dir / f"{stem}.xml"
-
-        # Check if already processed
-        if json_file.exists() and xml_file.exists():
-            print(f"[{idx}/{total_imgs}] Already processed: {stem} (Skipping OCR)")
-            success_count += 1
-            continue
-
-        print(f"[{idx}/{total_imgs}] Processing: {rel_dir}/{img_path.name}...")
-        t0 = time.perf_counter()
-
-        try:
-            payload, mode_desc = process_image_with_indra(img_path, conv, opt)
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-
-            # Generate ALTO XML and PDF
-            pdf_res = build_pdf(
-                json_file,
-                img_path.parent,
-                method="IndraOCR",
-                lang="en",
-                select="IndraOCR",
-            )
-
-            rec_count = len(payload.get("rec_texts", []))
-            elapsed = time.perf_counter() - t0
-            alto_status = "[OK] ALTO" if pdf_res.get("alto_success") else "[FAIL] ALTO"
-            print(f"       -> {alto_status} | {rec_count:,} text lines ({mode_desc}) in {elapsed:.2f}s")
-            success_count += 1
-        except Exception as exc:
-            elapsed = time.perf_counter() - t0
-            print(f"       -> ERROR on {img_path.name} ({elapsed:.2f}s): {exc}")
-            fail_count += 1
+            if res.get("skipped"):
+                print(f"[{completed}/{total_imgs}] Already processed: {res['rel_dir']}/{res['file_name']} (Running avg: {rate:.1f} pages/s)", flush=True)
+                success_count += 1
+            elif res["success"]:
+                alto_status = "[OK] ALTO" if res.get("alto_success") else "[FAIL] ALTO"
+                print(f"[{completed}/{total_imgs}] {res['rel_dir']}/{res['file_name']} -> {alto_status} | {res['rec_count']:,} lines ({res['mode_desc']}) in {res['elapsed']:.2f}s (Running avg: {rate:.1f} pages/s)", flush=True)
+                success_count += 1
+            else:
+                print(f"[{completed}/{total_imgs}] ERROR on {res['file_name']} ({res['elapsed']:.2f}s): {res.get('error')}", flush=True)
+                fail_count += 1
 
     return success_count, fail_count
 
@@ -302,7 +373,8 @@ def main():
             images=images,
             input_root=input_root,
             output_root=output_root,
-            threads=args.threads,
+            workers=args.workers,
+            threads_per_worker=args.threads,
             tile_strategy=args.tile_strategy,
         )
         t_total = time.perf_counter() - t_start
