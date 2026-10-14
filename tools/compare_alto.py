@@ -2385,27 +2385,30 @@ def build_ai_executive_verdict(
     elif "paddle" in pipeline_short.lower() or "paddle" in pipeline_name.lower():
         body = (
             f"Across <strong>{total_pages:,} historical pages</strong> and <strong>{total_pipeline_words:,} recognized word tokens</strong>, "
-            f"the {pipeline_name} pipeline demonstrates production-grade readiness and a substantial text discovery advantage over the legacy ABBYY FineReader baseline. "
-            f"While standard printed works show high consensus (<strong>{avg_clean_concordance:.1f}% clean text concordance</strong> archive-wide, rising to <strong>{ann_conc:.1f}% on Annuals</strong>), "
-            f"{pipeline_name} unlocks <strong>{kpi_w_diff:+,} additional words ({kpi_w_sign}{kpi_w_pct:.1f}% recall expansion)</strong>. "
-            f"For digital library preservation, this extra recall surfaces faint marginalia, captions, stamps, and degraded microfilm text that legacy binarization skipped entirely."
+            f"the {pipeline_name} pipeline demonstrates exceptional text discovery and multi-column layout arbitration, while exposing real "
+            f"operational trade-offs in GPU compute footprint and marginalia noise. On standard printed typography and complex newspaper broadsheets, "
+            f"Paddle decisively outperforms legacy ABBYY FineReader (<strong>{ann_win:.1f}% lexical win rate on Annuals</strong>, "
+            f"<strong>{news_win:.1f}% lexical win rate on Newspapers</strong>). In degraded archival microfilm (Heritage), deep-learning text detection "
+            f"unlocks <strong>{her_extra_words:+,} additional words ({her_sign}{her_recall:.1f}% recall expansion)</strong>, recovering faded ink, stamps, "
+            f"and handwritten margins where ABBYY binarization failed entirely. However, this aggressive sensitivity requires downstream dictionary "
+            f"validation to suppress marginal noise, and multi-pass quadrant tiling introduces significant compute overhead on GPU hardware."
         )
         points = f"""
       <div class="ai-point">
-        <strong style="color:#58a6ff;">🔍 Archival Discovery ({her_sign}{her_recall:.1f}% in Heritage):</strong>
-        {pipeline_short}'s deep-learning detector captures faint captions, stamps, handwritten notes, and degraded microfilm where ABBYY's rigid thresholding missed text—surfacing <strong>{her_extra_words:+,} extra searchable words</strong> in the Heritage archive alone.
+        <strong style="color:#3fb950;">📜 Microfilm & Degraded Ink (Heritage: {her_win:.1f}% QA Win, {her_sign}{her_recall:.1f}% Words):</strong>
+        Adaptive CLAHE contrast enhancement and deep DBNet line detection enable Paddle to recover faint census ink, bleed-through text, and marginal notations missed by ABBYY's rigid binarization—yielding <strong>{her_p_wins:,} valid word wins vs {her_b_wins:,}</strong> ({her_win:.1f}%) and surfacing <strong>{her_extra_words:+,} extra searchable words</strong> across Heritage microfilm reels.
       </div>
       <div class="ai-point">
-        <strong style="color:#3fb950;">📰 Newspaper Layout & Arbitration ({news_win:.1f}% Win Rate):</strong>
-        On dense multi-column serials, {pipeline_short} decisively outperforms ABBYY in head-to-head dictionary arbitration ({news_p_wins:,} vs {news_b_wins:,} valid word wins, <strong>{news_win:.1f}%</strong>), eliminating column-bleed and preserving accurate historical reading order.
+        <strong style="color:#bc8cff;">📰 Newspaper Layout & Arbitration ({news_win:.1f}% Win Rate):</strong>
+        On high-density multi-column broadsheets, 3×2 quadrant tiling and reading-order arbitration eliminate column-bleed and preserve natural reading flow. Paddle decisively outperforms ABBYY in lexical disputes (<strong>{news_p_wins:,} vs {news_b_wins:,} wins</strong>, {news_win:.1f}%), cleanly resolving tight classified advertisements.
       </div>
       <div class="ai-point">
-        <strong style="color:#bc8cff;">📘 Production Parity on Clean Stock ({ann_conc:.1f}% Concordance):</strong>
-        Standard publication streams (Annuals) exhibit high consensus (<strong>{ann_conc:.1f}% clean concordance</strong>, <strong>{ann_exact:.1f}% exact match</strong>, and <strong>{ann_spatial:.1f}% spatial alignment</strong>), confirming {pipeline_short} matches commercial quality on standard typography.
+        <strong style="color:#f85149;">⚠️ GPU Footprint & Tiling Latency (~25–70s per Broadsheet):</strong>
+        Unlike CPU-native engines (e.g. Indra), Paddle requires dedicated CUDA acceleration and substantial VRAM (~2–4 GB per worker). Furthermore, large 24MP newspaper broadsheets undergoing 3×2 quadrant tiling require multi-pass inference (6 sub-tiles + full pass), pushing single-page latency to <strong>25–70 seconds</strong> unless accelerated with batch pipelining.
       </div>
       <div class="ai-point">
-        <strong style="color:#e3b341;">⚜️ Bilingual Diacritic & Token Integrity:</strong>
-        {pipeline_short} reliably preserves French accented characters (<em>é, à, è, ç, ô</em>) and compound hyphenation, avoiding the character stripping, stray ASCII artifacts, and word fragmentation frequently observed in legacy OCR outputs.
+        <strong style="color:#d29922;">⚖️ High Recall vs. Marginal Noise ({kpi_w_sign}{kpi_w_pct:.1f}% Word Expansion):</strong>
+        Aggressive sensitivity surfaces <strong>{kpi_w_diff:+,} extra words archive-wide</strong>, capturing library penciling, accession stamps, and damaged border strokes that ABBYY disregarded. While maximizing discovery, it also generates non-lexical fragments in degraded margins, necessitating post-OCR dictionary filtering to eliminate false positives.
       </div>"""
         return body, points
 
