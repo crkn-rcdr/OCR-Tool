@@ -2907,9 +2907,9 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     {top_level_panels_html}
   </div>
 
-  <!-- Collections Summary Grid -->
+  <!-- Item Level Breakdown Grid -->
   <div class="section-title">
-    <span>Collection Breakdown ({len(collection_summaries)} Publications)</span>
+    <span>Item Level Breakdown</span>
   </div>
   <div class="collection-grid">
     {"".join(f'''
