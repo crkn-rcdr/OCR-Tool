@@ -412,6 +412,8 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
                 effective_lang = resolve_effective_language(lang, folder)
                 folder_opt = dict(opt, lang=effective_lang)
+                if not str(folder_opt.get("device") or "").lower().startswith("cpu"):
+                    folder_opt["text_recognition_batch_size"] = max(32, int(folder_opt.get("text_recognition_batch_size") or 32))
 
                 folder_success = 0
                 folder_failure = 0
@@ -424,33 +426,37 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 yield "\n".join(messages)
 
                 # Initialize background workers for this folder:
-                # 1. prefetch_pool: CPU image reading & preprocessing for image i+1 while image i does GPU inference
-                # 2. post_pool: CPU-based PDF & ALTO generation (or TXT generation) overlapping next image's OCR
-                with ThreadPoolExecutor(max_workers=4) as post_pool, ThreadPoolExecutor(max_workers=1) as prefetch_pool:
+                # 1. prefetch_pool: 4 concurrent CPU workers for image reading & preprocessing across a sliding window
+                # 2. post_pool: 4 concurrent CPU workers for PDF & ALTO generation overlapping next images' OCR
+                PREFETCH_WINDOW = 4
+                with ThreadPoolExecutor(max_workers=4) as post_pool, ThreadPoolExecutor(max_workers=4) as prefetch_pool:
                     pending_post = {}
-                    next_prefetch_future = None
-                    if len(images) > 0:
-                        next_prefetch_future = prefetch_pool.submit(
-                            preprocess_image_for_ocr, images[0], out_dir, folder_opt
+                    prefetch_futures = {}
+
+                    # Pre-populate prefetch window
+                    for p_idx in range(min(PREFETCH_WINDOW, len(images))):
+                        p_img = images[p_idx]
+                        prefetch_futures[p_img] = prefetch_pool.submit(
+                            preprocess_image_for_ocr, p_img, out_dir, folder_opt
                         )
 
                     for img_idx, img in enumerate(images):
                         if STOP_FLAG:
                             return
 
-                        # Pipeline: submit prefetch for image i+1 immediately
-                        curr_prefetch = next_prefetch_future
-                        if img_idx + 1 < len(images):
-                            next_prefetch_future = prefetch_pool.submit(
-                                preprocess_image_for_ocr, images[img_idx + 1], out_dir, folder_opt
+                        # Maintain 4-worker sliding lookahead window
+                        next_submit_idx = img_idx + PREFETCH_WINDOW
+                        if next_submit_idx < len(images):
+                            next_img = images[next_submit_idx]
+                            prefetch_futures[next_img] = prefetch_pool.submit(
+                                preprocess_image_for_ocr, next_img, out_dir, folder_opt
                             )
-                        else:
-                            next_prefetch_future = None
 
                         preprocessed_res = None
-                        if curr_prefetch is not None:
+                        fut = prefetch_futures.pop(img, None)
+                        if fut is not None:
                             try:
-                                preprocessed_res = curr_prefetch.result()
+                                preprocessed_res = fut.result()
                             except Exception as exc:
                                 error_logger.warning(
                                     f"Prefetch warning for {img.name}: {exc}; falling back to sync preprocessing"

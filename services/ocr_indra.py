@@ -178,8 +178,86 @@ def process_image_with_indra(image_path: Path, conv, opt: dict) -> tuple[dict, s
     return payload, "full-image single pass"
 
 
+_worker_conv = None
+
+
+def _init_worker(model_dir_str: Optional[str] = None, threads_per_worker: int = 1):
+    global _worker_conv
+    import indra_ocr
+    model_path = Path(model_dir_str) if model_dir_str else None
+    _worker_conv = indra_ocr.load(path=model_path, threads=threads_per_worker)
+
+
+def _process_page_worker_task(task_args: tuple) -> dict:
+    image_path, input_path, output_root, run_opt, generate_text_file, lang, method = task_args
+    global _worker_conv
+    if _worker_conv is None:
+        import indra_ocr
+        local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
+        m_path = local_model_dir if local_model_dir.exists() else None
+        _worker_conv = indra_ocr.load(path=m_path, threads=1)
+
+    try:
+        rel_dir = image_path.parent.relative_to(input_path) if input_path.is_dir() else Path("")
+    except ValueError:
+        rel_dir = Path("")
+
+    out_dir = output_root / rel_dir if input_path.is_dir() else output_root
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = image_path.stem
+    json_file = out_dir / f"{stem}.json"
+    t0 = time.perf_counter()
+
+    try:
+        payload, mode_desc = process_image_with_indra(image_path, _worker_conv, run_opt)
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+        if generate_text_file:
+            txt_path = out_dir / f"{stem}.txt"
+            generate_txt_file(json_file, txt_path)
+            alto_success = False
+            pdf_success = False
+        else:
+            pdf_res = build_pdf(
+                json_file,
+                image_path.parent,
+                method=method,
+                lang=lang,
+                select=method,
+            )
+            alto_success = bool(pdf_res.get("alto_success"))
+            pdf_success = bool(pdf_res.get("pdf_success"))
+
+        rec_count = len(payload.get("rec_texts", []))
+        elapsed = time.perf_counter() - t0
+        return {
+            "success": True,
+            "stem": stem,
+            "rel_dir": str(rel_dir),
+            "file_name": image_path.name,
+            "rec_count": rec_count,
+            "mode_desc": mode_desc,
+            "elapsed": elapsed,
+            "alto_success": alto_success,
+            "pdf_success": pdf_success,
+        }
+    except Exception as exc:
+        elapsed = time.perf_counter() - t0
+        return {
+            "success": False,
+            "stem": stem,
+            "rel_dir": str(rel_dir),
+            "file_name": image_path.name,
+            "elapsed": elapsed,
+            "error": str(exc),
+        }
+
+
 def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, None, None]:
-    """Run standalone Indra OCR and generate JSON plus TXT or PDF/ALTO outputs."""
+    """Run standalone Indra OCR with multi-process concurrency and real-time GUI streaming."""
+    import concurrent.futures
+
     ocr_pp.STOP_FLAG = False
     input_path = Path(input_path)
     output_root = Path(output_root)
@@ -231,61 +309,65 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             yield msg
             return
 
-        yield f"Initializing Indra OCR engine (threads: {DEFAULT_INDRA_THREADS})..."
-        conv = get_indra_converter()
+        num_images = len(target_images)
+        workers = min(4, os.cpu_count() or 4) if num_images > 1 else 1
 
-        yield f"Found {len(target_images)} images to process using Indra OCR."
+        local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
+        m_dir_str = str(local_model_dir) if local_model_dir.exists() else None
 
-        for image_path in target_images:
-            if ocr_pp.STOP_FLAG:
-                yield "OCR processing stopped by user."
-                break
+        yield f"Found {num_images} images. Launching Indra OCR engine ({workers} parallel worker processes)..."
 
-            out_dir = (
-                output_root
-                if input_path.is_file()
-                else output_root / image_path.parent.relative_to(input_path)
-            )
+        if num_images == 1:
+            conv = get_indra_converter()
+            image_path = target_images[0]
+            out_dir = output_root
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = image_path.stem
             json_file = out_dir / f"{stem}.json"
             t0 = time.perf_counter()
+            payload, mode_desc = process_image_with_indra(image_path, conv, run_opt)
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            if generate_text_file:
+                generate_txt_file(json_file, out_dir / f"{stem}.txt")
+                yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+            else:
+                build_pdf(json_file, image_path.parent, method=method, lang=lang, select=method)
+                yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+            success_count = 1
+        else:
+            task_args = [
+                (img, input_path, output_root, run_opt, generate_text_file, lang, method)
+                for img in target_images
+            ]
 
-            try:
-                payload, mode_desc = process_image_with_indra(image_path, conv, run_opt)
-                with open(json_file, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_init_worker,
+                initargs=(m_dir_str, 1),
+            ) as executor:
+                futures = {executor.submit(_process_page_worker_task, t): t[0] for t in task_args}
+                completed = 0
+                for fut in concurrent.futures.as_completed(futures):
+                    if ocr_pp.STOP_FLAG:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        yield "OCR processing stopped by user."
+                        break
 
-                if generate_text_file:
-                    generate_txt_file(json_file, out_dir / f"{stem}.txt")
-                    yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines, {mode_desc} in {time.perf_counter()-t0:.2f}s)"
-                else:
-                    pdf_res = build_pdf(
-                        json_file,
-                        image_path.parent,
-                        method=method,
-                        lang=lang,
-                        select=method,
-                    )
-                    if not pdf_res.get("pdf_success"):
-                        error_logger.error(f"PDF generation failed for {image_path.name}: {pdf_res.get('pdf_error')}")
-                    if not pdf_res.get("alto_success"):
-                        error_logger.error(f"ALTO generation failed for {image_path.name}: {pdf_res.get('alto_error')}")
+                    completed += 1
+                    res = fut.result()
+                    overall_elapsed = time.perf_counter() - start_time
+                    rate = completed / overall_elapsed if overall_elapsed > 0 else 0.0
 
-                    yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines, {mode_desc} in {time.perf_counter()-t0:.2f}s)"
-
-                success_count += 1
-                elapsed = time.perf_counter() - t0
-                summary_logger.info(
-                    f"Successfully processed {image_path.name} ({len(payload['rec_texts'])} lines, {mode_desc}) in {elapsed:.2f}s"
-                )
-
-            except Exception as exc:
-                failure_count += 1
-                error_logger.error(
-                    f"Failed to process {image_path.name}: {exc}", exc_info=True
-                )
-                yield f"Error processing {image_path.name}: {exc}"
+                    if res["success"]:
+                        success_count += 1
+                        status = "ALTO [OK]" if res.get("alto_success") else "PDF [OK]"
+                        yield f"[{completed}/{num_images}] {res['file_name']} -> {status} ({res['rec_count']} lines in {res['elapsed']:.2f}s | Avg: {rate:.1f} pgs/s)"
+                        summary_logger.info(f"Processed {res['file_name']} in {res['elapsed']:.2f}s")
+                    else:
+                        failure_count += 1
+                        yield f"[{completed}/{num_images}] ERROR on {res['file_name']}: {res.get('error')}"
+                        error_logger.error(f"Error on {res['file_name']}: {res.get('error')}")
 
         # If processing a folder and benchmark ALTO files exist, trigger auto-comparison
         if input_path.is_dir() and not generate_text_file and success_count > 0:
