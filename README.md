@@ -2,13 +2,14 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PaddleOCR](https://img.shields.io/badge/OCR-PP--OCRv6-orange.svg)](https://github.com/PaddlePaddle/PaddleOCR)
+[![Indra OCR](https://img.shields.io/badge/CPU_Engine-Indra_OCR-informational.svg)](https://github.com/crkn-rcdr/paddle_pipeline)
 [![Dots OCR](https://img.shields.io/badge/VLM-Dots%20OCR%207B-brightgreen.svg)](https://github.com/redcaps-ai)
 [![ALTO XML 4.2](https://img.shields.io/badge/Metadata-ALTO%20XML%204.2-blueviolet.svg)](https://www.loc.gov/standards/alto/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An enterprise-grade, high-throughput OCR and layout preservation engine developed for the **Canadian Research Knowledge Network (CRKN / RCDR)**. Designed specifically for historical Canadian newspapers, 18th–20th-century monographs, microfilm reels (Heritage collections), and bilingual legislative gazettes.
 
-The pipeline combines ultra-fast TensorRT/FastDeploy OCR (**PP-OCRv6**) with autonomous microfilm pre-processing, layout-aware multi-column sorting, and post-OCR visual arbitration using **Dots OCR (7B Vision-Language Model)** and a curated **Canadiana Historical Gazetteer**.
+The pipeline combines ultra-fast TensorRT/FastDeploy OCR (**PP-OCRv6**), high-speed multi-core CPU OCR (**Indra OCR**), autonomous microfilm pre-processing, layout-aware multi-column sorting, and post-OCR visual arbitration using **Dots OCR (7B Vision-Language Model)** and a curated **Canadiana Historical Gazetteer**.
 
 ---
 
@@ -26,11 +27,12 @@ Open **`http://127.0.0.1:7860`** in your browser.
 ![CRKN Web Interface](images/01_web_interface.png)
 
 > [!TIP]
-> **Recommended UI Settings for Historical Archives**:
-> - **Language**: Leave as `Auto-detect Script` (automatically identifies Traditional Chinese, Bilingual French Latin superset, or English).
-> - **Pre Process**: `[x] Enabled` (handles microfilm black borders, contrast fading, background flattening, micro-print upscaling, and deskew).
-> - **Post Process**: `[x] Enabled` (delegates degraded lines & disputed words to Dots OCR 7B, regularizes broken historical tokens, restores French accents, reconstructs hyphens, and de-compounds display ads).
-> - **Image Tiling Strategy**: Leave as `auto` (autonomously applies $3 \times 2$ quadrant grid tiling to dense $\ge 18\text{ MP}$ broadsheets while running standard $< 18\text{ MP}$ books at native full scale with zero seam overlap).
+> **Dynamic Model-Dependent UI**: The interface automatically tailors available options based on the chosen OCR Model:
+> - **PP-OCRv6 (GPU/CPU)**: Exposes full controls: Language auto-detection, $3\times 2$ quadrant tiling strategy, adaptive preprocessing (black border, CLAHE, stroke reconnection, deskew, micro-print upscaling), and VLM post-processing arbitration.
+> - **Indra OCR (Fast CPU)**: Streamlines the UI to Language, Plain Text, and HTML Results Dashboard (hiding tiling and pre/post-processing toggles since Indra runs native full-page CPU inference).
+> - **PaddleVL**: Shows Language, Plain Text, and HTML Results Dashboard.
+> - **Dots OCR 7B / OLM OCR**: Displays Plain Text and HTML Results Dashboard (language is inferred visually by the VLM).
+> - **HTML Results Dashboard**: Enabled by default; automatically generates a standalone visual inspection dashboard with confidence-colored bounding boxes and opens in a new browser tab upon completion.
 
 ---
 
@@ -57,15 +59,17 @@ This single command:
 
 1. [Pipeline Architecture at a Glance](#pipeline-architecture-at-a-glance)
 2. [End-to-End Processing Workflow](#end-to-end-processing-workflow)
-3. [Stage 1: Adaptive Preprocessing Pipeline ("Pre Process")](#stage-1-adaptive-preprocessing-pipeline-pre-process)
-4. [Stage 2: Core Recognition, Tiling & Script Dispatch](#stage-2-core-recognition-tiling--script-dispatch)
-5. [Stage 3: Spatial & Column-Aware Reading Order Sorter](#stage-3-spatial--column-aware-reading-order-sorter)
-6. [Stage 4: Linguistic Arbitration & VLM Delegation ("Post Process")](#stage-4-linguistic-arbitration--vlm-delegation-post-process)
-7. [Stage 5: Output Generation & 1:1 Coordinate Fidelity](#stage-5-output-generation--11-coordinate-fidelity)
-8. [Benchmarking & ABBYY FineReader Comparison](#benchmarking--abbyy-finereader-comparison)
-9. [Headless Batch Runner CLI](#headless-batch-runner-cli)
-10. [Setup & Installation](#setup--installation)
-11. [Repository Layout](#repository-layout)
+3. [Supported OCR & Multimodal Engines: Architecture & Logic Deep-Dive](#supported-ocr--multimodal-engines-architecture--logic-deep-dive)
+4. [Stage 1: Adaptive Preprocessing Pipeline ("Pre Process")](#stage-1-adaptive-preprocessing-pipeline-pre-process)
+5. [Stage 2: Core Recognition, Tiling & Script Dispatch](#stage-2-core-recognition-tiling--script-dispatch)
+6. [Stage 3: Spatial & Column-Aware Reading Order Sorter](#stage-3-spatial--column-aware-reading-order-sorter)
+7. [Stage 4: Linguistic Arbitration & VLM Delegation ("Post Process")](#stage-4-linguistic-arbitration--vlm-delegation-post-process)
+8. [Stage 5: Output Generation & 1:1 Coordinate Fidelity](#stage-5-output-generation--11-coordinate-fidelity)
+9. [Interactive HTML Results Dashboard (Standalone Visual Verification)](#interactive-html-results-dashboard-standalone-visual-verification)
+10. [Benchmarking & ABBYY FineReader Comparison](#benchmarking--abbyy-finereader-comparison)
+11. [Headless Batch Runner CLI](#headless-batch-runner-cli)
+12. [Setup & Installation](#setup--installation)
+13. [Repository Layout](#repository-layout)
 
 ---
 
@@ -182,6 +186,78 @@ sequenceDiagram
 
 ---
 
+## Supported OCR & Multimodal Engines: Architecture & Logic Deep-Dive
+
+The pipeline integrates five distinct recognition engines tailored for different preservation requirements, hardware configurations, and document degradation levels:
+
+```mermaid
+flowchart TD
+    In["Input Document Scan"] --> EngineSwitch{"Engine Selection<br/>(UI / CLI --method)"}
+
+    EngineSwitch -->|"PP-OCRv6 (Default)"| PP["PaddleOCR Engine (services/ocr_pp.py)<br/>• FastDeploy DBNet++ & SVTR-LCNet (GPU/CPU)<br/>• Full Stage 1 Archival Preprocessing Pipeline<br/>• Auto-Detect 3x2 Quadrant Grid Tiling (≥18 MP)<br/>• Whitespace Gutter Profiler & Reading Order Sorter<br/>• Dual-Tier Dots OCR 7B VLM Post-Arbitration<br/>• Canadiana Historical Gazetteer Regularization<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
+
+    EngineSwitch -->|"Indra OCR (Fast CPU)"| Indra["Indra OCR Engine (services/ocr_indra.py)<br/>• Highly Optimized Multi-Process ONNX Runtime CPU Engine<br/>• Zero NVIDIA GPU / CUDA Requirement (0.5–1.5s / page)<br/>• Native Full-Page Text Detection & Recognition<br/>• Self-Contained Direct Word-Box Coordinate Alignment<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
+
+    EngineSwitch -->|"Dots OCR (7B VLM)"| Dots["Dots OCR Engine (services/ocr_dots.py)<br/>• 7B Parameter Vision-Language Model (OpenAI API)<br/>• Holistic Contextual Semantic Decoding<br/>• Ideal for Severely Degraded Scans, Faded Ink, Broken Type<br/>• Layout-Aware Markdown, Formatted Text, Audit CSV"]
+
+    EngineSwitch -->|"PaddleVL"| VL["PaddleOCR-VL Engine (services/ocr_vl.py)<br/>• PaddleX Multimodal Layout Parsing Server<br/>• Interleaved Table, Graphic, and Ad Boundary Segmentation<br/>• Structural Layout Blocks & Reading Order Text"]
+
+    EngineSwitch -->|"olmOCR"| OLM["olmOCR Engine (services/ocr_olm.py)<br/>• 7B Vision LLM fine-tuned for Document Transcription (vLLM)<br/>• Direct Pixel-to-Markdown Reading Order Synthesis<br/>• Natural Flow across Academic & Mixed Historical Formats"]
+```
+
+### 1. PaddleOCR (PP-OCRv6) *(Recommended Production Default)*
+- **Primary Modules**: `services/ocr_pp.py`, `services/image_preprocessing.py`, `services/tile_ocr.py`, `services/post_ocr_vl.py`.
+- **Underlying Architecture**: Dual-stage neural pipeline pairing **DBNet++** (Differentiable Binarization text detector with deformable convolutions) and **SVTR-LCNet** (Lightweight Vision Transformer text recognizer).
+- **Execution & Acceleration**: Accelerated via NVIDIA CUDA, TensorRT, and Paddle FastDeploy with automatic multi-threaded CPU fallback.
+- **Execution Logic**:
+  1. **Stage 1 Preprocessing**: Automatically engages microfilm background flattening, carrier black border removal, $2\times 2$ stroke reconnection, deskew ($0.35^\circ$–$5.0^\circ$), ledger ruling line suppression, and $1.5\times$ micro-print upscaling when enabled.
+  2. **Script & Language Dispatch**: Heuristically selects models: Traditional Chinese (`chinese_cht`) for Chinese-Canadian diaspora presses, Bilingual French Latin superset (`fr`) with full diacritics for Canadian federal/provincial records, or English (`en`).
+  3. **Resolution-Aware Quadrant Tiling**: Evaluates image resolution. Pages $\ge 18\text{ MP}$ or $\ge 4500\times 3200\text{px}$ (e.g. broadsheet newspapers) are dynamically sliced into a $3\times 2$ quadrant grid with a 15% overlap margin and merged via Non-Maximum Suppression (NMS). Standard pages ($< 18\text{ MP}$) are executed natively full-page.
+  4. **Spatial Layout & Column Sorting**: Projects word bounding boxes horizontally through a 31-pixel Gaussian convolution filter to identify whitespace column gutters and isolate full-width banners.
+  5. **Post-OCR Arbitration & Gazetteer**: Degraded lines ($< 0.78$) and disputed words ($< 0.80$) are submitted to Dots OCR 7B. Tokens undergo punctuation-bound splitting, display ad de-compounding, cross-line hyphen reconciliation, 1-edit Levenshtein lexical regularizing, and verification against the Canadiana Historical Gazetteer with 54-language zero-corruption guardrails.
+  6. **Preservation Outputs**: Generates sub-pixel Searchable PDFs, schema-valid ALTO XML 4.2, normalized JSON, plain text, and the interactive HTML Results Dashboard.
+
+### 2. Indra OCR (Fast CPU)
+- **Primary Modules**: `services/ocr_indra.py`.
+- **Underlying Architecture**: Lightweight, high-throughput multi-process ONNX Runtime CPU engine.
+- **Execution & Acceleration**: Pure CPU execution utilizing an asynchronous multi-process worker pool across available system CPU cores (~0.5–1.5s per page). Requires zero NVIDIA GPU or CUDA drivers.
+- **Execution Logic**:
+  1. **Native Full-Page Processing**: Executes text detection and character recognition in a single unified pass over the full-resolution image without requiring external quadrant slicing or seam merging.
+  2. **Self-Contained Pipeline**: Bypasses external microfilm preprocessing and secondary VLM delegation, eliminating pipeline overhead and external microservice dependencies.
+  3. **Direct Coordinate Mapping**: Directly captures line geometries and word token boundaries with confidence scores, normalizing coordinates with sub-pixel fidelity.
+  4. **Preservation Output Generation**: Directly interfaces with `services/pdf_generation.py`, `services/alto_generation.py`, and `services/results_dashboard.py` to produce standard Library of Congress ALTO XML 4.2, Searchable PDFs, normalized JSON, optional plain text, and the standalone HTML Results Dashboard.
+  5. **Best Used For**: High-throughput processing on CPU workstations, laptops without discrete NVIDIA GPUs, headless CI/CD environments, and rapid bulk digitizing where 1–2 second per-page CPU throughput is essential.
+
+### 3. Dots OCR (7B Vision-Language Model)
+- **Primary Modules**: `services/ocr_dots.py`, `services/post_ocr_vl.py`.
+- **Underlying Architecture**: 7-Billion parameter multimodal Vision-Language Model (VLM) running via an OpenAI-compatible local server.
+- **Execution & Acceleration**: Neural vision-language transformer inference (~150ms per crop, ~4.0–8.0s per full page).
+- **Execution Logic**:
+  1. **Standalone OCR Engine**: Analyzes full-page images holistically, translating visual features into rich formatted text and markdown. Overcomes severe paper yellowing, smudged ink, bleed-through, and archaic typefaces where conventional bounding-box detectors fail.
+  2. **PP-OCRv6 Dual-Tier Post-Processor**: Operates as an automated visual arbiter for PP-OCRv6:
+     - *Line-Level Delegation*: Lines with mean confidence $< 0.78$ are cropped and sent to Dots OCR to decode full sentential context.
+     - *Word-Level Crop Delegation*: Individual disputed tokens failing lexicon validation with confidence $< 0.80$ are extracted with context-padded crops and resolved.
+  3. **Preservation Outputs & Audit Logging**: Emits formatted text, structured markdown, and generates an audit log (`.post_ocr_vl.csv`) documenting every line or token modified by the model.
+
+### 4. PaddleVL (PaddleOCR-VL / PaddleX)
+- **Primary Modules**: `services/ocr_vl.py`.
+- **Underlying Architecture**: PaddleX multimodal layout parser and visual document information extractor.
+- **Execution & Acceleration**: Containerized Docker microservice (`docker compose up -d`) running on port `8080`.
+- **Execution Logic**:
+  1. **Visual Region Classification**: Detects and segments high-level document structures: tabular data, classified advertisement frames, illustrative figures, titles, and text paragraphs.
+  2. **Interleaved Content Parsing**: Separates tabular columns and multi-tiered classified ads from continuous narrative body text.
+  3. **Preservation Outputs**: Outputs structured layout blocks and reading-order plain text.
+
+### 5. OLM OCR (olmOCR 7B)
+- **Primary Modules**: `services/ocr_olm.py`.
+- **Underlying Architecture**: 7B Vision-Language Model fine-tuned specifically for dense historical document transcription and reading order synthesis, served via a local vLLM endpoint on port `8000`.
+- **Execution & Acceleration**: Autoregressive multimodal sequence-to-sequence generation (~4.0–8.0s per page).
+- **Execution Logic**:
+  1. **Direct Pixel-to-Markdown Synthesis**: Bypasses heuristic coordinate sorting by training directly on human reading sequences, generating natural flow across multi-column newspapers, academic journals, marginalia, and footnoted texts.
+  2. **Structural Formatting**: Faithfully reproduces inline mathematical formulas, tables, and section hierarchies in standard Markdown.
+
+---
+
 ## Stage 1: Adaptive Preprocessing Pipeline ("Pre Process")
 
 Historical Canadian microfilms (such as Library and Archives Canada / LAC reels) exhibit optical artifacts that severely degrade standard OCR: dark film carrier borders, low contrast, broken printer type, baseline skew, and dense micro-print.
@@ -215,12 +291,13 @@ Micro-print on historical broadsheets (classified advertisements, shipping manif
 
 The engine supports ultra-fast local recognition alongside multimodal Vision-Language Models:
 
-| Engine | Execution Mode | Best For | Typical Latency |
-| :--- | :--- | :--- | :--- |
-| **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Broad volume, monographs, high-speed newspaper pipelines | **0.8 – 2.5s / page** |
-| **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, smudged microfilm lines, damaged fonts | **150ms / crop** |
-| **PaddleOCR-VL 1.6** | Docker VLM Service | Standalone multimodal page parsing | **3.0 – 5.0s / page** |
-| **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts | **4.0 – 8.0s / page** |
+| Engine | Execution Mode | Best For | Typical Latency | Outputs Supported |
+| :--- | :--- | :--- | :--- | :--- |
+| **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Broad volume, monographs, historical broadsheet newspapers | **0.8 – 2.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **Indra OCR (Fast CPU)** | Multi-core CPU ONNX Runtime | Standard laptops, CPU servers, rapid high-throughput processing without GPU | **0.5 – 1.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, severely degraded scans, damaged typography | **150ms / crop** / **4–8s / page** | Formatted Text, Markdown, Audit CSV |
+| **PaddleOCR-VL 1.6** | Docker VLM Service (PaddleX) | Multimodal page parsing with interleaved tables & display ads | **3.0 – 5.0s / page** | Page Text, Layout Blocks |
+| **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts & natural reading-order synthesis | **4.0 – 8.0s / page** | Reading-Order Text, Markdown |
 
 ### Autonomous Script & Language Resolution (`services/language_detection.py`)
 CRKN collections span multilingual archives: 19th-century English newspapers, French Canadian records, and early 20th-century Chinese broadsheets.
@@ -366,6 +443,46 @@ output/
 
 ---
 
+## Interactive HTML Results Dashboard (Standalone Visual Verification)
+
+Every regular OCR run (via the Web UI or batch pipeline with `--results-dashboard`) automatically generates a self-contained, interactive HTML results dashboard in the selected output directory under `HTML_Results_Dashboard/index.html`. It automatically launches in your default browser once processing finishes.
+
+Unlike benchmark comparisons that require a baseline ABBYY XML scan, the **Results Dashboard** works out of the box for any arbitrary batch of documents or single images across all supported engines (**PP-OCRv6**, **Indra OCR**, etc.).
+
+```text
+<Output_Folder>/
+├── <Item_Name>/                     <-- Searchable PDF, ALTO XML 4.2, JSON, TXT
+│   ├── <Item_Name>.1.pdf
+│   ├── <Item_Name>.1.xml
+│   ├── <Item_Name>.1.json
+│   └── <Item_Name>.1.txt
+└── HTML_Results_Dashboard/          <-- Standalone visual verification suite
+    ├── index.html                   <-- Master overview dashboard
+    ├── pages/<Item_Name>/           <-- High-precision bounding box viewers
+    └── images/<Item_Name>/          <-- Portable high-resolution scan assets
+```
+
+### Master Overview Dashboard (`index.html`)
+- **Key Performance Indicators (KPIs)**: Total pages processed, total recognized word count, total execution time, and mean confidence score.
+- **Document Breakdown**: Folder-level aggregation reporting word counts, average processing speed, and confidence per item.
+- **Page-Level Interactive Table**: Searchable, filterable, and sortable page index with status badges and links to open any page in the visual viewer.
+
+### Single-Page Visual Bounding Box Viewer
+- **Scanned Image + ALTO Bounding Boxes**: Overlays exact word bounding boxes onto the original high-resolution scan with 1:1 sub-pixel coordinate fidelity.
+- **Three-Tier Confidence Color Coding**:
+  - 🟢 **High Confidence ($\ge 90\%$)**: Word recognized with high certainty.
+  - 🟠 **Medium Confidence ($75\% - 89\%$)**: Acceptable confidence, minor noise.
+  - 🔴 **Low Confidence / Needs Review ($< 75\%$)**: Highlighted in red for immediate human review.
+- **Page Metadata Badges**: Displays exact word count on the page, engine processing latency (in seconds), and average recognition confidence.
+- **Sequential Navigation**: Jump seamlessly between pages using `< Previous` and `Next >` navigation buttons or keyboard **Left / Right arrow keys**.
+- **Interactive Inspection Controls**:
+  - Smooth pan-and-zoom with mouse wheel and drag (with a one-click **Fit** button).
+  - Checkbox filters to isolate High, Medium, or Low confidence word boxes.
+  - Background image opacity slider to verify bounding box alignment against the scan.
+  - Interactive sidebar word list with live search and click-to-highlight functionality.
+
+---
+
 ## Benchmarking & ABBYY FineReader Comparison
 
 The pipeline includes an automated benchmarking suite to evaluate performance against ABBYY FineReader Server output and Ground Truth transcripts:
@@ -508,8 +625,14 @@ paddle_pipeline/
 │   ├── image_preprocessing.py     Border crop, CLAHE, stroke reconnection, deskew, table suppression, micro-print upscaling
 │   ├── language_detection.py      Multilingual script detection (Traditional Chinese, bilingual French, English)
 │   ├── ocr_pp.py                  PP-OCRv6 FastDeploy engine execution & coordinate mapping
+│   ├── ocr_indra.py               Indra OCR multi-process ONNX CPU engine execution
+│   ├── ocr_dots.py                Dots OCR 7B standalone vision-language engine
+│   ├── ocr_vl.py                  PaddleVL (PaddleX) multimodal layout parsing client
+│   ├── ocr_olm.py                 olmOCR 7B vision-to-markdown transcription client
+│   ├── results_dashboard.py       Standalone interactive HTML results dashboard generator
 │   ├── post_ocr_vl.py             Dots OCR VLM arbitration & whole-line delegation
 │   ├── historical_lexicon.py      Canadian gazetteer, long-s & French diacritics
+│   ├── canadiana_languages.py     Canadiana 54-language census & zero-corruption spellcheck policy
 │   ├── word_box_normalization.py  Word bounding box geometry normalizer & ligature consolidator
 │   ├── punctuation_cleanup.py     Post-processing text & punctuation cleaning
 │   ├── alto_generation.py         ALTO XML 4.2 export & multi-column sorting
@@ -520,10 +643,12 @@ paddle_pipeline/
 │   └── fonts/                     Helvetica metric definitions for PDF text layer
 ├── tools/
 │   ├── run_full_benchmark.py      Automated end-to-end full run & comparison dashboard updater
+│   ├── fast_paddle_pipeline.py    Staged high-throughput GPU batch processing pipeline
 │   ├── batch_runner.py            Headless CLI batch processor with resume support
 │   ├── compare_alto.py            ABBYY FineReader comparison & HTML dashboard generator
 │   ├── evaluate_ocr.py            CER, WER, and Bag-of-Words F1 benchmark against Ground Truth
 │   └── sync_evaluations.py        Resilient publication-level batch pusher for OCR-Evaluations repository
+├── windows_bundle/                Non-technical end-user package (README-For-Users.md, launch scripts, images)
 └── compare/                       Local evaluation output directory (untracked in git, synced to OCR-Evaluations)
 ```
 

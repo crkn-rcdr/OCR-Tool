@@ -52,11 +52,37 @@ Once initialization completes, your web browser will automatically open **`http:
 
 ---
 
-### Step 6 & 7: Language Selection and Master Processing Toggles
+### Step 6 & 7: Dynamic Model-Dependent Options and Master Toggles
 
-![Language Dropdown and Master Toggles](images/06_language_and_options.png)
+> [!IMPORTANT]
+> **Adaptive UI**: The options displayed below the **Select OCR Method** dropdown automatically change depending on the model you select. Options that do not apply to the active engine (such as tiling or post-processing for Indra OCR or VLMs) are automatically hidden to keep your workspace clean and prevent conflicting configurations.
 
-#### Language Selection
+#### Dynamic Options Comparison Matrix
+
+| Option / Control | PP-OCRv6 | Indra OCR (Fast CPU) | PaddleVL | Dots OCR (7B VLM) | OLM OCR | Purpose & Notes |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Language Selection** | ✅ Visible | ✅ Visible | ✅ Visible | ❌ Hidden | ❌ Hidden | Auto-detects script or sets primary OCR alphabet (`en`, `fr`, `chinese_cht`, etc.). VLMs infer language directly from image context. |
+| **Image Tiling Strategy** | ✅ Visible | ❌ Hidden | ❌ Hidden | ❌ Hidden | ❌ Hidden | `auto`, `3x2`, or `none`. Applied to massive broadsheets ($\ge 18\text{ MP}$) in PP-OCRv6. |
+| **`pre process`** | ✅ Visible | ❌ Hidden | ❌ Hidden | ❌ Hidden | ❌ Hidden | Microfilm border crop, CLAHE contrast boost, stroke reconnection, deskew, and micro-print upscaling. |
+| **`post process`** | ✅ Visible | ❌ Hidden | ❌ Hidden | ❌ Hidden | ❌ Hidden | Dots OCR 7B visual arbitration, Canadiana Gazetteer, diacritics, and hyphen recovery. |
+| **Post-OCR Backend** | ✅ Visible | ❌ Hidden | ❌ Hidden | ❌ Hidden | ❌ Hidden | Configures the VLM arbitration server (e.g., `Dots OCR (Default)`). Visible when `post process` is checked. |
+| **Generate Plain Text (.txt)** | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | Emits an additional clean `.txt` file alongside PDF and ALTO XML. |
+| **Generate HTML results dashboard** | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | Generates standalone interactive visual results viewer (`index.html`) with bounding boxes and confidence tiers. |
+
+#### Visual Comparison in the Web Interface
+
+````carousel
+![PP-OCRv6 Options View](images/09_ui_options_ppocr.png)
+<!-- slide -->
+![Indra OCR Options View](images/10_ui_options_indra.png)
+````
+
+- **When `PP-OCRv6` is Selected (Left)**: Full fine-grained controls are exposed, including language detection, $3\times 2$ quadrant tiling strategy, adaptive preprocessing, and VLM post-processing arbitration.
+- **When `Indra OCR` is Selected (Right)**: The UI streamlines to essential controls (Language, Plain Text, and HTML Results Dashboard). Because Indra OCR is a self-contained multi-core ONNX engine with native full-page processing, tiling and pre/post-processing toggles are hidden.
+
+---
+
+#### Language Selection Guide (PP-OCRv6, Indra OCR, PaddleVL)
 * **`Auto-detect Script (Recommended)` (Default)**:
   * **Leave this on `Auto-detect Script` for most jobs!** The engine automatically examines your folder and files:
     * Dispatches **Traditional Chinese (`chinese_cht`)** for Chinese-Canadian broadsheets (e.g. *The Chinese Times* / 《大漢公報》).
@@ -71,7 +97,7 @@ Once initialization completes, your web browser will automatically open **`http:
     * `Latin (Latina - Parish / Church Records)`
     * `Polish (Polski)`, `Russian (Русский)`, `Icelandic (Íslenska)`, `Japanese (日本語)`...
 
-#### Master Processing Toggles
+#### Master Processing Toggles (PP-OCRv6)
 | Toggle | What It Does | When to Check It |
 | :--- | :--- | :--- |
 | **`pre process`** | **Adaptive Archival Enhancement**: Crops black microfilm borders (preserving pixel offsets), flattens background luminance and boosts dynamic contrast (CLAHE), reconnects broken letter strokes ($2\times 2$ morphological closing), straightens tilt (deskew), suppresses table ruling lines, and dynamically upscales micro-print ($< 18\text{px}$) by $1.5\times$ with coordinate inversion. | **Recommended ON** for all historical microfilms, yellowed broadsheets, and newspaper scans. |
