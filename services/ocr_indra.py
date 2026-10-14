@@ -1,18 +1,25 @@
-"""Run standalone Indra OCR (Fast CPU ONNX OCR) and generate JSON, PDF, and ALTO outputs."""
+"""Run standalone Indra OCR (Fast CPU ONNX OCR) with automatic broadsheet tiling."""
 
 import json
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Generator, Optional
 
+import cv2
 from PIL import Image
 
 from services.constants import IMAGE_EXTENSIONS
 from services.ocr_defaults import DEFAULT_INDRA_THREADS
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.pdf_generation import build_pdf
+from services.tile_ocr import (
+    build_image_tiles,
+    merge_ppocr_tile_results,
+    should_use_3x2_tiling,
+)
 from services.txt_generation import generate_txt_file
 
 import services.ocr_pp as ocr_pp
@@ -91,6 +98,61 @@ def build_indra_payload(image_path: Path, page, opt: dict) -> dict:
     }
 
 
+def process_image_with_indra(image_path: Path, conv, opt: dict) -> tuple[dict, str]:
+    """Process one page with Indra OCR, using 3x2 quadrant tiling on large broadsheets."""
+    tile_strategy = opt.get("tile_strategy", "auto")
+    use_tiling = (
+        tile_strategy in {"grid_3x2", "grid"}
+        or (tile_strategy == "auto" and should_use_3x2_tiling(image_path))
+    )
+
+    if use_tiling:
+        with tempfile.TemporaryDirectory() as td:
+            tiles = build_image_tiles(
+                image_path,
+                Path(td),
+                grid_rows=3,
+                grid_cols=2,
+                overlap_px=96,
+            )
+            tile_results = []
+            for tile in tiles:
+                # Read tile as grayscale; use turn=False on cropped quadrants to avoid orientation confusion
+                gray = cv2.imread(str(tile.path), cv2.IMREAD_GRAYSCALE)
+                if gray is None:
+                    continue
+                tile_page = conv.ocr(gray, turn=False)
+                tile_payload = build_indra_payload(tile.path, tile_page, opt)
+                tile_results.append({"tile": tile, "json": tile_payload})
+
+            merged = merge_ppocr_tile_results(
+                tile_results=tile_results,
+                image_path=image_path,
+                grid_rows=3,
+                grid_cols=2,
+                overlap_px=96,
+                tile_strategy="grid_3x2",
+            )
+            merged["markdown"] = "\n\n".join(
+                tr["json"].get("markdown", "")
+                for tr in tile_results
+                if tr["json"].get("markdown")
+            )
+            return merged, "auto-detected 3x2 quadrant tiling"
+
+    # Standard full-image single pass
+    pages = list(conv.convert(image_path))
+    if not pages:
+        raise RuntimeError(f"Indra OCR produced no pages for {image_path.name}")
+    _, page = pages[0]
+
+    if getattr(page, "source", None) == "error":
+        raise RuntimeError(f"Indra OCR error: {page.note}")
+
+    payload = build_indra_payload(image_path, page, opt)
+    return payload, "full-image single pass"
+
+
 def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, None, None]:
     """Run standalone Indra OCR and generate JSON plus TXT or PDF/ALTO outputs."""
     ocr_pp.STOP_FLAG = False
@@ -107,7 +169,6 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             "post_ocr_vl_enabled": False,
             "preprocessing_steps": [],
             "ignore_black_border": False,
-            "tile_source_images": False,
         }
     )
 
@@ -166,22 +227,13 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             t0 = time.perf_counter()
 
             try:
-                # Process image through Indra OCR
-                pages = list(conv.convert(image_path))
-                if not pages:
-                    raise RuntimeError(f"Indra OCR produced no pages for {image_path.name}")
-                _, page = pages[0]
-
-                if getattr(page, "source", None) == "error":
-                    raise RuntimeError(f"Indra OCR error: {page.note}")
-
-                payload = build_indra_payload(image_path, page, run_opt)
+                payload, mode_desc = process_image_with_indra(image_path, conv, run_opt)
                 with open(json_file, "w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
 
                 if generate_text_file:
                     generate_txt_file(json_file, out_dir / f"{stem}.txt")
-                    yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+                    yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines, {mode_desc} in {time.perf_counter()-t0:.2f}s)"
                 else:
                     pdf_res = build_pdf(
                         json_file,
@@ -195,12 +247,12 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
                     if not pdf_res.get("alto_success"):
                         error_logger.error(f"ALTO generation failed for {image_path.name}: {pdf_res.get('alto_error')}")
 
-                    yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+                    yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines, {mode_desc} in {time.perf_counter()-t0:.2f}s)"
 
                 success_count += 1
                 elapsed = time.perf_counter() - t0
                 summary_logger.info(
-                    f"Successfully processed {image_path.name} ({len(payload['rec_texts'])} lines) in {elapsed:.2f}s"
+                    f"Successfully processed {image_path.name} ({len(payload['rec_texts'])} lines, {mode_desc}) in {elapsed:.2f}s"
                 )
 
             except Exception as exc:
@@ -239,4 +291,3 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             f"Indra OCR run finished: {success_count} succeeded, {failure_count} failed "
             f"in {total_time:.2f}s."
         )
-

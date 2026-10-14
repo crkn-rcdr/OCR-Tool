@@ -1,4 +1,4 @@
-"""Three-way benchmark comparing Indra OCR vs PaddleOCR (PP-OCRv6) vs ABBYY.
+"""Three-way benchmark comparing Indra OCR (with 3x2 Broadsheet Tiling) vs PaddleOCR (PP-OCRv6) vs ABBYY.
 
 Evaluates:
   1. Inference Speed / Latency (ms per page)
@@ -20,13 +20,13 @@ root_dir = Path(__file__).resolve().parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from services.ocr_indra import get_indra_converter, build_indra_payload
+from services.ocr_indra import get_indra_converter, process_image_with_indra
 from services.pdf_generation import build_pdf
 from tools.compare_alto import parse_alto_xml, compare_pages
 
 BENCHMARK_BASE = Path(r"C:\Users\blapierre\Documents\PDF Test")
 PADDLE_BASE = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
-OUTPUT_BASE = root_dir / "scratch" / "indra_benchmark"
+OUTPUT_BASE = root_dir / "scratch" / "indra_benchmark_tiled"
 
 SAMPLE_PAGES = [
     # Category 1: Annuals (Commercial publishing, crisp type, tables)
@@ -47,8 +47,8 @@ SAMPLE_PAGES = [
     ("Newspapers", "sfu.00001_19180302", "sfu.00001_19180302.1.jpg"),
     ("Newspapers", "sfu.00001_19180302", "sfu.00001_19180302.3.jpg"),
     ("Newspapers", "ome.00003_19290103", "ome.00003_19290103.2.jpg"),
+    ("Newspapers", "ome.00003_19291219", "ome.00003_19291219.2.jpg"),
     ("Newspapers", "qmbn.00001_19550107", "qmbn.00001_19550107.1.jpg"),
-    ("Newspapers", "sfu.00001_19410110", "sfu.00001_19410110.4.jpg"),
 ]
 
 
@@ -59,7 +59,7 @@ def run_benchmark():
     results = []
 
     print("=" * 80)
-    print("STARTING 3-WAY BENCHMARK: INDRA OCR vs PADDLEOCR (PP-OCRv6) vs ABBYY")
+    print("STARTING 3-WAY BENCHMARK: INDRA OCR (TILED) vs PADDLEOCR vs ABBYY")
     print("=" * 80)
 
     for cat, folder, img_name in SAMPLE_PAGES:
@@ -74,17 +74,17 @@ def run_benchmark():
 
         print(f"\n[{cat}] Processing {folder} / {img_name}...")
 
-        # 1. Run Indra OCR
+        # 1. Run Indra OCR with broadsheet auto-tiling
         t0 = time.perf_counter()
-        indra_pages = list(conv.convert(img_path))
+        indra_payload, mode_desc = process_image_with_indra(
+            img_path, conv, {"tile_strategy": "auto", "lang": "en"}
+        )
         indra_elapsed_ms = (time.perf_counter() - t0) * 1000
-        _, page = indra_pages[0]
 
         # Save Indra JSON & ALTO XML
         out_cat_dir = OUTPUT_BASE / cat / folder
         out_cat_dir.mkdir(parents=True, exist_ok=True)
         indra_json = out_cat_dir / f"{stem}.json"
-        indra_payload = build_indra_payload(img_path, page, {"lang": "en"})
         with open(indra_json, "w", encoding="utf-8") as f:
             json.dump(indra_payload, f, indent=2, ensure_ascii=False)
 
@@ -127,12 +127,12 @@ def run_benchmark():
             "category": cat,
             "folder": folder,
             "image": img_name,
+            "mode": mode_desc,
             "indra_time_ms": round(indra_elapsed_ms, 1),
-            "indra_timings": page.timings,
             # Word volumes
-            "words_abbyy": abbyy_pdata.boxes.__len__(),
-            "words_paddle": paddle_pdata.boxes.__len__() if paddle_pdata else 0,
-            "words_indra": indra_pdata.boxes.__len__(),
+            "words_abbyy": len(abbyy_pdata.boxes),
+            "words_paddle": len(paddle_pdata.boxes) if paddle_pdata else 0,
+            "words_indra": len(indra_pdata.boxes),
             # Concordance vs ABBYY
             "indra_exact_match": round(res_indra_abbyy.text_concordance_rate, 1),
             "indra_clean_match": round(res_indra_abbyy.clean_text_concordance_rate, 1),
@@ -162,7 +162,7 @@ def run_benchmark():
         p_win = stat["paddle_win_rate_vs_abbyy"]
         i_win = stat["indra_win_rate_vs_abbyy"]
         print(
-            f"   Time: {indra_elapsed_ms:.1f}ms | Words: Indra={stat['words_indra']} | Paddle={stat['words_paddle']} | ABBYY={stat['words_abbyy']}"
+            f"   [{mode_desc}] Time: {indra_elapsed_ms:.1f}ms | Words: Indra={stat['words_indra']} | Paddle={stat['words_paddle']} | ABBYY={stat['words_abbyy']}"
         )
         print(
             f"   Clean Concordance vs ABBYY: Indra={i_clean}% (Paddle={p_clean}%) | Spatial Alignment: Indra={stat['indra_spatial_match_rate']}% (Paddle={stat['paddle_spatial_match_rate']}%)"
@@ -172,7 +172,7 @@ def run_benchmark():
         )
 
     # Save summary JSON
-    summary_path = OUTPUT_BASE / "indra_vs_paddle_abbyy_results.json"
+    summary_path = OUTPUT_BASE / "indra_tiled_vs_paddle_abbyy_results.json"
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
@@ -229,4 +229,3 @@ def run_benchmark():
 
 if __name__ == "__main__":
     run_benchmark()
-
