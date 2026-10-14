@@ -2533,19 +2533,14 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           <div class="kpi-sub">Exact: {f['exact_concordance']:.1f}%</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Paddle QA Win Rate</div>
-          <div class="kpi-value {qa_color_class}">{f['lexical_win_rate']:.1f}%</div>
-          <div class="kpi-sub">{f['paddle_wins']:,} wins vs {f['abbyy_wins']:,}</div>
-        </div>
-        <div class="kpi-card">
           <div class="kpi-label">Spatial Alignment</div>
           <div class="kpi-value purple">{f['spatial_match']:.1f}%</div>
           <div class="kpi-sub">{f['matched_boxes']:,} matched boxes</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Mean Bounding IoU</div>
-          <div class="kpi-value">{f['mean_iou']:.3f}</div>
-          <div class="kpi-sub">dX: {f['mean_dx']:+.4f} | dY: {f['mean_dy']:+.4f}</div>
+          <div class="kpi-label">Paddle QA Win Rate</div>
+          <div class="kpi-value {qa_color_class}">{f['lexical_win_rate']:.1f}%</div>
+          <div class="kpi-sub">{f['paddle_wins']:,} wins vs {f['abbyy_wins']:,}</div>
         </div>
       </div>
     </div>"""
@@ -2862,22 +2857,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
-        Paddle QA Win Rate
-        <span class="info-icon" onclick="event.stopPropagation()">ⓘ
-          <span class="info-tooltip">
-            <span class="info-tooltip-title">Automated Lexical Arbitration</span>
-            <div class="info-tooltip-body">When engines disagree on a word, checks each candidate against standard English and French dictionaries.</div>
-            <div class="info-tooltip-highlight">
-              <strong>Accuracy Indicator:</strong> A win rate &gt; 50% indicates Paddle produced more valid dictionary words on disputed historical tokens.
-            </div>
-          </span>
-        </span>
-      </div>
-      <div class="kpi-value {'green' if overall_p_win_rate >= 50.0 else 'purple'}" id="kpi-qa-val">{overall_p_win_rate:.1f}%</div>
-      <div class="kpi-sub" id="kpi-qa-sub">{total_p_lex_wins:,} wins vs {total_b_lex_wins:,}</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">
         Spatial Alignment
         <span class="info-icon" onclick="event.stopPropagation()">ⓘ
           <span class="info-tooltip">
@@ -2894,19 +2873,19 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
-        Mean Bounding IoU
+        Paddle QA Win Rate
         <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
           <span class="info-tooltip">
-            <span class="info-tooltip-title">Mean Bounding Box IoU</span>
-            <div class="info-tooltip-body">Average Intersection over Union (IoU) of matched word bounding boxes (1.0 = perfect geometric overlap).</div>
+            <span class="info-tooltip-title">Automated Lexical Arbitration</span>
+            <div class="info-tooltip-body">When engines disagree on a word, checks each candidate against standard English and French dictionaries.</div>
             <div class="info-tooltip-highlight">
-              <strong>Coordinate Drift:</strong> dX and dY show horizontal and vertical center drift between the two OCR coordinate grids.
+              <strong>Accuracy Indicator:</strong> A win rate &gt; 50% indicates Paddle produced more valid dictionary words on disputed historical tokens.
             </div>
           </span>
         </span>
       </div>
-      <div class="kpi-value" id="kpi-iou-val">{avg_iou:.3f}</div>
-      <div class="kpi-sub" id="kpi-iou-sub">dX: {avg_dx:+.4f} | dY: {avg_dy:+.4f}</div>
+      <div class="kpi-value {'green' if overall_p_win_rate >= 50.0 else 'purple'}" id="kpi-qa-val">{overall_p_win_rate:.1f}%</div>
+      <div class="kpi-sub" id="kpi-qa-sub">{total_p_lex_wins:,} wins vs {total_b_lex_wins:,}</div>
     </div>
   </div>
 
@@ -3157,11 +3136,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     const elSpatialSub = document.getElementById("kpi-spatial-sub");
     if (elSpatialVal) elSpatialVal.textContent = `${{data.spatial_match.toFixed(1)}}%`;
     if (elSpatialSub) elSpatialSub.textContent = `${{data.matched_boxes.toLocaleString()}} matched boxes`;
-
-    const elIouVal = document.getElementById("kpi-iou-val");
-    const elIouSub = document.getElementById("kpi-iou-sub");
-    if (elIouVal) elIouVal.textContent = data.mean_iou.toFixed(3);
-    if (elIouSub) elIouSub.textContent = `dX: ${{data.mean_dx >= 0 ? "+" : ""}}${{data.mean_dx.toFixed(4)}} | dY: ${{data.mean_dy >= 0 ? "+" : ""}}${{data.mean_dy.toFixed(4)}}`;
   }}
   window.switchKpiView = switchKpiView;
 
