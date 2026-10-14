@@ -375,6 +375,9 @@ def models_for_run(opt, select=None):
         models.append("OCR pipeline: olmOCR vLLM API service")
         models.append(f"OLM OCR model: {opt.get('olmocr_model') or DEFAULT_OLMOCR_MODEL}")
         models.append(f"OLM OCR API URL: {opt.get('olmocr_url') or DEFAULT_OLMOCR_API_URL}")
+    elif effective_method == "IndraOCR":
+        models.append("OCR pipeline: Indra OCR (datalab-to/indra - Fast CPU ONNX)")
+        models.append("Models: LineNet detection, CTC recognition, Reading order & layout")
     elif method:
         models.append(f"Primary pipeline: {method}")
 

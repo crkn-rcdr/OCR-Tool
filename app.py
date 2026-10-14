@@ -13,6 +13,7 @@ from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.ocr_olm import run_olmocr_job
 from services.ocr_dots import run_dotsocr_job
+from services.ocr_indra import run_indra_job
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
@@ -54,6 +55,7 @@ from services.tile_ocr import tile_grid_for_strategy, normalize_tile_strategy
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 OCR_METHOD_CHOICES = [
     ("PaddleOCR (PP-OCRv6)", "PP-OCRv6"),
+    ("Indra OCR (Fast CPU)", "IndraOCR"),
     ("PaddleVL", "PaddleVL"),
     ("OLM OCR", "OLMOCR"),
     ("Dots OCR (BHL #1)", "DotsOCR"),
@@ -387,6 +389,8 @@ def submit_config(
         iterator = run_olmocr_job(input_path, output_root, opt)
     elif method == "DotsOCR":
         iterator = run_dotsocr_job(input_path, output_root, opt)
+    elif method == "IndraOCR":
+        iterator = run_indra_job(input_path, output_root, opt)
     else:
         yield f"Unsupported OCR method: {method}"
         return

@@ -474,6 +474,8 @@ def build_items(texts, polys, method, select):
             rect = polygon_to_rect(poly)
         elif is_paddlevl:
             rect = bbox_to_rect(poly)
+        elif method in ("IndraOCR", "DotsOCR", "OLMOCR") or select in ("IndraOCR", "DotsOCR", "OLMOCR"):
+            rect = polygon_to_rect(poly)
         else:
             continue
 

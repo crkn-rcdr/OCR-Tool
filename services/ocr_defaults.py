@@ -79,3 +79,10 @@ DEFAULT_DOTSOCR_MODEL = os.getenv(
 )
 DEFAULT_POST_OCR_VL_DOTSOCR_URL = DEFAULT_DOTSOCR_API_URL
 DEFAULT_POST_OCR_VL_DOTSOCR_MODEL = DEFAULT_DOTSOCR_MODEL
+
+DEFAULT_INDRA_THREADS = int(
+    os.getenv(
+        "INDRA_OCR_THREADS",
+        str(min(8, max(1, (os.cpu_count() or 4) - 1))),
+    )
+)
