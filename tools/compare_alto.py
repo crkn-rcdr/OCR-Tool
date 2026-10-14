@@ -2489,16 +2489,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     kpi_w_pct = round((kpi_w_diff / total_benchmark_words * 100.0), 1) if total_benchmark_words > 0 else 0.0
     kpi_w_sign = "+" if kpi_w_diff >= 0 else ""
 
-    # Build Top-Level tabs HTML for main KPI switcher
-    top_level_tabs_list = [
-        f'<button class="kpi-tab active" id="tab-kpi-all" onclick="switchKpiView(\'all\')">✦ All Collections ({total_pages:,})</button>'
-    ]
-    for k, v in top_level_summaries.items():
-        top_level_tabs_list.append(
-            f'<button class="kpi-tab" id="tab-kpi-{k.lower()}" onclick="switchKpiView(\'{k}\')">{v["icon"]} {k} ({v["pages"]:,})</button>'
-        )
-    top_level_tabs_html = "\n      ".join(top_level_tabs_list)
-
     # Build Top-Level breakdown panels HTML (Heritage, Annuals, Newspapers)
     top_level_panels_list = []
     for f in top_level_summaries.values():
@@ -2512,7 +2502,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           <span class="top-folder-badge">{f['pages']:,} Pages ({f['pct_of_archive']}%)</span>
         </div>
         <div class="top-folder-actions">
-          <button class="top-folder-btn" onclick="switchKpiView('{f['name']}'); const kh = document.querySelector('.kpi-header-row'); if (kh) kh.scrollIntoView({{behavior:'smooth', block:'center'}});">Focus in Main KPIs ↑</button>
           <button class="top-folder-btn primary" onclick="filterToTopCollection('{f['name']}')">Explore {f['name']} Pages ({f['pages']:,}) ↓</button>
         </div>
       </div>
@@ -2583,13 +2572,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   .ai-summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #30363d; font-size: 0.88rem; }}
   .ai-point strong {{ color: #58a6ff; }}
   
-  /* KPI Cards Grid & Filter Tabs */
-  .kpi-header-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }}
-  .kpi-filter-tabs {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-  .kpi-tab {{ background: #161b22; border: 1px solid #30363d; color: #8b949e; padding: 7px 16px; border-radius: 6px; font-size: 0.84rem; font-weight: 600; cursor: pointer; transition: all 0.15s ease; }}
-  .kpi-tab:hover {{ border-color: #58a6ff; color: #c9d1d9; }}
-  .kpi-tab.active {{ background: rgba(56, 139, 253, 0.15); border-color: #388bfd; color: #58a6ff; box-shadow: 0 0 0 1px #388bfd; }}
-
+  /* KPI Cards Grid */
   .kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 32px; }}
   .kpi-card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 18px 20px; transition: transform 0.15s, border-color 0.15s; }}
   .kpi-card:hover {{ border-color: #58a6ff; transform: translateY(-2px); }}
@@ -2809,14 +2792,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
   </div>
 
-  <!-- KPI Metric Overview Cards & Top-Level Selector -->
-  <div class="kpi-header-row">
-    <div class="kpi-filter-tabs">
-      {top_level_tabs_html}
-    </div>
-    <div id="kpi-active-view-label" style="font-size:0.84rem;color:#8b949e;">Showing aggregate metrics for <strong>All Collections</strong> ({total_pages:,} pages)</div>
-  </div>
-
+  <!-- KPI Metric Overview Cards -->
   <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-label">Pages Evaluated</div>
@@ -3086,58 +3062,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
 <script>
   const allRecords = {json.dumps(records_for_table)};
-  const topLevelData = {top_level_data_json};
-
-  function switchKpiView(key) {{
-    const data = topLevelData[key] || topLevelData["all"];
-    if (!data) return;
-
-    // Update active tab styles
-    document.querySelectorAll(".kpi-tab").forEach(tab => tab.classList.remove("active"));
-    const activeTab = document.getElementById("tab-kpi-" + key.toLowerCase());
-    if (activeTab) activeTab.classList.add("active");
-
-    // Update label
-    const lbl = document.getElementById("kpi-active-view-label");
-    if (lbl) {{
-      if (key === "all") {{
-        lbl.innerHTML = `Showing aggregate metrics for <strong>All Collections</strong> (${{data.pages.toLocaleString()}} pages)`;
-      }} else {{
-        lbl.innerHTML = `Showing segmented metrics for <strong>${{data.icon}} ${{data.name}}</strong> (${{data.pages.toLocaleString()}} pages &bull; ${{data.pct_of_archive}}% of archive)`;
-      }}
-    }}
-
-    // Update 6 KPI card elements
-    const elPagesVal = document.getElementById("kpi-pages-val");
-    const elPagesSub = document.getElementById("kpi-pages-sub");
-    if (elPagesVal) elPagesVal.textContent = data.pages.toLocaleString();
-    if (elPagesSub) elPagesSub.textContent = key === "all" ? "Across {len(collections_map)} collections" : `${{data.pct_of_archive}}% of evaluated archive`;
-
-    const elWordsVal = document.getElementById("kpi-words-val");
-    const elWordsSub = document.getElementById("kpi-words-sub");
-    if (elWordsVal) elWordsVal.textContent = data.pipeline_words.toLocaleString();
-    if (elWordsSub) elWordsSub.innerHTML = `ABBYY: ${{data.benchmark_words.toLocaleString()}} (<span style="color:${{data.recall_color}};">${{data.recall_sign}}${{data.recall_pct.toFixed(1)}}% recall</span>)`;
-
-    const elConcVal = document.getElementById("kpi-conc-val");
-    const elConcSub = document.getElementById("kpi-conc-sub");
-    if (elConcVal) elConcVal.textContent = `${{data.clean_concordance.toFixed(1)}}%`;
-    if (elConcSub) elConcSub.textContent = `Exact: ${{data.exact_concordance.toFixed(1)}}%`;
-
-    const elQaVal = document.getElementById("kpi-qa-val");
-    const elQaSub = document.getElementById("kpi-qa-sub");
-    if (elQaVal) {{
-      elQaVal.textContent = `${{data.lexical_win_rate.toFixed(1)}}%`;
-      elQaVal.className = "kpi-value " + (data.lexical_win_rate >= 50.0 ? "green" : "purple");
-    }}
-    if (elQaSub) elQaSub.textContent = `${{data.paddle_wins.toLocaleString()}} wins vs ${{data.abbyy_wins.toLocaleString()}}`;
-
-    const elSpatialVal = document.getElementById("kpi-spatial-val");
-    const elSpatialSub = document.getElementById("kpi-spatial-sub");
-    if (elSpatialVal) elSpatialVal.textContent = `${{data.spatial_match.toFixed(1)}}%`;
-    if (elSpatialSub) elSpatialSub.textContent = `${{data.matched_boxes.toLocaleString()}} matched boxes`;
-  }}
-  window.switchKpiView = switchKpiView;
-
   function filterToTopCollection(colName) {{
     if (!selCollection) return;
     selCollection.value = colName;
