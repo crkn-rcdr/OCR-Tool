@@ -2332,13 +2332,90 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     avg_dy = (sum(r.get("mean_dy", 0) for r in summary_records) / total_pages) if total_pages else 0.0
 
     # Group by collection and compute top-level collection counts
+    top_level_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     top_collections_counts: Dict[str, int] = defaultdict(int)
     collections_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for r in summary_records:
         raw_col = r.get("collection", "Root") or "Root"
         top_col = raw_col.replace("\\", "/").split("/")[0]
+        top_level_map[top_col].append(r)
         top_collections_counts[top_col] += 1
         collections_map[raw_col].append(r)
+
+    # Precalculate rich stats for each top-level folder (Heritage, Annuals, Newspapers)
+    folder_icons = {
+        "Heritage": "📜",
+        "Newspapers": "📰",
+        "Annuals": "📘",
+    }
+    top_level_summaries = {}
+    for top_name, recs in sorted(top_level_map.items()):
+        t_pages = len(recs)
+        t_p_words = sum(x.get("pipeline_words", 0) for x in recs)
+        t_b_words = sum(x.get("benchmark_words", 0) for x in recs)
+        t_w_diff = t_p_words - t_b_words
+        t_w_pct = round((t_w_diff / t_b_words * 100.0), 1) if t_b_words > 0 else 0.0
+        t_w_sign = "+" if t_w_pct >= 0 else ""
+        t_w_color = "#3fb950" if t_w_diff >= 0 else "#f85149"
+
+        t_clean_conc = (sum(x.get("text_concordance_clean_pct", 0) for x in recs) / t_pages) if t_pages else 0.0
+        t_exact_conc = (sum(x.get("text_concordance_exact_pct", 0) for x in recs) / t_pages) if t_pages else 0.0
+        t_p_wins = sum(x.get("paddle_lexical_wins", 0) for x in recs)
+        t_b_wins = sum(x.get("abbyy_lexical_wins", 0) for x in recs)
+        t_decisive = t_p_wins + t_b_wins
+        t_win_rate = (t_p_wins / t_decisive * 100.0) if t_decisive > 0 else 50.0
+
+        t_spatial = (sum(x.get("spatial_match_rate_pct", 0) for x in recs) / t_pages) if t_pages else 0.0
+        t_matched_boxes = sum(x.get("matched_boxes", 0) for x in recs)
+        t_iou = (sum(x.get("mean_iou", 0) for x in recs) / t_pages) if t_pages else 0.0
+        t_dx = (sum(x.get("mean_dx", 0) for x in recs) / t_pages) if t_pages else 0.0
+        t_dy = (sum(x.get("mean_dy", 0) for x in recs) / t_pages) if t_pages else 0.0
+
+        top_level_summaries[top_name] = {
+            "name": top_name,
+            "icon": folder_icons.get(top_name, "📁"),
+            "pages": t_pages,
+            "pct_of_archive": round((t_pages / total_pages * 100.0), 1) if total_pages else 0.0,
+            "pipeline_words": t_p_words,
+            "benchmark_words": t_b_words,
+            "word_diff": t_w_diff,
+            "recall_pct": t_w_pct,
+            "recall_sign": t_w_sign,
+            "recall_color": t_w_color,
+            "clean_concordance": round(t_clean_conc, 1),
+            "exact_concordance": round(t_exact_conc, 1),
+            "paddle_wins": t_p_wins,
+            "abbyy_wins": t_b_wins,
+            "lexical_win_rate": round(t_win_rate, 1),
+            "spatial_match": round(t_spatial, 1),
+            "matched_boxes": t_matched_boxes,
+            "mean_iou": round(t_iou, 3),
+            "mean_dx": round(t_dx, 4),
+            "mean_dy": round(t_dy, 4),
+        }
+
+    macro_stats = {
+        "name": "All Collections",
+        "icon": "✦",
+        "pages": total_pages,
+        "pct_of_archive": 100.0,
+        "pipeline_words": total_pipeline_words,
+        "benchmark_words": total_benchmark_words,
+        "word_diff": total_pipeline_words - total_benchmark_words,
+        "recall_pct": round(((total_pipeline_words - total_benchmark_words) / total_benchmark_words * 100.0), 1) if total_benchmark_words > 0 else 0.0,
+        "recall_sign": "+" if (total_pipeline_words - total_benchmark_words) >= 0 else "",
+        "recall_color": "#3fb950" if (total_pipeline_words - total_benchmark_words) >= 0 else "#f85149",
+        "clean_concordance": round(avg_clean_concordance, 1),
+        "exact_concordance": round(avg_exact_concordance, 1),
+        "paddle_wins": total_p_lex_wins,
+        "abbyy_wins": total_b_lex_wins,
+        "lexical_win_rate": round(overall_p_win_rate, 1),
+        "spatial_match": round(avg_spatial_match, 1),
+        "matched_boxes": total_matched_boxes,
+        "mean_iou": round(avg_iou, 3),
+        "mean_dx": round(avg_dx, 4),
+        "mean_dy": round(avg_dy, 4),
+    }
 
     collection_summaries = []
     for col_name, recs in sorted(collections_map.items()):
@@ -2412,6 +2489,70 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     kpi_w_pct = round((kpi_w_diff / total_benchmark_words * 100.0), 1) if total_benchmark_words > 0 else 0.0
     kpi_w_sign = "+" if kpi_w_diff >= 0 else ""
 
+    # Build Top-Level tabs HTML for main KPI switcher
+    top_level_tabs_list = [
+        f'<button class="kpi-tab active" id="tab-kpi-all" onclick="switchKpiView(\'all\')">✦ All Collections ({total_pages:,})</button>'
+    ]
+    for k, v in top_level_summaries.items():
+        top_level_tabs_list.append(
+            f'<button class="kpi-tab" id="tab-kpi-{k.lower()}" onclick="switchKpiView(\'{k}\')">{v["icon"]} {k} ({v["pages"]:,})</button>'
+        )
+    top_level_tabs_html = "\n      ".join(top_level_tabs_list)
+
+    # Build Top-Level breakdown panels HTML (Heritage, Annuals, Newspapers)
+    top_level_panels_list = []
+    for f in top_level_summaries.values():
+        qa_color_class = "green" if f["lexical_win_rate"] >= 50.0 else "purple"
+        panel_html = f"""
+    <div class="top-folder-panel" id="panel-{f['name'].lower()}">
+      <div class="top-folder-header">
+        <div class="top-folder-title">
+          <span class="top-folder-icon">{f['icon']}</span>
+          <span>{f['name']}</span>
+          <span class="top-folder-badge">{f['pages']:,} Pages ({f['pct_of_archive']}%)</span>
+        </div>
+        <div class="top-folder-actions">
+          <button class="top-folder-btn" onclick="switchKpiView('{f['name']}'); const kh = document.querySelector('.kpi-header-row'); if (kh) kh.scrollIntoView({{behavior:'smooth', block:'center'}});">Focus in Main KPIs ↑</button>
+          <button class="top-folder-btn primary" onclick="filterToTopCollection('{f['name']}')">Explore {f['name']} Pages ({f['pages']:,}) ↓</button>
+        </div>
+      </div>
+      <div class="kpi-grid mini">
+        <div class="kpi-card">
+          <div class="kpi-label">Pages Evaluated</div>
+          <div class="kpi-value">{f['pages']:,}</div>
+          <div class="kpi-sub">{f['pct_of_archive']}% of evaluated archive</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Word Extraction Recall</div>
+          <div class="kpi-value blue">{f['pipeline_words']:,}</div>
+          <div class="kpi-sub">ABBYY: {f['benchmark_words']:,} (<span style="color:{f['recall_color']};">{f['recall_sign']}{f['recall_pct']:.1f}%</span>)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Clean Concordance</div>
+          <div class="kpi-value green">{f['clean_concordance']:.1f}%</div>
+          <div class="kpi-sub">Exact: {f['exact_concordance']:.1f}%</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Paddle QA Win Rate</div>
+          <div class="kpi-value {qa_color_class}">{f['lexical_win_rate']:.1f}%</div>
+          <div class="kpi-sub">{f['paddle_wins']:,} wins vs {f['abbyy_wins']:,}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Spatial Alignment</div>
+          <div class="kpi-value purple">{f['spatial_match']:.1f}%</div>
+          <div class="kpi-sub">{f['matched_boxes']:,} matched boxes</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Mean Bounding IoU</div>
+          <div class="kpi-value">{f['mean_iou']:.3f}</div>
+          <div class="kpi-sub">dX: {f['mean_dx']:+.4f} | dY: {f['mean_dy']:+.4f}</div>
+        </div>
+      </div>
+    </div>"""
+        top_level_panels_list.append(panel_html)
+    top_level_panels_html = "\n".join(top_level_panels_list)
+    top_level_data_json = json.dumps({"all": macro_stats, **top_level_summaries})
+
     dashboard_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2447,7 +2588,13 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   .ai-summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #30363d; font-size: 0.88rem; }}
   .ai-point strong {{ color: #58a6ff; }}
   
-  /* KPI Cards Grid */
+  /* KPI Cards Grid & Filter Tabs */
+  .kpi-header-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }}
+  .kpi-filter-tabs {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+  .kpi-tab {{ background: #161b22; border: 1px solid #30363d; color: #8b949e; padding: 7px 16px; border-radius: 6px; font-size: 0.84rem; font-weight: 600; cursor: pointer; transition: all 0.15s ease; }}
+  .kpi-tab:hover {{ border-color: #58a6ff; color: #c9d1d9; }}
+  .kpi-tab.active {{ background: rgba(56, 139, 253, 0.15); border-color: #388bfd; color: #58a6ff; box-shadow: 0 0 0 1px #388bfd; }}
+
   .kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 32px; }}
   .kpi-card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 18px 20px; transition: transform 0.15s, border-color 0.15s; }}
   .kpi-card:hover {{ border-color: #58a6ff; transform: translateY(-2px); }}
@@ -2457,6 +2604,26 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
   .kpi-value.green {{ color: #3fb950; }}
   .kpi-value.blue {{ color: #58a6ff; }}
   .kpi-value.purple {{ color: #bc8cff; }}
+
+  /* Top-Level Folder Breakdown Panels */
+  .top-folder-panel {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px 22px; margin-bottom: 20px; transition: border-color 0.15s, transform 0.15s; }}
+  .top-folder-panel:hover {{ border-color: #58a6ff; }}
+  .top-folder-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }}
+  .top-folder-title {{ display: flex; align-items: center; gap: 10px; font-size: 1.18rem; font-weight: 600; color: #f0f6fc; }}
+  .top-folder-icon {{ font-size: 1.3rem; }}
+  .top-folder-badge {{ font-size: 0.78rem; background: rgba(56, 139, 253, 0.12); color: #58a6ff; border: 1px solid rgba(56, 139, 253, 0.35); padding: 3px 10px; border-radius: 12px; font-weight: 600; }}
+  .top-folder-actions {{ display: flex; gap: 10px; align-items: center; }}
+  .top-folder-btn {{ background: #21262d; border: 1px solid #30363d; color: #c9d1d9; font-size: 0.8rem; font-weight: 600; padding: 6px 14px; border-radius: 6px; cursor: pointer; text-decoration: none; transition: all 0.15s; }}
+  .top-folder-btn:hover {{ background: #30363d; color: #58a6ff; border-color: #58a6ff; }}
+  .top-folder-btn.primary {{ background: rgba(35, 134, 54, 0.15); border-color: #238636; color: #3fb950; }}
+  .top-folder-btn.primary:hover {{ background: rgba(35, 134, 54, 0.3); border-color: #3fb950; color: #7ee787; }}
+
+  .kpi-grid.mini {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 0; }}
+  .kpi-grid.mini .kpi-card {{ background: #0d1117; border: 1px solid #21262d; padding: 12px 14px; border-radius: 6px; }}
+  .kpi-grid.mini .kpi-card:hover {{ border-color: #388bfd; }}
+  .kpi-grid.mini .kpi-label {{ font-size: 0.72rem; margin-bottom: 4px; }}
+  .kpi-grid.mini .kpi-value {{ font-size: 1.45rem; }}
+  .kpi-grid.mini .kpi-sub {{ font-size: 0.72rem; margin-top: 2px; }}
   
   /* Collection Summary Section */
   .section-title {{ font-size: 1.3rem; font-weight: 600; color: #f0f6fc; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }}
@@ -2647,12 +2814,19 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
   </div>
 
-  <!-- KPI Metric Overview Cards -->
+  <!-- KPI Metric Overview Cards & Top-Level Selector -->
+  <div class="kpi-header-row">
+    <div class="kpi-filter-tabs">
+      {top_level_tabs_html}
+    </div>
+    <div id="kpi-active-view-label" style="font-size:0.84rem;color:#8b949e;">Showing aggregate metrics for <strong>All Collections</strong> ({total_pages:,} pages)</div>
+  </div>
+
   <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-label">Pages Evaluated</div>
-      <div class="kpi-value">{total_pages}</div>
-      <div class="kpi-sub">Across {len(collections_map)} collections</div>
+      <div class="kpi-value" id="kpi-pages-val">{total_pages:,}</div>
+      <div class="kpi-sub" id="kpi-pages-sub">Across {len(collections_map)} collections</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
@@ -2667,8 +2841,8 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           </span>
         </span>
       </div>
-      <div class="kpi-value blue">{total_pipeline_words:,}</div>
-      <div class="kpi-sub">ABBYY: {total_benchmark_words:,} ({kpi_w_sign}{kpi_w_pct:.1f}% recall)</div>
+      <div class="kpi-value blue" id="kpi-words-val">{total_pipeline_words:,}</div>
+      <div class="kpi-sub" id="kpi-words-sub">ABBYY: {total_benchmark_words:,} (<span style="color:{'#3fb950' if kpi_w_diff >= 0 else '#f85149'};">{kpi_w_sign}{kpi_w_pct:.1f}% recall</span>)</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
@@ -2683,8 +2857,8 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           </span>
         </span>
       </div>
-      <div class="kpi-value green">{avg_clean_concordance:.1f}%</div>
-      <div class="kpi-sub">Exact: {avg_exact_concordance:.1f}%</div>
+      <div class="kpi-value green" id="kpi-conc-val">{avg_clean_concordance:.1f}%</div>
+      <div class="kpi-sub" id="kpi-conc-sub">Exact: {avg_exact_concordance:.1f}%</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
@@ -2699,8 +2873,8 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           </span>
         </span>
       </div>
-      <div class="kpi-value green">{overall_p_win_rate:.1f}%</div>
-      <div class="kpi-sub">{total_p_lex_wins:,} wins vs {total_b_lex_wins:,}</div>
+      <div class="kpi-value {'green' if overall_p_win_rate >= 50.0 else 'purple'}" id="kpi-qa-val">{overall_p_win_rate:.1f}%</div>
+      <div class="kpi-sub" id="kpi-qa-sub">{total_p_lex_wins:,} wins vs {total_b_lex_wins:,}</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
@@ -2715,8 +2889,8 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           </span>
         </span>
       </div>
-      <div class="kpi-value purple">{avg_spatial_match:.1f}%</div>
-      <div class="kpi-sub">{total_matched_boxes:,} matched boxes</div>
+      <div class="kpi-value purple" id="kpi-spatial-val">{avg_spatial_match:.1f}%</div>
+      <div class="kpi-sub" id="kpi-spatial-sub">{total_matched_boxes:,} matched boxes</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
@@ -2731,9 +2905,18 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           </span>
         </span>
       </div>
-      <div class="kpi-value">{avg_iou:.3f}</div>
-      <div class="kpi-sub">dX: {avg_dx:+.4f} | dY: {avg_dy:+.4f}</div>
+      <div class="kpi-value" id="kpi-iou-val">{avg_iou:.3f}</div>
+      <div class="kpi-sub" id="kpi-iou-sub">dX: {avg_dx:+.4f} | dY: {avg_dy:+.4f}</div>
     </div>
+  </div>
+
+  <!-- Top-Level Archive Collection Performance Section -->
+  <div class="section-title">
+    <span>Archive Folder Performance (Heritage, Annuals, Newspapers)</span>
+    <span style="font-size:0.85rem;font-weight:400;color:#8b949e;">Multi-metric breakdown across top-level collection streams</span>
+  </div>
+  <div style="margin-bottom: 36px;">
+    {top_level_panels_html}
   </div>
 
   <!-- Collections Summary Grid -->
@@ -2925,6 +3108,74 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
 <script>
   const allRecords = {json.dumps(records_for_table)};
+  const topLevelData = {top_level_data_json};
+
+  function switchKpiView(key) {{
+    const data = topLevelData[key] || topLevelData["all"];
+    if (!data) return;
+
+    // Update active tab styles
+    document.querySelectorAll(".kpi-tab").forEach(tab => tab.classList.remove("active"));
+    const activeTab = document.getElementById("tab-kpi-" + key.toLowerCase());
+    if (activeTab) activeTab.classList.add("active");
+
+    // Update label
+    const lbl = document.getElementById("kpi-active-view-label");
+    if (lbl) {{
+      if (key === "all") {{
+        lbl.innerHTML = `Showing aggregate metrics for <strong>All Collections</strong> (${{data.pages.toLocaleString()}} pages)`;
+      }} else {{
+        lbl.innerHTML = `Showing segmented metrics for <strong>${{data.icon}} ${{data.name}}</strong> (${{data.pages.toLocaleString()}} pages &bull; ${{data.pct_of_archive}}% of archive)`;
+      }}
+    }}
+
+    // Update 6 KPI card elements
+    const elPagesVal = document.getElementById("kpi-pages-val");
+    const elPagesSub = document.getElementById("kpi-pages-sub");
+    if (elPagesVal) elPagesVal.textContent = data.pages.toLocaleString();
+    if (elPagesSub) elPagesSub.textContent = key === "all" ? "Across {len(collections_map)} collections" : `${{data.pct_of_archive}}% of evaluated archive`;
+
+    const elWordsVal = document.getElementById("kpi-words-val");
+    const elWordsSub = document.getElementById("kpi-words-sub");
+    if (elWordsVal) elWordsVal.textContent = data.pipeline_words.toLocaleString();
+    if (elWordsSub) elWordsSub.innerHTML = `ABBYY: ${{data.benchmark_words.toLocaleString()}} (<span style="color:${{data.recall_color}};">${{data.recall_sign}}${{data.recall_pct.toFixed(1)}}% recall</span>)`;
+
+    const elConcVal = document.getElementById("kpi-conc-val");
+    const elConcSub = document.getElementById("kpi-conc-sub");
+    if (elConcVal) elConcVal.textContent = `${{data.clean_concordance.toFixed(1)}}%`;
+    if (elConcSub) elConcSub.textContent = `Exact: ${{data.exact_concordance.toFixed(1)}}%`;
+
+    const elQaVal = document.getElementById("kpi-qa-val");
+    const elQaSub = document.getElementById("kpi-qa-sub");
+    if (elQaVal) {{
+      elQaVal.textContent = `${{data.lexical_win_rate.toFixed(1)}}%`;
+      elQaVal.className = "kpi-value " + (data.lexical_win_rate >= 50.0 ? "green" : "purple");
+    }}
+    if (elQaSub) elQaSub.textContent = `${{data.paddle_wins.toLocaleString()}} wins vs ${{data.abbyy_wins.toLocaleString()}}`;
+
+    const elSpatialVal = document.getElementById("kpi-spatial-val");
+    const elSpatialSub = document.getElementById("kpi-spatial-sub");
+    if (elSpatialVal) elSpatialVal.textContent = `${{data.spatial_match.toFixed(1)}}%`;
+    if (elSpatialSub) elSpatialSub.textContent = `${{data.matched_boxes.toLocaleString()}} matched boxes`;
+
+    const elIouVal = document.getElementById("kpi-iou-val");
+    const elIouSub = document.getElementById("kpi-iou-sub");
+    if (elIouVal) elIouVal.textContent = data.mean_iou.toFixed(3);
+    if (elIouSub) elIouSub.textContent = `dX: ${{data.mean_dx >= 0 ? "+" : ""}}${{data.mean_dx.toFixed(4)}} | dY: ${{data.mean_dy >= 0 ? "+" : ""}}${{data.mean_dy.toFixed(4)}}`;
+  }}
+  window.switchKpiView = switchKpiView;
+
+  function filterToTopCollection(colName) {{
+    if (!selCollection) return;
+    selCollection.value = colName;
+    applyFilters();
+    const section = document.querySelector(".explorer-section");
+    if (section) {{
+      section.scrollIntoView({{ behavior: "smooth", block: "start" }});
+    }}
+  }}
+  window.filterToTopCollection = filterToTopCollection;
+
   let filteredRecords = [...allRecords];
   let currentPage = 1;
   const pageSize = 25;
