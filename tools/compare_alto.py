@@ -2889,10 +2889,9 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
   </div>
 
-  <!-- Top-Level Archive Collection Performance Section -->
+  <!-- Folder Performance Section -->
   <div class="section-title">
-    <span>Archive Folder Performance (Heritage, Annuals, Newspapers)</span>
-    <span style="font-size:0.85rem;font-weight:400;color:#8b949e;">Multi-metric breakdown across top-level collection streams</span>
+    <span>Folder Performance</span>
   </div>
   <div style="margin-bottom: 36px;">
     {top_level_panels_html}
