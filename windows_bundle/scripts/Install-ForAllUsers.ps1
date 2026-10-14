@@ -43,9 +43,9 @@ if (-not (Test-IsAdministrator)) {
 
 $projectRoot = Resolve-ProjectRoot
 $bundleRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$startCmd = Join-Path $bundleRoot "Start OCR Tool.cmd"
-$stopCmd = Join-Path $bundleRoot "Stop OCR Tool.cmd"
-$updateCmd = Join-Path $bundleRoot "Admin Update OCR Tool.cmd"
+$startCmd = Join-Path $bundleRoot "Start OCR Tool.bat"
+$stopCmd = Join-Path $bundleRoot "Stop OCR Tool.bat"
+$updateCmd = Join-Path $bundleRoot "Admin Update OCR Tool.bat"
 
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot "app.py"))) {
     throw "Could not find app.py under $projectRoot."
@@ -56,8 +56,9 @@ $logRoot = Join-Path $sharedRoot "logs"
 $outputRoot = Join-Path $projectRoot "output"
 $repoLogRoot = Join-Path $projectRoot "logs"
 $modelCacheRoot = Join-Path $projectRoot ".paddlex"
+$indraModelRoot = Join-Path $projectRoot "models\indra"
 
-New-Item -ItemType Directory -Force -Path $sharedRoot, $logRoot, $outputRoot, $repoLogRoot, $modelCacheRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $sharedRoot, $logRoot, $outputRoot, $repoLogRoot, $modelCacheRoot, $indraModelRoot | Out-Null
 
 if (-not $NoAclChanges) {
     Write-Host "[CRKN OCR] Granting local Users modify access to shared logs/output..."
@@ -66,6 +67,7 @@ if (-not $NoAclChanges) {
     & icacls $outputRoot /grant "${usersSid}:(OI)(CI)M" /T | Out-Null
     & icacls $repoLogRoot /grant "${usersSid}:(OI)(CI)M" /T | Out-Null
     & icacls $modelCacheRoot /grant "${usersSid}:(OI)(CI)M" /T | Out-Null
+    & icacls $indraModelRoot /grant "${usersSid}:(OI)(CI)RX" /T | Out-Null
 }
 
 $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")

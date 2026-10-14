@@ -37,7 +37,13 @@ def get_indra_converter(threads: Optional[int] = None, math: bool = False):
 
     import indra_ocr
 
-    conv = indra_ocr.load(threads=threads, math=math)
+    local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
+    model_path = None
+    if local_model_dir.exists() and (local_model_dir / "det.onnx").exists():
+        model_path = local_model_dir
+        os.environ.setdefault("INDRA_OCR_MODEL_DIR", str(local_model_dir))
+
+    conv = indra_ocr.load(path=model_path, threads=threads, math=math)
     _CONVERTER_CACHE[cache_key] = conv
     return conv
 
@@ -270,7 +276,7 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             if benchmark_has_eval_files:
                 try:
                     from tools.compare_alto import compare_directory_batch
-                    compare_root = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
+                    compare_root = Path(r"C:\CRKN Projects\paddle_pipeline\compare_indra")
                     compared = compare_directory_batch(
                         pipeline_dir=output_root,
                         benchmark_dir=input_path,
@@ -278,6 +284,8 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
                         collection_name=f"IndraOCR/{input_path.name}",
                         render_html=True,
                         render_image=False,
+                        pipeline_name="Indra OCR",
+                        pipeline_short="Indra",
                     )
                     if compared > 0:
                         yield f"Auto-comparison updated for Indra OCR vs ABBYY ({compared} pages)"

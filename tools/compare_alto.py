@@ -1016,7 +1016,9 @@ def generate_interactive_html(
     rel_index_path: str = "../../index.html",
     prev_page_url: Optional[str] = None,
     next_page_url: Optional[str] = None,
-    collection_name: str = ""
+    collection_name: str = "",
+    pipeline_name: str = "PaddleOCR",
+    pipeline_short: str = "Paddle",
 ) -> Path:
     """Generates a standalone, rich HTML viewer with synchronized panning, zoom,
     navigation breadcrumbs, lexical QA badges, clickable word concordance cards,
@@ -1442,7 +1444,7 @@ def generate_interactive_html(
     <div class="badge info" title="Detected Document Language">Lang: {getattr(result, 'detected_language', 'en').upper()}</div>
     <div class="badge {recall_badge_cls}" title="Recognized words: Pipeline {p_words} vs Benchmark {b_words} ({sign}{delta_pct}% recall advantage)">Words: {p_words} P / {b_words} B ({sign}{delta_pct}%)</div>
     <div class="badge success" title="Text Concordance (Cleaned)">Concordance: {result.clean_text_concordance_rate}%</div>
-    <div class="badge {lexical_badge_cls}" id="badgeQaWinRate" title="Paddle {result.paddle_lexical_wins} wins vs ABBYY {result.abbyy_lexical_wins} wins on disputed words">Paddle QA Win Rate: {result.lexical_win_rate_pct}%</div>
+    <div class="badge {lexical_badge_cls}" id="badgeQaWinRate" title="{pipeline_short} {result.paddle_lexical_wins} wins vs ABBYY {result.abbyy_lexical_wins} wins on disputed words">{pipeline_short} QA Win Rate: {result.lexical_win_rate_pct}%</div>
     <div class="badge info" title="Spatial IoU Alignment Rate">IoU Match: {result.spatial_match_rate_pipeline}%</div>
     <div class="badge warning" id="badgeTopDiffs" title="Discrepant words count">Diffs: {len(result.discrepancies)}</div>
   </div>
@@ -1477,7 +1479,7 @@ def generate_interactive_html(
   <div class="viewers-container">
     <!-- Pipeline Panel (Left) -->
     <div class="panel" id="panelLeft">
-      <div class="panel-header">Pipeline (PaddleOCR + VLM) - {result.pipeline_total_words} words</div>
+      <div class="panel-header">Pipeline ({pipeline_name}) - {result.pipeline_total_words} words</div>
       <div class="canvas-stage" id="stageLeft">
         {"<img class='page-image' id='imgLeft' src='" + bg_image_rel_path + "' style='opacity:0.85;'>" if bg_image_rel_path else "<div style='width:100%;height:100%;background:#1e232a;'></div>"}
         <svg class="overlay-svg" id="svgLeft" viewBox="0 0 {result.pipeline_page.width} {result.pipeline_page.height}"></svg>
@@ -1520,7 +1522,7 @@ def generate_interactive_html(
     <div class="sidebar-filter-bar">
       <select id="selFilterDiscrepancies" class="filter-dropdown">
         <option value="all" id="optFilterAll">All Discrepancies ({len(result.discrepancies)})</option>
-        <option value="PADDLE_WIN" id="optFilterPaddle">Paddle Wins ({result.paddle_lexical_wins})</option>
+        <option value="PADDLE_WIN" id="optFilterPaddle">{pipeline_short} Wins ({result.paddle_lexical_wins})</option>
         <option value="ABBYY_WIN" id="optFilterAbbyy">ABBYY Wins ({result.abbyy_lexical_wins})</option>
         <option value="BOTH_VALID" id="optFilterBoth">Both Valid ({result.both_valid_count})</option>
         <option value="NEITHER_VALID" id="optFilterNeither">Neither Valid ({result.neither_valid_count})</option>
@@ -1531,6 +1533,8 @@ def generate_interactive_html(
 </div>
 
 <script>
+  const pipelineName = "{pipeline_name}";
+  const pipelineShort = "{pipeline_short}";
   const matchedData = {json.dumps(matched_data)};
   const pOnlyData = {json.dumps(p_only_data)};
   const bOnlyData = {json.dumps(b_only_data)};
@@ -1551,7 +1555,7 @@ def generate_interactive_html(
   }}
 
   function formatVerdictLabel(v) {{
-    if (v === "PADDLE_WIN") return "Paddle Win";
+    if (v === "PADDLE_WIN") return `${{pipelineShort}} Win`;
     if (v === "ABBYY_WIN") return "ABBYY Win";
     if (v === "BOTH_VALID") return "Both Valid";
     if (v === "NEITHER_VALID") return "Neither";
@@ -1562,7 +1566,7 @@ def generate_interactive_html(
     const star = isManual ? ' <span title="Manually Adjudicated">★</span>' : '';
     const manCls = isManual ? ' manual' : '';
     if (v === "PADDLE_WIN") {{
-      return `<span class="verdict-tag paddle-win${{manCls}}">Paddle Win${{star}}</span>`;
+      return `<span class="verdict-tag paddle-win${{manCls}}">${{pipelineShort}} Win${{star}}</span>`;
     }} else if (v === "ABBYY_WIN") {{
       return `<span class="verdict-tag abbyy-win${{manCls}}">ABBYY Win${{star}}</span>`;
     }} else if (v === "BOTH_VALID") {{
@@ -1678,7 +1682,7 @@ def generate_interactive_html(
 
       card.innerHTML = `
         <div class="card-row">
-          <span class="card-diff" id="card-p-${{idx}}" title="Click to award Paddle Win">P: ${{escapeHtml(m.p_text)}}${{pCheck}}</span>
+          <span class="card-diff" id="card-p-${{idx}}" title="Click to award ${{pipelineShort}} Win">P: ${{escapeHtml(m.p_text)}}${{pCheck}}</span>
           <span id="badge-container-${{idx}}">${{buildVerdictBadgeHTML(effVerdict, Boolean(m.manual_verdict))}}</span>
         </div>
         <div class="card-row">
@@ -1686,7 +1690,7 @@ def generate_interactive_html(
           <span class="card-label">IoU: ${{m.iou}} | Sim: ${{Math.round(m.sim * 100)}}%</span>
         </div>
         <div class="card-quick-actions" id="chips-${{idx}}">
-          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award Paddle Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
+          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award ${{pipelineShort}} Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
           <button class="chip-btn chip-b ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" title="Award ABBYY Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'ABBYY_WIN');">B</button>
           <button class="chip-btn chip-both ${{effVerdict === 'BOTH_VALID' ? 'active' : ''}}" title="Mark Both Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'BOTH_VALID');">Both</button>
           <button class="chip-btn chip-neither ${{effVerdict === 'NEITHER_VALID' ? 'active' : ''}}" title="Mark Neither Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'NEITHER_VALID');">None</button>
@@ -1808,7 +1812,7 @@ def generate_interactive_html(
         </div>
       </div>
       <div class="inspector-compare">
-        <div class="insp-row p-row" id="inspRowP" title="Click to award win to Paddle">
+        <div class="insp-row p-row" id="inspRowP" title="Click to award win to ${{pipelineShort}}">
           <span class="insp-engine">Pipeline (P):</span>
           <span class="insp-text">${{escapeHtml(m.p_text)}}${{pCheck}}</span>
         </div>
@@ -1824,8 +1828,8 @@ def generate_interactive_html(
         </span>
       </div>
       <div class="inspector-actions">
-        <button class="adj-btn btn-paddle ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" id="btnAdjPaddle" title="Award win to Paddle (Key: P or 1)">
-          <span>Paddle Win</span> <span class="adj-key">P</span>
+        <button class="adj-btn btn-paddle ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" id="btnAdjPaddle" title="Award win to ${{pipelineShort}} (Key: P or 1)">
+          <span>${{pipelineShort}} Win</span> <span class="adj-key">P</span>
         </button>
         <button class="adj-btn btn-abbyy ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" id="btnAdjAbbyy" title="Award win to ABBYY (Key: B or A or 2)">
           <span>ABBYY Win</span> <span class="adj-key">B</span>
@@ -1871,7 +1875,7 @@ def generate_interactive_html(
     if (!insp) return;
 
     insp.className = "inspector-panel";
-    const engineName = engine === "P" ? "Pipeline (PaddleOCR)" : "Benchmark (ABBYY)";
+    const engineName = engine === "P" ? `Pipeline (${{pipelineName}})` : "Benchmark (ABBYY)";
     const color = engine === "P" ? "#38bdf8" : "#ef4444";
 
     insp.innerHTML = `
@@ -1943,7 +1947,7 @@ def generate_interactive_html(
       const chips = document.getElementById("chips-" + idx);
       if (chips) {{
         chips.innerHTML = `
-          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award Paddle Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
+          <button class="chip-btn chip-p ${{effVerdict === 'PADDLE_WIN' ? 'active' : ''}}" title="Award ${{pipelineShort}} Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'PADDLE_WIN');">P</button>
           <button class="chip-btn chip-b ${{effVerdict === 'ABBYY_WIN' ? 'active' : ''}}" title="Award ABBYY Win" onclick="event.stopPropagation(); setWinner(${{idx}}, 'ABBYY_WIN');">B</button>
           <button class="chip-btn chip-both ${{effVerdict === 'BOTH_VALID' ? 'active' : ''}}" title="Mark Both Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'BOTH_VALID');">Both</button>
           <button class="chip-btn chip-neither ${{effVerdict === 'NEITHER_VALID' ? 'active' : ''}}" title="Mark Neither Valid" onclick="event.stopPropagation(); setWinner(${{idx}}, 'NEITHER_VALID');">None</button>
@@ -1979,8 +1983,8 @@ def generate_interactive_html(
 
     const badgeQa = document.getElementById("badgeQaWinRate");
     if (badgeQa) {{
-      badgeQa.textContent = `Paddle QA Win Rate: ${{winRate}}%`;
-      badgeQa.title = `Paddle ${{pWins}} wins vs ABBYY ${{bWins}} wins on disputed words (${{manualCount}} manual reviews)`;
+      badgeQa.textContent = `${{pipelineShort}} QA Win Rate: ${{winRate}}%`;
+      badgeQa.title = `${{pipelineShort}} ${{pWins}} wins vs ABBYY ${{bWins}} wins on disputed words (${{manualCount}} manual reviews)`;
       badgeQa.className = `badge ${{parseFloat(winRate) >= 50.0 ? "qa-win" : "qa-loss"}}`;
     }}
 
@@ -1995,7 +1999,7 @@ def generate_interactive_html(
     const optBoth = document.getElementById("optFilterBoth");
     const optNeither = document.getElementById("optFilterNeither");
     if (optAll) optAll.textContent = `All Discrepancies (${{totalDiscrepancies}})`;
-    if (optP) optP.textContent = `Paddle Wins (${{pWins}})`;
+    if (optP) optP.textContent = `${{pipelineShort}} Wins (${{pWins}})`;
     if (optB) optB.textContent = `ABBYY Wins (${{bWins}})`;
     if (optBoth) optBoth.textContent = `Both Valid (${{bothValid}})`;
     if (optNeither) optNeither.textContent = `Neither Valid (${{neitherValid}})`;
@@ -2309,7 +2313,12 @@ def generate_interactive_html(
 # Master AI Summary Dashboard (GitHub Pages Landing Page)
 # ---------------------------------------------------------------------------
 
-def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_index_path: Path) -> Path:
+def generate_master_dashboard(
+    summary_records: List[Dict[str, Any]],
+    output_index_path: Path,
+    pipeline_name: str = "PaddleOCR",
+    pipeline_short: str = "Paddle",
+) -> Path:
     """Generates a rich, interactive Master AI Summary Dashboard (index.html)
     suitable for deployment as a static GitHub Pages website.
     """
@@ -2527,7 +2536,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
           <div class="kpi-sub">{f['matched_boxes']:,} matched boxes</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Paddle QA Win Rate</div>
+          <div class="kpi-label">{pipeline_short} QA Win Rate</div>
           <div class="kpi-value {qa_color_class}">{f['lexical_win_rate']:.1f}%</div>
           <div class="kpi-sub">{f['paddle_wins']:,} wins vs {f['abbyy_wins']:,}</div>
         </div>
@@ -2556,28 +2565,28 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
     ai_verdict_body = (
         f"Across <strong>{total_pages:,} historical pages</strong> and <strong>{total_pipeline_words:,} recognized word tokens</strong>, "
-        f"the GPU-accelerated PaddleOCR pipeline demonstrates production-grade readiness and a substantial text discovery advantage over the legacy ABBYY FineReader baseline. "
+        f"the {pipeline_name} pipeline demonstrates production-grade readiness and a substantial text discovery advantage over the legacy ABBYY FineReader baseline. "
         f"While standard printed works show high consensus (<strong>{avg_clean_concordance:.1f}% clean text concordance</strong> archive-wide, rising to <strong>{ann_conc:.1f}% on Annuals</strong>), "
-        f"PaddleOCR unlocks <strong>{kpi_w_diff:+,} additional words ({kpi_w_sign}{kpi_w_pct:.1f}% recall expansion)</strong>. "
+        f"{pipeline_name} unlocks <strong>{kpi_w_diff:+,} additional words ({kpi_w_sign}{kpi_w_pct:.1f}% recall expansion)</strong>. "
         f"For digital library preservation, this extra recall surfaces faint marginalia, captions, stamps, and degraded microfilm text that legacy binarization skipped entirely."
     )
 
     ai_verdict_points = f"""
       <div class="ai-point">
         <strong style="color:#58a6ff;">🔍 Archival Discovery ({her_sign}{her_recall:.1f}% in Heritage):</strong>
-        Paddle's deep-learning detector captures faint captions, stamps, handwritten notes, and degraded microfilm where ABBYY's rigid thresholding missed text—surfacing <strong>{her_extra_words:+,} extra searchable words</strong> in the Heritage archive alone.
+        {pipeline_short}'s deep-learning detector captures faint captions, stamps, handwritten notes, and degraded microfilm where ABBYY's rigid thresholding missed text—surfacing <strong>{her_extra_words:+,} extra searchable words</strong> in the Heritage archive alone.
       </div>
       <div class="ai-point">
         <strong style="color:#3fb950;">📰 Newspaper Layout & Arbitration ({news_win:.1f}% Win Rate):</strong>
-        On dense multi-column serials, Paddle decisively outperforms ABBYY in head-to-head dictionary arbitration ({news_p_wins:,} vs {news_b_wins:,} valid word wins, <strong>{news_win:.1f}%</strong>), eliminating column-bleed and preserving accurate historical reading order.
+        On dense multi-column serials, {pipeline_short} decisively outperforms ABBYY in head-to-head dictionary arbitration ({news_p_wins:,} vs {news_b_wins:,} valid word wins, <strong>{news_win:.1f}%</strong>), eliminating column-bleed and preserving accurate historical reading order.
       </div>
       <div class="ai-point">
         <strong style="color:#bc8cff;">📘 Production Parity on Clean Stock ({ann_conc:.1f}% Concordance):</strong>
-        Standard publication streams (Annuals) exhibit high consensus (<strong>{ann_conc:.1f}% clean concordance</strong>, <strong>{ann_exact:.1f}% exact match</strong>, and <strong>{ann_spatial:.1f}% spatial alignment</strong>), confirming Paddle matches commercial quality on standard typography.
+        Standard publication streams (Annuals) exhibit high consensus (<strong>{ann_conc:.1f}% clean concordance</strong>, <strong>{ann_exact:.1f}% exact match</strong>, and <strong>{ann_spatial:.1f}% spatial alignment</strong>), confirming {pipeline_short} matches commercial quality on standard typography.
       </div>
       <div class="ai-point">
         <strong style="color:#e3b341;">⚜️ Bilingual Diacritic & Token Integrity:</strong>
-        Paddle reliably preserves French accented characters (<em>é, à, è, ç, ô</em>) and compound hyphenation, avoiding the character stripping, stray ASCII artifacts, and word fragmentation frequently observed in legacy OCR outputs.
+        {pipeline_short} reliably preserves French accented characters (<em>é, à, è, ç, ô</em>) and compound hyphenation, avoiding the character stripping, stray ASCII artifacts, and word fragmentation frequently observed in legacy OCR outputs.
       </div>"""
 
     dashboard_html = f"""<!DOCTYPE html>
@@ -2807,7 +2816,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 <div class="container">
   
   <div class="hero">
-    <h1>PaddleOCR Pipeline vs. ABBYY FineReader Benchmark</h1>
+    <h1>{pipeline_name} Pipeline vs. ABBYY FineReader Benchmark</h1>
     <p>Comprehensive quantitative evaluation, automated lexical validity scoring, and spatial bounding-box alignment analysis across {total_pages} historical digital archive pages.</p>
   </div>
 
@@ -2838,9 +2847,9 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         <span class="info-icon" onclick="event.stopPropagation()">ⓘ
           <span class="info-tooltip">
             <span class="info-tooltip-title">Word Extraction Recall</span>
-            <div class="info-tooltip-body">Total word tokens recognized by PaddleOCR vs. ABBYY FineReader across all evaluated pages.</div>
+            <div class="info-tooltip-body">Total word tokens recognized by {pipeline_name} vs. ABBYY FineReader across all evaluated pages.</div>
             <div class="info-tooltip-highlight">
-              <strong>Recall Advantage:</strong> Positive percentage reflects additional text captured by Paddle (e.g. fine captions, stamps, margin notes).
+              <strong>Recall Advantage:</strong> Positive percentage reflects additional text captured by {pipeline_short} (e.g. fine captions, stamps, margin notes).
             </div>
           </span>
         </span>
@@ -2854,7 +2863,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         <span class="info-icon" onclick="event.stopPropagation()">ⓘ
           <span class="info-tooltip">
             <span class="info-tooltip-title">Clean Text Concordance</span>
-            <div class="info-tooltip-body">Percentage of spatially matched words where Paddle and ABBYY produced identical text (normalized for casing and punctuation).</div>
+            <div class="info-tooltip-body">Percentage of spatially matched words where {pipeline_short} and ABBYY produced identical text (normalized for casing and punctuation).</div>
             <div class="info-tooltip-highlight">
               <strong>Consensus Metric:</strong> High concordance (&ge; 90%) signifies strong agreement between both independent OCR engines.
             </div>
@@ -2882,13 +2891,13 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     </div>
     <div class="kpi-card">
       <div class="kpi-label">
-        Paddle QA Win Rate
+        {pipeline_short} QA Win Rate
         <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
           <span class="info-tooltip">
             <span class="info-tooltip-title">Automated Lexical Arbitration</span>
             <div class="info-tooltip-body">When engines disagree on a word, checks each candidate against standard English and French dictionaries.</div>
             <div class="info-tooltip-highlight">
-              <strong>Accuracy Indicator:</strong> A win rate &gt; 50% indicates Paddle produced more valid dictionary words on disputed historical tokens.
+              <strong>Accuracy Indicator:</strong> A win rate &gt; 50% indicates {pipeline_short} produced more valid dictionary words on disputed historical tokens.
             </div>
           </span>
         </span>
@@ -2921,7 +2930,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
         </div>
         <div class="coll-stats">
           <span>Concordance: <strong>{c["clean_concordance"]}%</strong></span>
-          <span>Paddle QA Win: <strong style="color:#3fb950;">{c["lexical_win_rate"]}%</strong></span>
+          <span>{pipeline_short} QA Win: <strong style="color:#3fb950;">{c["lexical_win_rate"]}%</strong></span>
         </div>
       </div>
       <a href="{c["first_html"]}" class="coll-btn">Open First Page Viewer →</a>
@@ -2952,14 +2961,14 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
 
       <select id="selQAWin" class="filter-select">
         <option value="all">All QA Win Rates</option>
-        <option value="paddle">Paddle Advantage (≥ 50%)</option>
+        <option value="paddle">{pipeline_short} Advantage (≥ 50%)</option>
         <option value="abbyy">ABBYY Advantage (&lt; 50%)</option>
       </select>
 
       <select id="selWordDelta" class="filter-select">
         <option value="all">All Word Deltas</option>
-        <option value="paddle_plus">Paddle Added Words (Delta &gt; 0)</option>
-        <option value="paddle_minus">Paddle Fewer Words (Delta &lt; 0)</option>
+        <option value="paddle_plus">{pipeline_short} Added Words (Delta &gt; 0)</option>
+        <option value="paddle_minus">{pipeline_short} Fewer Words (Delta &lt; 0)</option>
         <option value="equal">Equal Word Count (Delta = 0)</option>
       </select>
     </div>
@@ -2988,16 +2997,16 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
               </span>
               <span class="sort-icon" id="sort-collection">⇕</span>
             </th>
-            <th onclick="sortTable('word_diff')" title="Sort by total added words (Paddle minus ABBYY delta)">
+            <th onclick="sortTable('word_diff')" title="Sort by total added words ({pipeline_short} minus ABBYY delta)">
               Words: P / B (Delta)
               <span class="info-icon" onclick="event.stopPropagation()">ⓘ
                 <span class="info-tooltip">
                   <span class="info-tooltip-title">Total Words &amp; Delta</span>
-                  <div class="info-tooltip-body"><strong>P</strong> = Pipeline (Paddle) words, <strong>B</strong> = Benchmark (ABBYY) words, and <strong>(Delta)</strong> = P &minus; B.</div>
+                  <div class="info-tooltip-body"><strong>P</strong> = Pipeline ({pipeline_short}) words, <strong>B</strong> = Benchmark (ABBYY) words, and <strong>(Delta)</strong> = P &minus; B.</div>
                   <div class="info-tooltip-highlight">
-                    &bull; <em>Positive (+):</em> Paddle extracted more words (higher recall in fine print/captions).<br>
+                    &bull; <em>Positive (+):</em> {pipeline_short} extracted more words (higher recall in fine print/captions).<br>
                     &bull; <em>Negative (&minus;):</em> ABBYY extracted more words.<br>
-                    Click column header to sort by lowest delta (Paddle fewer) or highest.
+                    Click column header to sort by lowest delta ({pipeline_short} fewer) or highest.
                   </div>
                 </span>
               </span>
@@ -3008,7 +3017,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
               <span class="info-icon" onclick="event.stopPropagation()">ⓘ
                 <span class="info-tooltip">
                   <span class="info-tooltip-title">Spatial Alignment (Box Overlap)</span>
-                  <div class="info-tooltip-body">Measures whether Paddle and ABBYY detected words in the <em>same physical coordinate positions</em> on the page, regardless of character recognition.</div>
+                  <div class="info-tooltip-body">Measures whether {pipeline_short} and ABBYY detected words in the <em>same physical coordinate positions</em> on the page, regardless of character recognition.</div>
                   <div class="info-tooltip-highlight">
                     <strong>Spatial vs Concordance:</strong><br>
                     &bull; <strong>Spatial Alignment</strong> tests <em>WHERE</em> words are located (box overlap IoU &ge; 0.25).<br>
@@ -3024,7 +3033,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
               <span class="info-icon" onclick="event.stopPropagation()">ⓘ
                 <span class="info-tooltip">
                   <span class="info-tooltip-title">Clean Text Concordance</span>
-                  <div class="info-tooltip-body">Character-level agreement between Paddle and ABBYY for spatially matched words (normalized for punctuation and case).</div>
+                  <div class="info-tooltip-body">Character-level agreement between {pipeline_short} and ABBYY for spatially matched words (normalized for punctuation and case).</div>
                   <div class="info-tooltip-highlight">
                     &bull; <em>&ge; 90% (Green):</em> High consensus; both engines agree.<br>
                     &bull; <em>80% &ndash; 90% (Yellow):</em> Moderate agreement.<br>
@@ -3036,15 +3045,15 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
               <span class="sort-icon" id="sort-clean_conc">⇕</span>
             </th>
             <th onclick="sortTable('win_rate')">
-              Paddle QA Win
+              {pipeline_short} QA Win
               <span class="info-icon" onclick="event.stopPropagation()">ⓘ
                 <span class="info-tooltip">
-                  <span class="info-tooltip-title">Paddle QA Win Rate</span>
+                  <span class="info-tooltip-title">{pipeline_short} QA Win Rate</span>
                   <div class="info-tooltip-body">Automated dictionary validation on disputed words. Tests candidate words against English and French lexicons.</div>
                   <div class="info-tooltip-highlight">
-                    &bull; <em>Paddle Win:</em> Paddle produced a valid real word while ABBYY produced OCR noise.<br>
-                    &bull; <em>ABBYY Win:</em> ABBYY produced a valid real word while Paddle failed.<br>
-                    Win Rate = Paddle Wins &divide; (Paddle Wins + ABBYY Wins).
+                    &bull; <em>{pipeline_short} Win:</em> {pipeline_short} produced a valid real word while ABBYY produced OCR noise.<br>
+                    &bull; <em>ABBYY Win:</em> ABBYY produced a valid real word while {pipeline_short} failed.<br>
+                    Win Rate = {pipeline_short} Wins &divide; ({pipeline_short} Wins + ABBYY Wins).
                   </div>
                 </span>
               </span>
@@ -3055,7 +3064,7 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
               <span class="info-icon right-align" onclick="event.stopPropagation()">ⓘ
                 <span class="info-tooltip">
                   <span class="info-tooltip-title">Discrepancy Count</span>
-                  <div class="info-tooltip-body">Total number of word boxes where Paddle and ABBYY disagree on the text characters.</div>
+                  <div class="info-tooltip-body">Total number of word boxes where {pipeline_short} and ABBYY disagree on the text characters.</div>
                   <div class="info-tooltip-highlight">
                     Pages with high diff counts usually have degraded historical print or tight newspaper columns that benefit from side-by-side inspection.
                   </div>
@@ -3461,6 +3470,8 @@ def compare_directory_batch(
     min_iou: float = 0.25,
     sync_docs: bool = False,
     auto_push: bool = True,
+    pipeline_name: str = "PaddleOCR",
+    pipeline_short: str = "Paddle",
 ) -> int:
     """Compare pipeline outputs against benchmark outputs, merging results into master dashboard."""
     pipeline_dir = Path(pipeline_dir)
@@ -3551,10 +3562,10 @@ def compare_directory_batch(
 
             print(f"\n--- Comparing: {stem} ({r_dir}) ---")
             if p_file.suffix.lower() == ".xml":
-                p_pages = parse_alto_xml(p_file, "PaddleOCR")
+                p_pages = parse_alto_xml(p_file, pipeline_name)
                 b_pages = parse_alto_xml(b_file, "ABBYY")
             else:
-                p_pages = parse_pdf_text_layer(p_file, "PaddleOCR")
+                p_pages = parse_pdf_text_layer(p_file, pipeline_name)
                 b_pages = parse_pdf_text_layer(b_file, "ABBYY")
 
             if not p_pages or not b_pages:
@@ -3568,7 +3579,7 @@ def compare_directory_batch(
             print(f"  • Benchmark Total Words: {res.benchmark_total_words}")
             print(f"  • Spatially Aligned Words: {len(res.matched_pairs)} ({res.spatial_match_rate_pipeline}% of pipeline)")
             print(f"  • Text Concordance (Cleaned): {res.clean_text_concordance_rate}% ({res.text_concordance_rate}% exact)")
-            print(f"  • Paddle QA Win Rate: {res.lexical_win_rate_pct}% ({res.paddle_lexical_wins} P wins vs {res.abbyy_lexical_wins} B wins)")
+            print(f"  • {pipeline_short} QA Win Rate: {res.lexical_win_rate_pct}% ({res.paddle_lexical_wins} P wins vs {res.abbyy_lexical_wins} B wins)")
             print(f"  • Mean Word Levenshtein Sim: {res.mean_char_similarity:.3f}")
             print(f"  • Mean Bounding Box IoU: {res.mean_iou:.3f}")
             print(f"  • Mean Positional Drift (dX, dY): ({res.mean_dx:+.4f}, {res.mean_dy:+.4f})")
@@ -3627,7 +3638,9 @@ def compare_directory_batch(
                     rel_index_path=rel_index_path,
                     prev_page_url=prev_url,
                     next_page_url=next_url,
-                    collection_name=str(r_dir).replace("\\", "/")
+                    collection_name=str(r_dir).replace("\\", "/"),
+                    pipeline_name=pipeline_name,
+                    pipeline_short=pipeline_short,
                 )
                 print(f"  • Rendered Interactive HTML Viewer: {out_html}")
 
@@ -3664,7 +3677,12 @@ def compare_directory_batch(
     print(f"[CRKN Comparison] Saved consolidated JSON summary to: {json_path}")
 
     master_index_path = out_dir / "index.html"
-    generate_master_dashboard(merged_records, master_index_path)
+    generate_master_dashboard(
+        merged_records,
+        master_index_path,
+        pipeline_name=pipeline_name,
+        pipeline_short=pipeline_short,
+    )
     print(f"[CRKN Comparison] Generated Master AI Dashboard at: {master_index_path}")
 
     if sync_docs:
