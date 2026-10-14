@@ -2800,7 +2800,6 @@ def generate_master_dashboard(summary_records: List[Dict[str, Any]], output_inde
     <input type="file" id="fileImportAllManual" accept=".json" style="display:none;" />
     <span id="lblDashboardManualReviews" style="display:none;font-size:0.82rem;color:#bc8cff;font-weight:600;"></span>
     <a href="comparison_summary.csv" class="nav-link" download>Download CSV</a>
-    <a href="comparison_summary.json" class="nav-link" download>Download JSON</a>
     <a href="https://github.com/crkn-rcdr/OCR-Tool" class="nav-link" target="_blank" rel="noopener">GitHub Repository</a>
   </div>
 </div>
