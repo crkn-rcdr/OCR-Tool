@@ -2355,8 +2355,9 @@ def build_ai_executive_verdict(
     if "indra" in pipeline_short.lower() or "indra" in pipeline_name.lower():
         body = (
             f"Across <strong>{total_pages:,} historical pages</strong> and <strong>{total_pipeline_words:,} recognized word tokens</strong>, "
-            f"the Indra OCR benchmark reveals an ultra-fast CPU engine (~8–12 pages/second in multi-process worker pools) that excels on clean, "
-            f"standard printed typography, but exhibits significant degradation on historical microfilm reels. While modern and standardized "
+            f"the Indra OCR benchmark reveals an ultra-fast CPU engine (~8–12 pages/second in multi-process worker pools) that rivals enterprise "
+            f"ABBYY throughput (where commercial ABBYY FineReader Server completed the entire 7,720-page corpus in <strong>40 minutes, ~3.2 pages/sec or ~0.31s/page</strong>). "
+            f"Indra excels on clean, standard printed typography, but exhibits significant degradation on historical microfilm reels. While modern and standardized "
             f"printed works show strong consensus (<strong>{ann_conc:.1f}% clean text concordance</strong> and <strong>0.958 character similarity on Annuals</strong>), "
             f"archive-wide concordance drops to <strong>{avg_clean_concordance:.1f}%</strong> due to low contrast and faded ink in Heritage reels. "
             f"Consequently, legacy ABBYY FineReader maintains a decisive quality advantage on degraded stock (<strong>{overall_p_win_rate:.1f}% overall QA win rate</strong> "
@@ -2376,8 +2377,8 @@ def build_ai_executive_verdict(
         On high-density multi-column broadsheets, 3×2 quadrant tiling prevented truncated text lines, but complex reading order arbitration and micro-font resolution lagged behind ABBYY ({news_p_wins:,} vs {news_b_wins:,} valid word wins, <strong>{news_win:.1f}%</strong>), indicating broadsheets require specialized column segmentation.
       </div>
       <div class="ai-point">
-        <strong style="color:#3fb950;">⚡ CPU Throughput & Zero-GPU Footprint (~8–12 pgs/s):</strong>
-        Indra's defining operational advantage is compute efficiency. Running on lightweight ONNX runtimes with <code>ProcessPoolExecutor</code>, it achieves <strong>0.1–0.6s latency per page</strong> without requiring GPU VRAM, enabling economical high-throughput batching on standard CPU servers.
+        <strong style="color:#3fb950;">⚡ CPU Throughput vs. ABBYY Baseline (~8–12 pgs/s vs 40m Corpus Runtime):</strong>
+        Indra's defining operational advantage is compute efficiency. Running on lightweight ONNX runtimes with <code>ProcessPoolExecutor</code> (6 workers), it achieves <strong>0.1–0.6s latency per page</strong> (~8–12 pgs/s), outpacing commercial ABBYY FineReader Server 14—which completed the entire 7,720-page corpus in <strong>40 minutes (~3.2 pages/sec or ~0.31s/page)</strong>—all without requiring GPU VRAM.
       </div>"""
         return body, points
 
@@ -2386,8 +2387,8 @@ def build_ai_executive_verdict(
         body = (
             f"Across <strong>{total_pages:,} historical pages</strong> and <strong>{total_pipeline_words:,} recognized word tokens</strong>, "
             f"the {pipeline_name} pipeline demonstrates exceptional text discovery and multi-column layout arbitration, while exposing real "
-            f"operational trade-offs in GPU compute footprint and marginalia noise. On standard printed typography and complex newspaper broadsheets, "
-            f"Paddle decisively outperforms legacy ABBYY FineReader (<strong>{ann_win:.1f}% lexical win rate on Annuals</strong>, "
+            f"operational trade-offs in GPU compute footprint and throughput compared to ABBYY FineReader Server (which processed the entire 7,720-page corpus in <strong>40 minutes, ~3.2 pages/sec or ~0.31s/page</strong>). "
+            f"On standard printed typography and complex newspaper broadsheets, Paddle decisively outperforms ABBYY (<strong>{ann_win:.1f}% lexical win rate on Annuals</strong>, "
             f"<strong>{news_win:.1f}% lexical win rate on Newspapers</strong>). In degraded archival microfilm (Heritage), deep-learning text detection "
             f"unlocks <strong>{her_extra_words:+,} additional words ({her_sign}{her_recall:.1f}% recall expansion)</strong>, recovering faded ink, stamps, "
             f"and handwritten margins where ABBYY binarization failed entirely. However, this aggressive sensitivity requires downstream dictionary "
@@ -2404,8 +2405,8 @@ def build_ai_executive_verdict(
         On high-density multi-column broadsheets, 3×2 quadrant tiling and reading-order arbitration eliminate column-bleed and preserve natural reading flow. Paddle decisively outperforms ABBYY in lexical disputes (<strong>{news_p_wins:,} vs {news_b_wins:,} wins</strong>, {news_win:.1f}%), cleanly resolving tight classified advertisements.
       </div>
       <div class="ai-point">
-        <strong style="color:#f85149;">⚠️ GPU Footprint & Tiling Latency (~7–18s Broadsheet, ~1.0s Monograph):</strong>
-        Unlike CPU-native engines (e.g. Indra), Paddle requires dedicated CUDA hardware and substantial VRAM (~2–4 GB per worker). With our staged batch-32 pipeline, standard monograph pages process in <strong>~0.9–1.2s</strong>, while dense 24MP newspaper broadsheets undergoing 3×2 quadrant tiling (6 sub-tiles + full pass) complete in <strong>~7–18s per page</strong> (down from unbatched ~25–70s). While 3–4x faster, multi-pass tiling remains a compute-intensive workload compared to single-pass processing.
+        <strong style="color:#f85149;">⚠️ GPU Footprint & Tiling Latency vs. ABBYY Baseline (40m Corpus Runtime):</strong>
+        Commercial ABBYY FineReader Server completed the entire 7,720-page corpus in <strong>40 minutes (~3.2 pages/sec or ~0.31s/page)</strong>. By contrast, Paddle requires dedicated CUDA hardware and substantial VRAM (~2–4 GB per worker). With our staged batch-32 pipeline, standard monograph pages process in <strong>~0.9–1.2s</strong>, while dense 24MP newspaper broadsheets undergoing 3×2 quadrant tiling (6 sub-tiles + full pass) complete in <strong>~7–18s per page</strong> (down from unbatched ~25–70s). While 3–4x faster than unbatched Paddle, broadsheet tiling remains more compute-intensive than ABBYY's enterprise server throughput.
       </div>
       <div class="ai-point">
         <strong style="color:#d29922;">⚖️ High Recall vs. Marginal Noise ({kpi_w_sign}{kpi_w_pct:.1f}% Word Expansion):</strong>
