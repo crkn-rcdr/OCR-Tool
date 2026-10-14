@@ -1015,12 +1015,13 @@ def generate_master_results_dashboard(
 
 
 def build_ocr_run_dashboard(
-    output_root: Path,
-    input_root: Optional[Path] = None,
+    output_root: Path | str,
+    input_root: Optional[Path | str] = None,
     engine_name: str = "Paddle PP-OCRv6",
     total_time_sec: float = 0.0,
     per_page_timings: Optional[Dict[str, float]] = None,
     auto_open: bool = True,
+    dashboard_folder_name: str = "HTML_Results_Dashboard",
 ) -> Optional[Path]:
     """Scan output folder for all completed OCR pages and build a self-contained results dashboard.
 
@@ -1031,13 +1032,15 @@ def build_ocr_run_dashboard(
         total_time_sec: Total elapsed wall-clock time for the run.
         per_page_timings: Optional map of {stem: elapsed_seconds}.
         auto_open: If True, opens the dashboard in the default browser in a new tab.
+        dashboard_folder_name: Name of the results dashboard directory.
 
     Returns:
         Path to the generated dashboard index.html, or None if no pages found.
     """
     output_root = Path(output_root)
+    input_root = Path(input_root) if input_root else None
     per_page_timings = per_page_timings or {}
-    dashboard_dir = output_root / "dashboard"
+    dashboard_dir = output_root / dashboard_folder_name
     dashboard_dir.mkdir(parents=True, exist_ok=True)
     images_dir = dashboard_dir / "images"
     pages_dir = dashboard_dir / "pages"
@@ -1049,13 +1052,17 @@ def build_ocr_run_dashboard(
     # Map stems to output files, ignoring files already in dashboard/
     items_by_stem: Dict[str, Dict[str, Any]] = defaultdict(dict)
     for x in xml_files:
-        if "dashboard" in x.parts:
+        if "dashboard" in x.parts or dashboard_folder_name in x.parts:
             continue
         items_by_stem[x.stem]["xml"] = x
         items_by_stem[x.stem]["dir"] = x.parent
 
     for j in json_files:
-        if "dashboard" in j.parts or j.name.endswith("_adjudications.json"):
+        if (
+            "dashboard" in j.parts
+            or dashboard_folder_name in j.parts
+            or j.name.endswith("_adjudications.json")
+        ):
             continue
         stem = j.stem
         if stem.endswith("_res"):
@@ -1077,7 +1084,11 @@ def build_ocr_run_dashboard(
     for s_dir in search_dirs:
         for f in s_dir.rglob("*"):
             if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                if "dashboard" not in f.parts and "__preprocessed" not in f.name:
+                if (
+                    "dashboard" not in f.parts
+                    and dashboard_folder_name not in f.parts
+                    and "__preprocessed" not in f.name
+                ):
                     image_lookup[f.stem] = f
 
     # 3. Parse each page
@@ -1195,10 +1206,20 @@ def build_ocr_run_dashboard(
     # 6. Auto-open in browser in a new tab if requested
     if auto_open and master_index.exists():
         try:
-            url = master_index.resolve().as_uri()
+            abs_path = master_index.resolve()
+            url = abs_path.as_uri()
             print(f"[Dashboard] Opening results dashboard in browser: {url}")
-            webbrowser.open_new_tab(url)
+            opened = False
+            if hasattr(os, "startfile"):
+                try:
+                    os.startfile(str(abs_path))
+                    opened = True
+                except Exception as ex_sf:
+                    print(f"[Dashboard] os.startfile note: {ex_sf}")
+            if not opened:
+                webbrowser.open_new_tab(url)
         except Exception as exc:
             print(f"[Dashboard] Could not auto-open browser: {exc}")
 
     return master_index
+

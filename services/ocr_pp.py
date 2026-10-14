@@ -627,12 +627,13 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             try:
                 from services.results_dashboard import build_ocr_run_dashboard
                 dash_path = build_ocr_run_dashboard(
-                    output_dir=output_base,
-                    source_images_dir=input_path,
+                    output_root=output_root,
+                    input_root=input_path,
                     engine_name=method or "PaddleOCR",
                     total_time_sec=total_time,
                     per_page_timings=per_page_timings,
                     auto_open=True,
+                    dashboard_folder_name="HTML_Results_Dashboard",
                 )
                 if dash_path:
                     messages.append(f"\nHTML Results Dashboard generated: {dash_path.resolve()}")

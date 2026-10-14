@@ -189,7 +189,7 @@ def _init_worker(model_dir_str: Optional[str] = None, threads_per_worker: int = 
 
 
 def _process_page_worker_task(task_args: tuple) -> dict:
-    image_path, input_path, output_root, run_opt, generate_text_file, lang, method = task_args
+    image_path, input_path, output_base, run_opt, generate_text_file, lang, method = task_args
     global _worker_conv
     if _worker_conv is None:
         import indra_ocr
@@ -202,7 +202,7 @@ def _process_page_worker_task(task_args: tuple) -> dict:
     except ValueError:
         rel_dir = Path("")
 
-    out_dir = output_root / rel_dir if input_path.is_dir() else output_root
+    out_dir = output_base / rel_dir if input_path.is_dir() else output_base
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = image_path.stem
     json_file = out_dir / f"{stem}.json"
@@ -318,10 +318,20 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
         per_page_timings: dict[str, float] = {}
         yield f"Found {num_images} images. Launching Indra OCR engine ({workers} parallel worker processes)..."
 
+        if input_path.is_dir():
+            out_root_norm = output_root.name.lower().replace("-", " ").replace("_", " ")
+            in_path_norm = input_path.name.lower().replace("-", " ").replace("_", " ")
+            if out_root_norm == in_path_norm or out_root_norm.startswith(in_path_norm):
+                output_base = output_root
+            else:
+                output_base = output_root / input_path.name
+        else:
+            output_base = output_root
+
         if num_images == 1:
             conv = get_indra_converter()
             image_path = target_images[0]
-            out_dir = output_root
+            out_dir = output_base
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = image_path.stem
             json_file = out_dir / f"{stem}.json"
@@ -340,7 +350,7 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             success_count = 1
         else:
             task_args = [
-                (img, input_path, output_root, run_opt, generate_text_file, lang, method)
+                (img, input_path, output_base, run_opt, generate_text_file, lang, method)
                 for img in target_images
             ]
 
@@ -402,12 +412,13 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             try:
                 from services.results_dashboard import build_ocr_run_dashboard
                 dash_path = build_ocr_run_dashboard(
-                    output_dir=output_root,
-                    source_images_dir=input_path,
+                    output_root=output_root,
+                    input_root=input_path,
                     engine_name="Indra OCR",
                     total_time_sec=total_time,
                     per_page_timings=per_page_timings,
                     auto_open=True,
+                    dashboard_folder_name="HTML_Results_Dashboard",
                 )
                 if dash_path:
                     yield f"HTML Results Dashboard generated: {dash_path.resolve()}"
