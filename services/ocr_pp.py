@@ -293,6 +293,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         success_count = 0
         failure_count = 0
         messages = []
+        per_page_timings: dict[str, float] = {}
 
         start_time = time.perf_counter()
 
@@ -313,12 +314,14 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 effective_lang = resolve_effective_language(lang, input_path)
                 file_opt = dict(opt, lang=effective_lang)
 
+                t_page = time.perf_counter()
                 final_json, recovery_note = run_ocr_for_image(
                     image_path=input_path,
                     out_dir=out_dir,
                     opt=file_opt,
                     select=select,
                 )
+                per_page_timings[input_path.stem] = round(time.perf_counter() - t_page, 2)
 
                 success_count += 1
                 if recovery_note:
@@ -464,6 +467,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 preprocessed_res = None
 
                         try:
+                            t_page = time.perf_counter()
                             final_json, recovery_note = run_ocr_for_image(
                                 image_path=img,
                                 out_dir=out_dir,
@@ -471,6 +475,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                                 select=select,
                                 preprocessed_result=preprocessed_res,
                             )
+                            per_page_timings[img.stem] = round(time.perf_counter() - t_page, 2)
 
                             success_count += 1
                             folder_success += 1
@@ -618,14 +623,30 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Processing Time: {total_time:.2f} seconds")
         summary_logger.info(f"Average Time per File: {avg_time:.2f} seconds")
 
+        if opt.get("generate_results_dashboard", True) and success_count > 0:
+            try:
+                from services.results_dashboard import build_ocr_run_dashboard
+                dash_path = build_ocr_run_dashboard(
+                    output_dir=output_base,
+                    source_images_dir=input_path,
+                    engine_name=method or "PaddleOCR",
+                    total_time_sec=total_time,
+                    per_page_timings=per_page_timings,
+                    auto_open=True,
+                )
+                if dash_path:
+                    messages.append(f"\nHTML Results Dashboard generated: {dash_path.resolve()}")
+            except Exception as e:
+                error_logger.warning(f"Error generating HTML results dashboard: {e}")
+
         if generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check json and text files at your output folder."
+            yield "\n".join(messages) + "\n\nOCR Completed, please check json and text files at your output folder."
 
         elif not generate_text_file and failure_count > 0:
-             yield "OCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
+            yield "\n".join(messages) + "\n\nOCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
             
         elif not generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check pdf and alto files at your output folder"
+            yield "\n".join(messages) + "\n\nOCR Completed, please check pdf and alto files at your output folder."
 
     finally:
         RUN_LOCK.release()

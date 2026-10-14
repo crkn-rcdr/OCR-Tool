@@ -308,6 +308,7 @@ def submit_config(
     post_process_enabled,
     post_ocr_backend=None,
     tile_strategy="auto",
+    generate_results_dashboard=True,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -339,6 +340,7 @@ def submit_config(
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "generate_text_file": bool(generate_text_file),
+        "generate_results_dashboard": bool(generate_results_dashboard),
         "clean_punctuation_issues": bool(post_process_enabled)
         and bool(DEFAULT_CLEAN_PUNCTUATION_ISSUES),
         "preprocessing_steps": (
@@ -395,10 +397,13 @@ def submit_config(
         yield f"Unsupported OCR method: {method}"
         return
 
+    last_message = ""
     for message in iterator:
+        last_message = message
         yield message
 
-    yield " OCR Completed, please check pdf and alto files at your output folder"
+    if not last_message:
+        yield "OCR Completed, please check pdf and alto files at your output folder."
 
 # Create the main Gradio application interface.
 with gr.Blocks() as demo:
@@ -453,6 +458,16 @@ with gr.Blocks() as demo:
             ),
         )
 
+        generate_results_dashboard = gr.Checkbox(
+            label="Generate HTML results dashboard",
+            value=True,
+            info=(
+                "When enabled, builds an interactive standalone HTML results dashboard "
+                "with bounding boxes color-coded by confidence, word counts, and navigation, "
+                "and opens it in a new browser tab upon completion."
+            ),
+        )
+
         pre_process = gr.Checkbox(
             label="pre process",
             value=True,
@@ -494,6 +509,7 @@ with gr.Blocks() as demo:
         tile_strategy_dropdown,
         method_radio,
         generate_text_file,
+        generate_results_dashboard,
         pre_process,
         post_process,
         post_ocr_backend,
@@ -583,6 +599,7 @@ with gr.Blocks() as demo:
         post_process,
         post_ocr_backend,
         tile_strategy_dropdown,
+        generate_results_dashboard,
     ],
     outputs=output
     ).then(

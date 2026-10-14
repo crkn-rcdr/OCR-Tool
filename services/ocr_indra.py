@@ -315,6 +315,7 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
         local_model_dir = Path(__file__).resolve().parent.parent / "models" / "indra"
         m_dir_str = str(local_model_dir) if local_model_dir.exists() else None
 
+        per_page_timings: dict[str, float] = {}
         yield f"Found {num_images} images. Launching Indra OCR engine ({workers} parallel worker processes)..."
 
         if num_images == 1:
@@ -328,12 +329,14 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
             payload, mode_desc = process_image_with_indra(image_path, conv, run_opt)
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
+            elapsed_page = time.perf_counter() - t0
+            per_page_timings[stem] = round(elapsed_page, 2)
             if generate_text_file:
                 generate_txt_file(json_file, out_dir / f"{stem}.txt")
-                yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+                yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines in {elapsed_page:.2f}s)"
             else:
                 build_pdf(json_file, image_path.parent, method=method, lang=lang, select=method)
-                yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {time.perf_counter()-t0:.2f}s)"
+                yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {elapsed_page:.2f}s)"
             success_count = 1
         else:
             task_args = [
@@ -361,6 +364,7 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
 
                     if res["success"]:
                         success_count += 1
+                        per_page_timings[Path(res["file_name"]).stem] = round(res["elapsed"], 2)
                         status = "ALTO [OK]" if res.get("alto_success") else "PDF [OK]"
                         yield f"[{completed}/{num_images}] {res['file_name']} -> {status} ({res['rec_count']} lines in {res['elapsed']:.2f}s | Avg: {rate:.1f} pgs/s)"
                         summary_logger.info(f"Processed {res['file_name']} in {res['elapsed']:.2f}s")
@@ -392,6 +396,23 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
                         yield f"Auto-comparison updated for Indra OCR vs ABBYY ({compared} pages)"
                 except Exception as exc:
                     error_logger.warning(f"Auto-comparison error for Indra OCR: {exc}")
+
+        total_time = time.perf_counter() - start_time
+        if run_opt.get("generate_results_dashboard", True) and success_count > 0:
+            try:
+                from services.results_dashboard import build_ocr_run_dashboard
+                dash_path = build_ocr_run_dashboard(
+                    output_dir=output_root,
+                    source_images_dir=input_path,
+                    engine_name="Indra OCR",
+                    total_time_sec=total_time,
+                    per_page_timings=per_page_timings,
+                    auto_open=True,
+                )
+                if dash_path:
+                    yield f"HTML Results Dashboard generated: {dash_path.resolve()}"
+            except Exception as exc:
+                error_logger.warning(f"Error generating HTML results dashboard: {exc}")
 
     finally:
         total_time = time.perf_counter() - start_time
