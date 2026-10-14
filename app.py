@@ -287,14 +287,32 @@ def processing_supported(method):
     return method in PADDLE_OCR_METHODS
 
 
-def processing_control_updates(method, pre_value=True, post_value=True):
-    """Keep pre/post unavailable for standalone VL-style OCR methods."""
-    enabled = processing_supported(method)
-    post_enabled = enabled and bool(post_value)
+def update_options_for_method(method, post_val=True):
+    """Update visibility and interactivity of options based on selected OCR method.
+
+    Only shows options that are relevant to the selected model:
+    - PP-OCRv6: language, tiling, pre-process, post-process, (post-ocr arbiter if post-process checked)
+    - IndraOCR: language (for ALTO metadata)
+    - PaddleVL: language
+    - OLMOCR & DotsOCR: vision-prompt based, no language flag
+    - All methods: TXT output, HTML results dashboard
+    """
+    method = method or "PP-OCRv6"
+    is_paddle = method in PADDLE_OCR_METHODS
+    is_vl_only = method in {"OLMOCR", "DotsOCR"}
+
+    lang_visible = not is_vl_only
+    tile_visible = is_paddle
+    pre_visible = is_paddle
+    post_visible = is_paddle
+    backend_visible = is_paddle and bool(post_val)
+
     return [
-        gr.update(value=bool(pre_value) if enabled else False, interactive=enabled),
-        gr.update(value=bool(post_value) if enabled else False, interactive=enabled),
-        gr.update(interactive=post_enabled),
+        gr.update(visible=lang_visible),
+        gr.update(visible=tile_visible),
+        gr.update(visible=pre_visible, interactive=is_paddle),
+        gr.update(visible=post_visible, interactive=is_paddle),
+        gr.update(visible=backend_visible, interactive=backend_visible),
     ]
 
 
@@ -530,14 +548,21 @@ with gr.Blocks() as demo:
     )
 
     method_radio.change(
-        fn=processing_control_updates,
-        inputs=[method_radio, pre_process, post_process],
-        outputs=[pre_process, post_process, post_ocr_backend],
+        fn=update_options_for_method,
+        inputs=[method_radio, post_process],
+        outputs=[
+            language_dropdown,
+            tile_strategy_dropdown,
+            pre_process,
+            post_process,
+            post_ocr_backend,
+        ],
     )
 
     post_process.change(
         fn=lambda post_val, method_val: gr.update(
-            interactive=bool(post_val) and processing_supported(method_val)
+            visible=bool(post_val) and processing_supported(method_val),
+            interactive=bool(post_val) and processing_supported(method_val),
         ),
         inputs=[post_process, method_radio],
         outputs=[post_ocr_backend],
@@ -555,22 +580,26 @@ with gr.Blocks() as demo:
 
     def after_run(method, pre_value, post_value):
         """
-        Re-enable UI components after OCR processing completes.
+        Re-enable UI components after OCR processing completes while preserving model-specific visibility.
         """
-        pre_update, post_update, backend_update = processing_control_updates(
-            method,
-            pre_value,
-            post_value,
+        lang_up, tile_up, pre_up, post_up, backend_up = update_options_for_method(
+            method, post_value
         )
         return [
-            *[
-                gr.update(interactive=True)
-                for _ in ui_components[:-3]
-            ],
-            pre_update,
-            post_update,
-            backend_update,
-            gr.update(interactive=False)
+            gr.update(interactive=True),                              # submit_btn
+            gr.update(interactive=True),                              # image_input_folder
+            gr.update(interactive=True),                              # image_input_btn
+            gr.update(interactive=True),                              # output_folder
+            gr.update(interactive=True),                              # output_folder_btn
+            gr.update(interactive=True, visible=lang_up["visible"]),  # language_dropdown
+            gr.update(interactive=True, visible=tile_up["visible"]),  # tile_strategy_dropdown
+            gr.update(interactive=True),                              # method_radio
+            gr.update(interactive=True),                              # generate_text_file
+            gr.update(interactive=True),                              # generate_results_dashboard
+            pre_up,                                                   # pre_process
+            post_up,                                                  # post_process
+            backend_up,                                               # post_ocr_backend
+            gr.update(interactive=False),                             # stop_btn
         ]
 
     def stop_clicked():
