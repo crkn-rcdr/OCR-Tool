@@ -9,11 +9,32 @@ except ModuleNotFoundError:
 
 from pathlib import Path
 
-from services.ocr_pp import run_ocr_job,stop_ocr
-from services.ocr_vl import run_paddlevl_job
-from services.ocr_olm import run_olmocr_job
-from services.ocr_dots import run_dotsocr_job
-from services.ocr_indra import run_indra_job
+try:
+    from services.ocr_pp import run_ocr_job, stop_ocr
+except ImportError:
+    run_ocr_job = None
+    def stop_ocr(): pass
+
+try:
+    from services.ocr_vl import run_paddlevl_job
+except ImportError:
+    run_paddlevl_job = None
+
+try:
+    from services.ocr_olm import run_olmocr_job
+except ImportError:
+    run_olmocr_job = None
+
+try:
+    from services.ocr_dots import run_dotsocr_job
+except ImportError:
+    run_dotsocr_job = None
+
+try:
+    from services.ocr_indra import run_indra_job
+except ImportError:
+    run_indra_job = None
+
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
@@ -179,30 +200,39 @@ def enable_run_button():
     """
     return gr.update(interactive=True)
 
-def choose_folder(current_value=""):
-    """
-    Open a folder selection dialog and return the selected folder path.
-    """
-    if tk is None or filedialog is None:
-        gr.Info(
-            "Folder browsing is unavailable in this WSL environment. "
-            "Paste the folder path manually."
-        )
-        return current_value
-
+def is_cuda_available() -> bool:
+    """Check if CUDA acceleration is available on this host."""
     try:
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        folder = filedialog.askdirectory()
-        root.destroy()
-        return folder or current_value
+        import torch
+        return bool(torch.cuda.is_available())
     except Exception:
-        gr.Info(
-            "Folder browsing is unavailable in this environment. "
-            "Paste the folder path manually."
-        )
-        return current_value
+        pass
+    try:
+        import paddle
+        return bool(paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0)
+    except Exception:
+        pass
+    return False
+
+DEFAULT_METHOD = "PP-OCRv6" if is_cuda_available() else "IndraOCR"
+
+def get_default_explorer_root() -> str:
+    """Return an accessible starting folder on the host system."""
+    users_dir = Path("C:/Users")
+    if users_dir.exists():
+        return str(users_dir)
+    return str(Path.home())
+
+def format_selected_path(selected, fallback=""):
+    """Normalize selected FileExplorer path to a clean directory string."""
+    if not selected:
+        return fallback
+    target = selected[0] if isinstance(selected, list) else selected
+    p = Path(target)
+    if p.is_file():
+        return str(p.parent)
+    return str(p)
+
 
 
 def build_paddle_options(
@@ -432,21 +462,51 @@ with gr.Blocks() as demo:
         method_radio = gr.Radio(
             choices=OCR_METHOD_CHOICES,
             label="OCR method",
-            value="PP-OCRv6",
+            value=DEFAULT_METHOD,
         )
 
     # Display the folder selection section title.
     gr.Markdown("### Folder Selection")
 
     # Input folder selection components.
+    input_explorer_open = gr.State(False)
     with gr.Row():
-        image_input_folder = gr.Textbox(label="Image Input Folder")
-        image_input_btn = gr.Button("Browse Input Folder")
+        image_input_folder = gr.Textbox(
+            label="Image Input Folder",
+            placeholder="Type or paste folder path, or click Browse below",
+            scale=4,
+        )
+        toggle_input_explorer_btn = gr.Button("Browse Files / Folders", scale=1)
+
+    with gr.Column(visible=False) as input_explorer_panel:
+        input_file_explorer = gr.FileExplorer(
+            root_dir=get_default_explorer_root(),
+            file_count="single",
+            label="In-Browser Explorer (Select a folder or image)",
+            height=250,
+        )
+        close_input_explorer_btn = gr.Button("Done Selecting", size="sm")
 
     # Output folder selection components.
+    output_explorer_open = gr.State(False)
     with gr.Row():
-        output_folder = gr.Textbox(label="Output Folder")
-        output_folder_btn = gr.Button("Browse Output Folder")
+        output_folder = gr.Textbox(
+            label="Output Folder",
+            placeholder="Type or paste output folder path, or click Browse below",
+            scale=4,
+        )
+        toggle_output_explorer_btn = gr.Button("Browse Files / Folders", scale=1)
+
+    with gr.Column(visible=False) as output_explorer_panel:
+        output_file_explorer = gr.FileExplorer(
+            root_dir=get_default_explorer_root(),
+            file_count="single",
+            label="In-Browser Explorer (Select a folder)",
+            height=250,
+        )
+        close_output_explorer_btn = gr.Button("Done Selecting", size="sm")
+
+
 
     # Simplified OCR options. The detailed tuning values are fixed from the
     # evaluation-backed recipe in submit_config.
@@ -520,9 +580,9 @@ with gr.Blocks() as demo:
     ui_components = [
         submit_btn,
         image_input_folder,
-        image_input_btn,
+        toggle_input_explorer_btn,
         output_folder,
-        output_folder_btn,
+        toggle_output_explorer_btn,
         language_dropdown,
         tile_strategy_dropdown,
         method_radio,
@@ -533,19 +593,49 @@ with gr.Blocks() as demo:
         post_ocr_backend,
     ]
 
-    # Open a folder selection dialog for the input folder.
-    image_input_btn.click(
-        fn=choose_folder,
-        inputs=image_input_folder,
-        outputs=image_input_folder
+    # Toggle in-browser file explorer panels using gr.State
+    def toggle_explorer_visibility(is_visible):
+        new_state = not is_visible
+        return gr.update(visible=new_state), new_state
+
+    toggle_input_explorer_btn.click(
+        fn=toggle_explorer_visibility,
+        inputs=[input_explorer_open],
+        outputs=[input_explorer_panel, input_explorer_open],
     )
 
-    # Open a folder selection dialog for the output folder.
-    output_folder_btn.click(
-        fn=choose_folder,
-        inputs=output_folder,
-        outputs=output_folder
+    toggle_output_explorer_btn.click(
+        fn=toggle_explorer_visibility,
+        inputs=[output_explorer_open],
+        outputs=[output_explorer_panel, output_explorer_open],
     )
+
+    close_input_explorer_btn.click(
+        fn=lambda: (gr.update(visible=False), False),
+        inputs=None,
+        outputs=[input_explorer_panel, input_explorer_open],
+    )
+
+    close_output_explorer_btn.click(
+        fn=lambda: (gr.update(visible=False), False),
+        inputs=None,
+        outputs=[output_explorer_panel, output_explorer_open],
+    )
+
+    # When a folder or file is clicked in the in-browser explorer, populate textbox without closing panel
+    input_file_explorer.change(
+        fn=format_selected_path,
+        inputs=[input_file_explorer, image_input_folder],
+        outputs=[image_input_folder],
+    )
+
+    output_file_explorer.change(
+        fn=format_selected_path,
+        inputs=[output_file_explorer, output_folder],
+        outputs=[output_folder],
+    )
+
+
 
     method_radio.change(
         fn=update_options_for_method,
@@ -588,9 +678,9 @@ with gr.Blocks() as demo:
         return [
             gr.update(interactive=True),                              # submit_btn
             gr.update(interactive=True),                              # image_input_folder
-            gr.update(interactive=True),                              # image_input_btn
+            gr.update(interactive=True),                              # toggle_input_explorer_btn
             gr.update(interactive=True),                              # output_folder
-            gr.update(interactive=True),                              # output_folder_btn
+            gr.update(interactive=True),                              # toggle_output_explorer_btn
             gr.update(interactive=True, visible=lang_up["visible"]),  # language_dropdown
             gr.update(interactive=True, visible=tile_up["visible"]),  # tile_strategy_dropdown
             gr.update(interactive=True),                              # method_radio

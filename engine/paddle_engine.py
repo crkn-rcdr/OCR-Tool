@@ -13,9 +13,13 @@ from services.ocr_defaults import (
 )
 
 apply_headless_opencv_patch()
-from paddleocr import PaddleOCR  
+try:
+    from paddleocr import PaddleOCR
+except ImportError:
+    PaddleOCR = None
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
+
 
 
 def option_or_default(opt: dict, key: str, default):
