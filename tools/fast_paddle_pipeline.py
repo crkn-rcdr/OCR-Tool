@@ -67,8 +67,8 @@ from services.tile_ocr import (
     should_use_3x2_tiling,
     supports_tiled_ocr,
 )
+from services.ocr_pp import annotate_preprocessing_payload
 from services.word_box_normalization import (
-    annotate_preprocessing_payload,
     normalize_ocr_word_boxes_in_payload,
 )
 from tools.compare_alto import compare_directory_batch, sync_to_evaluations_repo
