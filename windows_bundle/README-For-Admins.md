@@ -44,18 +44,18 @@ The installer:
 
 ---
 
-## 👥 Multi-User Configuration (e.g. `JLoitzenbauer`, `blapierre`)
+## 👥 Multi-User Configuration (e.g. `DOMAIN\StaffUser`, `CRKN\<username>`)
 
 ### 1. Docker Desktop Permissions (`docker-users`)
 Docker Desktop is installed **once** on the workstation. Individual staff accounts do **not** need separate Docker installations.
 
-To allow staff accounts (such as `CRKN\JLoitzenbauer`) to use Docker OCR microservices (PaddleVL and OLM OCR), ensure they belong to the local `docker-users` group.
+To allow staff accounts (such as `CRKN\<username>` or `DOMAIN\StaffUser`) to use Docker OCR microservices (PaddleVL and OLM OCR), ensure they belong to the local `docker-users` group.
 
 Run in **Windows PowerShell (Admin)**:
 ```powershell
-Add-LocalGroupMember -Group "docker-users" -Member "CRKN\JLoitzenbauer"
-Add-LocalGroupMember -Group "docker-users" -Member "CRKN\blapierre"
-Add-LocalGroupMember -Group "docker-users" -Member "CRKN\mzheng"
+Add-LocalGroupMember -Group "docker-users" -Member "CRKN\<username>"
+# Or for domain accounts:
+# Add-LocalGroupMember -Group "docker-users" -Member "DOMAIN\StaffUser"
 ```
 
 To verify membership:
@@ -87,7 +87,7 @@ To prevent this:
   PADDLE_PDX_CACHE_HOME=C:\CRKN Projects\paddle_pipeline\.paddlex
   PADDLE_HOME=C:\CRKN Projects\paddle_pipeline\.paddlex
   ```
-* Any user (including `JLoitzenbauer`) will run OCR completely offline without downloading or encountering permission errors.
+* Any user (including newly assigned staff accounts) will run OCR completely offline without downloading or encountering permission errors.
 
 ---
 
@@ -99,9 +99,9 @@ Admins and researchers can run unattended batch jobs and automated ABBYY FineRea
 ```powershell
 .\venv\Scripts\python.exe tools/run_full_benchmark.py
 ```
-* **Input**: `C:\Users\blapierre\Documents\PDF Test`
-* **Output**: `C:\Users\blapierre\Desktop\PDF Test - Final`
-* **Report**: Updates the interactive dashboard at **`compare/index.html`** and writes summary metrics to `compare/comparison_summary.csv`.
+* **Input**: `C:\Users\<username>\Documents\PDF Test`
+* **Output**: `C:\Users\<username>\Desktop\PDF Test - Final`
+* **Report**: Updates the interactive dashboard at **`compare/index.html`** (and published live at [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Evaluations/)) and writes summary metrics to `compare/comparison_summary.csv`.
 
 ### 2. Bulk Microfilm Reel Runner
 ```powershell

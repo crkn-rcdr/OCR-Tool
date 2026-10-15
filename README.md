@@ -44,14 +44,16 @@ Run the automated end-to-end batch script to process the test dataset and immedi
 .\venv\Scripts\python.exe tools/run_full_benchmark.py
 
 # Or target the entire test dataset (all collections including books, serials, and reels):
-.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\blapierre\Documents\PDF Test"
+.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\<username>\Documents\PDF Test"
 ```
 
 This single command:
-1. Processes documents from `C:\Users\blapierre\Documents\PDF Test\Newspapers` (or the supplied custom input directory).
-2. Generates Searchable PDFs, ALTO XML 4.2, and JSON files in `C:\Users\blapierre\Desktop\PDF Test - Final`.
+1. Processes documents from `C:\Users\<username>\Documents\PDF Test\Newspapers` (or the supplied custom input directory).
+2. Generates Searchable PDFs, ALTO XML 4.2, and JSON files in `C:\Users\<username>\Desktop\PDF Test - Final`.
 3. Runs the lexical comparator against baseline ABBYY FineReader XMLs.
-4. Generates an interactive visual report at **`compare/index.html`**, summary metrics at `compare/comparison_summary.csv`, and automatically syncs publication dashboards to the `OCR-Evaluations` repository.
+4. Generates an interactive visual report at **`compare/index.html`**, summary metrics at `compare/comparison_summary.csv`, and automatically syncs publication dashboards to:
+   - [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Evaluations/) [PaddleOCR vs ABBYY]
+   - [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Indra-Dashboard/) [Indra OCR vs ABBYY]
 
 ---
 
@@ -216,6 +218,7 @@ flowchart TD
   4. **Spatial Layout & Column Sorting**: Projects word bounding boxes horizontally through a 31-pixel Gaussian convolution filter to identify whitespace column gutters and isolate full-width banners.
   5. **Post-OCR Arbitration & Gazetteer**: Degraded lines ($< 0.78$) and disputed words ($< 0.80$) are submitted to Dots OCR 7B. Tokens undergo punctuation-bound splitting, display ad de-compounding, cross-line hyphen reconciliation, 1-edit Levenshtein lexical regularizing, and verification against the Canadiana Historical Gazetteer with 54-language zero-corruption guardrails.
   6. **Preservation Outputs**: Generates sub-pixel Searchable PDFs, schema-valid ALTO XML 4.2, normalized JSON, plain text, and the interactive HTML Results Dashboard.
+  7. **Best Used For**: **Degraded historical heritage reels** (e.g. LAC microfilm reels), dense multi-column broadsheet newspapers (8–10 columns), yellowed/faded paper, smudged ink, micro-print ($< 18\text{px}$), and complex bilingual French & Traditional Chinese archives where ABBYY drops words or scrambles reading order. It takes longer per page (~1–2s on GPU, intensive with $3\times 2$ quadrant tiling, border cropping, and VLM post-arbitration), but the extra processing time is well worth it for difficult heritage materials.
 
 ### 2. Indra OCR (Fast CPU)
 - **Primary Modules**: `services/ocr_indra.py`.
@@ -226,7 +229,7 @@ flowchart TD
   2. **Self-Contained Pipeline**: Bypasses external microfilm preprocessing and secondary VLM delegation, eliminating pipeline overhead and external microservice dependencies.
   3. **Direct Coordinate Mapping**: Directly captures line geometries and word token boundaries with confidence scores, normalizing coordinates with sub-pixel fidelity.
   4. **Preservation Output Generation**: Directly interfaces with `services/pdf_generation.py`, `services/alto_generation.py`, and `services/results_dashboard.py` to produce standard Library of Congress ALTO XML 4.2, Searchable PDFs, normalized JSON, optional plain text, and the standalone HTML Results Dashboard.
-  5. **Best Used For**: High-throughput processing on CPU workstations, laptops without discrete NVIDIA GPUs, headless CI/CD environments, and rapid bulk digitizing where 1–2 second per-page CPU throughput is essential.
+  5. **Best Used For**: **Clean historical book scans**, monographs, annual periodicals, modern serials, reports, and standard printed documents that have consistent margins and clean typography without microfilm carrier borders or heavy ink bleed. Blazes through pages at ~0.5–1.0s on standard multi-core CPUs with zero GPU requirements.
 
 ### 3. Dots OCR (7B Vision-Language Model)
 - **Primary Modules**: `services/ocr_dots.py`, `services/post_ocr_vl.py`.
@@ -294,8 +297,8 @@ The engine supports ultra-fast local recognition alongside multimodal Vision-Lan
 
 | Engine | Execution Mode | Best For | Typical Latency | Outputs Supported |
 | :--- | :--- | :--- | :--- | :--- |
-| **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Broad volume, monographs, historical broadsheet newspapers | **0.8 – 2.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
-| **Indra OCR (Fast CPU)** | Multi-core CPU ONNX Runtime | Standard laptops, CPU servers, rapid high-throughput processing without GPU | **0.5 – 1.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Degraded heritage microfilm reels, dense broadsheets (8–10 cols), yellowed print, micro-print ($< 18\text{px}$) | **0.8 – 2.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **Indra OCR (Fast CPU)** | Multi-core CPU ONNX Runtime | Clean historical book scans, monographs, annual periodicals, modern serials, high-speed CPU runs | **0.5 – 1.0s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
 | **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, severely degraded scans, damaged typography | **150ms / crop** / **4–8s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
 | **PaddleOCR-VL 1.6** | Docker VLM Service (PaddleX) | Multimodal page parsing with interleaved tables & display ads | **3.0 – 5.0s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
 | **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts & natural reading-order synthesis | **4.0 – 8.0s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
@@ -514,21 +517,23 @@ To run OCR on the test directory and update the comparison dashboard:
 .\venv\Scripts\python.exe tools/run_full_benchmark.py
 
 # Or target the entire test dataset (all collections including books, serials, and reels):
-.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\blapierre\Documents\PDF Test"
+.\venv\Scripts\python.exe tools/run_full_benchmark.py "C:\Users\<username>\Documents\PDF Test"
 ```
 
 The script executes 3 automated phases:
 1. **Phase 1: Full OCR Run**: Runs PP-OCRv6 with `tile_strategy="auto"`, preprocessing (border crop, CLAHE, micro-print upscaling), and post-OCR VLM arbitration.
 2. **Phase 2: ABBYY Benchmarking**: Generates token concordance diffs, dictionary win rates, and interactive HTML dashboards under `compare/`.
-3. **Phase 3: Resilient GitHub Sync**: Pushes updated dashboards and metrics to the `OCR-Evaluations` repository.
+3. **Phase 3: Resilient GitHub Sync**: Pushes updated dashboards and metrics to the live benchmark repositories:
+   - [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Evaluations/) [PaddleOCR vs ABBYY]
+   - [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Indra-Dashboard/) [Indra OCR vs ABBYY]
 
 ### Running the Comparison Dashboard Standalone
 To compare an existing folder of ALTO XML files against ABBYY FineReader baseline files:
 
 ```powershell
 .\venv\Scripts\python.exe tools/compare_alto.py `
-  --pipeline "C:\Users\blapierre\Desktop\PDF Test - Final\lac_reel_c6063" `
-  --benchmark "C:\Users\blapierre\Documents\PDF Test\lac_reel_c6063" `
+  --pipeline "C:\Users\<username>\Desktop\PDF Test - Final\lac_reel_c6063" `
+  --benchmark "C:\Users\<username>\Documents\PDF Test\lac_reel_c6063" `
   --output-dir "compare" `
   --title "Heritage Reel c6063 Benchmark"
 ```
@@ -538,6 +543,8 @@ The tool produces:
 - `compare/comparison_summary.csv`: Machine-readable token statistics, word count recall, and dictionary validity metrics per page.
 
 #### Executive Benchmark Overview
+Explore live: [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Evaluations/)
+
 ![OCR Quality Benchmark Dashboard](images/02_comparison_dashboard.png)
 
 #### Interactive Side-by-Side Word Concordance Diff

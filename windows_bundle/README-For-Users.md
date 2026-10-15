@@ -27,19 +27,19 @@ Once initialization completes, your web browser will automatically open **`http:
 
 ![OCR Method Selector](images/04_method_selector.png)
 
-| OCR Method | Best For | Advantages | Outputs Supported |
+| OCR Method | Best For | Advantages & Trade-offs | Outputs Supported |
 | :--- | :--- | :--- | :--- |
-| **PaddleOCR (PP-OCRv6)** *(Recommended Default)* | Historical broadsheet newspapers, microfilms, monographs, legal deeds, and statistical tables. | Ultra-fast GPU inference (1–2 sec/page). Generates exact word-box coordinates, supports multi-column reading order, micro-print upscaling, table ruling suppression, and VLM arbitration. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
-| **Indra OCR (Fast CPU)** | High-throughput document digitizing on standard CPU machines or laptops without dedicated NVIDIA GPUs. | High-speed multi-core CPU execution (~0.5–1.5 sec/page on CPU), zero CUDA requirements, lightweight ONNX runtime. Generates full ALTO XML and Searchable PDFs. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **PaddleOCR (PP-OCRv6)** *(Recommended Default)* | **Degraded historical heritage reels** (e.g. LAC microfilm reels), dense multi-column broadsheets (8–10 columns), yellowed/faded paper, smudged ink, micro-print ($< 18\text{px}$), and complex bilingual French & Traditional Chinese archives where ABBYY drops words. | **Highest preservation recall.** Takes longer per page (~1–2 sec on GPU, longer with $3\times 2$ quadrant tiling and VLM arbitration), but the extra processing time is well worth it for difficult heritage materials. Generates exact word boxes and multi-column reading order. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **Indra OCR (Fast CPU)** | **Clean historical book scans**, monographs, annual periodicals, modern serials, and standard printed documents with consistent margins and clean typography that do not suffer from microfilm carrier borders or heavy ink bleeding. | **Blazing-fast CPU throughput.** Runs at ~0.5–1.0 sec/page using multi-core CPU ONNX runtime with zero NVIDIA GPU or CUDA requirements. Outstanding accuracy on clean books with lightweight execution. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
 | **Dots OCR (7B VLM)** | Severely degraded scans, damaged historical typography, smudged ink, and complex multi-modal layouts. | State-of-the-art vision-language model with sentence-level semantic understanding. Excellent at recovering faint or damaged text where standard OCR produces gibberish. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
 | **PaddleVL** | Multimodal whole-page layout parsing with complex interleaved tables and ads. | Uses visual context for dense ads and complex visual blocks. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
 | **OLM OCR** | Rough historical scans, irregular layouts, and mixed printed/handwritten documents. | Natural reading order synthesis using vision LLM. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
 
 > [!TIP]
 > **Which engine should I pick?**
-> * For **workstations with NVIDIA GPUs**: Use **PaddleOCR (PP-OCRv6)** for maximum precision and layout recovery on historical microfilms and newspapers.
-> * For **CPU-only laptops or standard PCs**: Use **Indra OCR (Fast CPU)** for rapid multi-core throughput without GPU setup.
-> * If a page is severely faded or damaged and regular OCR struggles: Try **Dots OCR** or **OLM OCR**.
+> * **PaddleOCR (PP-OCRv6)**: Best when accuracy and preservation completeness come first. It takes longer per page (especially on massive $30+\text{ MP}$ broadsheets and microfilm reels), but its adaptive border cropping, $3\times 2$ tiling, and VLM arbitration dramatically outperform ABBYY on degraded heritage scans.
+> * **Indra OCR (Fast CPU)**: Best when throughput and speed on standard laptops/PCs matter most. It blazes through clean book scans, monographs, and journals at $\sim 0.5–1.0\text{ sec/page}$ on CPU alone with no GPU required.
+> * **Dots OCR / OLM OCR**: Best when standard OCR fails completely on severely damaged, smudged, or irregular typography.
 
 ---
 
@@ -47,8 +47,8 @@ Once initialization completes, your web browser will automatically open **`http:
 
 ![Folder Selector](images/05_folder_selection.png)
 
-1. **Image Input Folder**: Enter or browse to the folder containing your scans (e.g. `C:\Users\blapierre\Documents\PDF Test\Newspapers\ome.00003_19290103`). If the input folder contains multiple subfolders, the tool will queue them up automatically in order.
-2. **Output Folder**: Enter or browse to where you want the resulting PDFs, ALTO XML, and text files saved (e.g. `C:\Users\blapierre\Desktop\PDF Test - Final`).
+1. **Image Input Folder**: Enter or browse to the folder containing your scans (e.g. `C:\Users\<username>\Documents\PDF Test\Newspapers\ome.00003_19290103`). If the input folder contains multiple subfolders, the tool will queue them up automatically in order.
+2. **Output Folder**: Enter or browse to where you want the resulting PDFs, ALTO XML, and text files saved (e.g. `C:\Users\<username>\Desktop\PDF Test - Final`).
 
 ---
 
@@ -113,7 +113,7 @@ Progress will stream directly into the **OCR Result** box in real time.
 When processing completes:
 1. The message box displays the summary and dashboard link:
 ```text
-HTML Results Dashboard generated: C:\Users\blapierre\Desktop\Test HTML\HTML_Results_Dashboard\index.html
+HTML Results Dashboard generated: C:\Users\<username>\Desktop\Test HTML\HTML_Results_Dashboard\index.html
 
 OCR Completed, please check pdf and alto files at your output folder.
 ```
@@ -184,7 +184,12 @@ Unlike benchmark comparisons that require a baseline ABBYY scan, the Results Das
 
 ## 📊 Quality Verification & ABBYY Comparison Dashboard
 
-To inspect the OCR quality against baseline ABBYY FineReader outputs, staff can open `compare/index.html` in any web browser:
+To inspect the OCR quality against baseline ABBYY FineReader outputs across CRKN's benchmark collections, staff can explore the published live evaluation dashboards:
+
+- [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Evaluations/) [PaddleOCR vs ABBYY]
+- [CRKN Digital Collections - OCR Quality Benchmark Dashboard](https://crkn-rcdr.github.io/OCR-Indra-Dashboard/) [Indra OCR vs ABBYY]
+
+*(Note: During local test runs with benchmark files present, interactive side-by-side diffs are also updated in the local `compare/` folder.)*
 
 ![OCR Quality Benchmark Dashboard](images/02_comparison_dashboard.png)
 
