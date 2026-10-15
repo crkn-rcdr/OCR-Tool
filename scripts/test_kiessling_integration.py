@@ -28,7 +28,7 @@ from paddleocr import PaddleOCR
 
 ONNX_MODEL_PATH = r"C:\CRKN Projects\paddle_pipeline\output\test_kiessling.onnx"
 SAFETENSORS_PATH = r"C:\Users\blapierre\.cache\huggingface\hub\models--small-models-for-glam--kraken-ppocrv6-medium\snapshots\01b574f071bf21cff7d7e2a4f38966925dddc30a\medium.safetensors"
-TEST_IMG = r"C:\Users\blapierre\Documents\PDF Test\Newspapers\ome.00003_19290103\ome.00003_19290103.1.jpg"
+TEST_IMG = r"W:\Brittny\PDF Test\Newspapers\ome.00003_19290103\ome.00003_19290103.1.jpg"
 
 print("=" * 70)
 print("1. Initializing Kiessling Historical Model on NVIDIA RTX 5090 CUDA...")

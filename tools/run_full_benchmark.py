@@ -43,7 +43,7 @@ from services.ocr_defaults import (
     DEFAULT_TILE_OVERLAP_PX,
 )
 
-DEFAULT_INPUT_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test\Newspapers")
+DEFAULT_INPUT_DIR = Path(r"W:\Brittny\PDF Test\Newspapers")
 DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final\Newspapers")
 DEFAULT_COMPARE_DIR = root_dir / "compare"
 
@@ -97,11 +97,11 @@ def main():
     input_path = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else DEFAULT_INPUT_DIR
     if len(sys.argv) > 2 and sys.argv[2]:
         output_path = Path(sys.argv[2])
-    elif input_path == Path(r"C:\Users\blapierre\Documents\PDF Test"):
+    elif input_path == Path(r"W:\Brittny\PDF Test"):
         output_path = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
     else:
         try:
-            rel = input_path.relative_to(Path(r"C:\Users\blapierre\Documents\PDF Test"))
+            rel = input_path.relative_to(Path(r"W:\Brittny\PDF Test"))
             output_path = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final") / rel
         except ValueError:
             output_path = DEFAULT_OUTPUT_DIR

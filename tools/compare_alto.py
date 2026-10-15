@@ -3563,7 +3563,7 @@ def find_file_pairs(pipeline_dir: Path, benchmark_dir: Path) -> List[Tuple[str, 
 
 
 DEFAULT_PIPELINE_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle Copy")
-DEFAULT_BENCHMARK_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
+DEFAULT_BENCHMARK_DIR = Path(r"W:\Brittny\PDF Test")
 DEFAULT_OUTPUT_DIR = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
 
 

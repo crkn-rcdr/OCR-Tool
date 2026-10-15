@@ -26,7 +26,7 @@ from services.ocr_indra import run_indra_job
 
 
 def run_test():
-    input_path = Path(r"C:\Users\blapierre\Documents\PDF Test\Newspapers\ome.00003_19290103")
+    input_path = Path(r"W:\Brittny\PDF Test\Newspapers\ome.00003_19290103")
     output_root = Path(r"C:\Users\blapierre\Desktop\Test HTML")
 
     index_html_cand = output_root / "HTML_Results_Dashboard" / "index.html"

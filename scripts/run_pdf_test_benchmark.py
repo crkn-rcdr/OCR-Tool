@@ -48,7 +48,7 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
 )
 
-DEFAULT_INPUT_DIR = Path(r"C:\Users\blapierre\Documents\PDF Test")
+DEFAULT_INPUT_DIR = Path(r"W:\Brittny\PDF Test")
 DEFAULT_OUTPUT_DIR = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle OCR then Dots")
 
 

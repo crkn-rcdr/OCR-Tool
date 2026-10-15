@@ -73,7 +73,7 @@ from services.word_box_normalization import (
 )
 from tools.compare_alto import compare_directory_batch, sync_to_evaluations_repo
 
-DEFAULT_INPUT_ROOT = Path(r"C:\Users\blapierre\Documents\PDF Test")
+DEFAULT_INPUT_ROOT = Path(r"W:\Brittny\PDF Test")
 DEFAULT_OUTPUT_ROOT = Path(r"C:\Users\blapierre\Desktop\PDF Test - Paddle")
 DEFAULT_OLD_RUN_ROOT = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
 DEFAULT_COMPARE_DIR = root_dir / "compare"

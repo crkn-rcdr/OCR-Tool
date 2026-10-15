@@ -45,7 +45,7 @@ from services.ocr_indra import get_indra_converter, process_image_with_indra
 from services.pdf_generation import build_pdf
 from tools.compare_alto import compare_directory_batch, sync_to_evaluations_repo
 
-DEFAULT_INPUT_ROOT = Path(r"C:\Users\blapierre\Documents\PDF Test")
+DEFAULT_INPUT_ROOT = Path(r"W:\Brittny\PDF Test")
 DEFAULT_OUTPUT_ROOT = root_dir / "output" / "indra"
 DEFAULT_COMPARE_DIR = root_dir / "compare_indra"
 

@@ -54,7 +54,7 @@ from services.ocr_defaults import (
 )
 from tools.compare_alto import parse_alto_xml, compare_pages
 
-BENCHMARK_BASE = Path(r"C:\Users\blapierre\Documents\PDF Test\Newspapers")
+BENCHMARK_BASE = Path(r"W:\Brittny\PDF Test\Newspapers")
 OUTPUT_BASE = root_dir / "tests" / "tiling_comparison"
 
 TEST_PAGES = [

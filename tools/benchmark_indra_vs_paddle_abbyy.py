@@ -24,7 +24,7 @@ from services.ocr_indra import get_indra_converter, process_image_with_indra
 from services.pdf_generation import build_pdf
 from tools.compare_alto import parse_alto_xml, compare_pages
 
-BENCHMARK_BASE = Path(r"C:\Users\blapierre\Documents\PDF Test")
+BENCHMARK_BASE = Path(r"W:\Brittny\PDF Test")
 PADDLE_BASE = Path(r"C:\Users\blapierre\Desktop\PDF Test - Final")
 OUTPUT_BASE = root_dir / "scratch" / "indra_benchmark_tiled"
 
