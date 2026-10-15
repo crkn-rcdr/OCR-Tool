@@ -198,11 +198,11 @@ flowchart TD
 
     EngineSwitch -->|"Indra OCR (Fast CPU)"| Indra["Indra OCR Engine (services/ocr_indra.py)<br/>• Highly Optimized Multi-Process ONNX Runtime CPU Engine<br/>• Zero NVIDIA GPU / CUDA Requirement (0.5–1.5s / page)<br/>• Native Full-Page Text Detection & Recognition<br/>• Self-Contained Direct Word-Box Coordinate Alignment<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
 
-    EngineSwitch -->|"Dots OCR (7B VLM)"| Dots["Dots OCR Engine (services/ocr_dots.py)<br/>• 7B Parameter Vision-Language Model (OpenAI API)<br/>• Holistic Contextual Semantic Decoding<br/>• Ideal for Severely Degraded Scans, Faded Ink, Broken Type<br/>• Layout-Aware Markdown, Formatted Text, Audit CSV"]
+    EngineSwitch -->|"Dots OCR (7B VLM)"| Dots["Dots OCR Engine (services/ocr_dots.py)<br/>• 7B Parameter Vision-Language Model (OpenAI API)<br/>• Holistic Contextual Semantic Decoding<br/>• Ideal for Severely Degraded Scans, Faded Ink, Broken Type<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
 
-    EngineSwitch -->|"PaddleVL"| VL["PaddleOCR-VL Engine (services/ocr_vl.py)<br/>• PaddleX Multimodal Layout Parsing Server<br/>• Interleaved Table, Graphic, and Ad Boundary Segmentation<br/>• Structural Layout Blocks & Reading Order Text"]
+    EngineSwitch -->|"PaddleVL"| VL["PaddleOCR-VL Engine (services/ocr_vl.py)<br/>• PaddleX Multimodal Layout Parsing Server<br/>• Interleaved Table, Graphic, and Ad Boundary Segmentation<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
 
-    EngineSwitch -->|"olmOCR"| OLM["olmOCR Engine (services/ocr_olm.py)<br/>• 7B Vision LLM fine-tuned for Document Transcription (vLLM)<br/>• Direct Pixel-to-Markdown Reading Order Synthesis<br/>• Natural Flow across Academic & Mixed Historical Formats"]
+    EngineSwitch -->|"olmOCR"| OLM["olmOCR Engine (services/ocr_olm.py)<br/>• 7B Vision LLM fine-tuned for Document Transcription (vLLM)<br/>• Direct Pixel-to-Markdown Reading Order Synthesis<br/>• ALTO XML 4.2 + PDF + JSON + HTML Dashboard"]
 ```
 
 ### 1. PaddleOCR (PP-OCRv6) *(Recommended Production Default)*
@@ -237,7 +237,7 @@ flowchart TD
   2. **PP-OCRv6 Dual-Tier Post-Processor**: Operates as an automated visual arbiter for PP-OCRv6:
      - *Line-Level Delegation*: Lines with mean confidence $< 0.78$ are cropped and sent to Dots OCR to decode full sentential context.
      - *Word-Level Crop Delegation*: Individual disputed tokens failing lexicon validation with confidence $< 0.80$ are extracted with context-padded crops and resolved.
-  3. **Preservation Outputs & Audit Logging**: Emits formatted text, structured markdown, and generates an audit log (`.post_ocr_vl.csv`) documenting every line or token modified by the model.
+  3. **Preservation Outputs & Audit Logging**: Emits schema-compliant ALTO XML 4.2, Searchable PDFs, normalized JSON, optional plain text, structured markdown, the standalone HTML Results Dashboard, and generates an audit log (`.post_ocr_vl.csv`) documenting every line or token modified by the model.
 
 ### 4. PaddleVL (PaddleOCR-VL / PaddleX)
 - **Primary Modules**: `services/ocr_vl.py`.
@@ -246,7 +246,7 @@ flowchart TD
 - **Execution Logic**:
   1. **Visual Region Classification**: Detects and segments high-level document structures: tabular data, classified advertisement frames, illustrative figures, titles, and text paragraphs.
   2. **Interleaved Content Parsing**: Separates tabular columns and multi-tiered classified ads from continuous narrative body text.
-  3. **Preservation Outputs**: Outputs structured layout blocks and reading-order plain text.
+  3. **Preservation Outputs**: Generates sub-pixel Searchable PDFs, schema-valid ALTO XML 4.2, normalized JSON, optional plain text, structured layout blocks, and the standalone HTML Results Dashboard.
 
 ### 5. OLM OCR (olmOCR 7B)
 - **Primary Modules**: `services/ocr_olm.py`.
@@ -255,6 +255,7 @@ flowchart TD
 - **Execution Logic**:
   1. **Direct Pixel-to-Markdown Synthesis**: Bypasses heuristic coordinate sorting by training directly on human reading sequences, generating natural flow across multi-column newspapers, academic journals, marginalia, and footnoted texts.
   2. **Structural Formatting**: Faithfully reproduces inline mathematical formulas, tables, and section hierarchies in standard Markdown.
+  3. **Preservation Outputs**: Produces Searchable PDFs, ALTO XML 4.2, normalized JSON, optional plain text, structured markdown, and the interactive HTML Results Dashboard.
 
 ---
 
@@ -295,9 +296,9 @@ The engine supports ultra-fast local recognition alongside multimodal Vision-Lan
 | :--- | :--- | :--- | :--- | :--- |
 | **PP-OCRv6** *(Default)* | Local GPU / CPU (FastDeploy / TensorRT) | Broad volume, monographs, historical broadsheet newspapers | **0.8 – 2.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
 | **Indra OCR (Fast CPU)** | Multi-core CPU ONNX Runtime | Standard laptops, CPU servers, rapid high-throughput processing without GPU | **0.5 – 1.5s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
-| **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, severely degraded scans, damaged typography | **150ms / crop** / **4–8s / page** | Formatted Text, Markdown, Audit CSV |
-| **PaddleOCR-VL 1.6** | Docker VLM Service (PaddleX) | Multimodal page parsing with interleaved tables & display ads | **3.0 – 5.0s / page** | Page Text, Layout Blocks |
-| **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts & natural reading-order synthesis | **4.0 – 8.0s / page** | Reading-Order Text, Markdown |
+| **Dots OCR 7B** | Local OpenAI-compatible VLM Server | Post-OCR arbitration, severely degraded scans, damaged typography | **150ms / crop** / **4–8s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **PaddleOCR-VL 1.6** | Docker VLM Service (PaddleX) | Multimodal page parsing with interleaved tables & display ads | **3.0 – 5.0s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
+| **olmOCR 7B** | Local vLLM Service | Complex multi-modal academic layouts & natural reading-order synthesis | **4.0 – 8.0s / page** | Searchable PDF, ALTO XML 4.2, JSON, TXT, HTML Dashboard |
 
 ### Autonomous Script & Language Resolution (`services/language_detection.py`)
 CRKN collections span multilingual archives: 19th-century English newspapers, French Canadian records, and early 20th-century Chinese broadsheets.

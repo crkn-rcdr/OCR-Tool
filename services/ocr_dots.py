@@ -14,7 +14,7 @@ from PIL import Image
 from services.constants import IMAGE_EXTENSIONS
 from services.ocr_defaults import DEFAULT_DOTSOCR_API_URL, DEFAULT_DOTSOCR_MODEL
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
-from services.pdf_generation import main as generate_pdf_and_alto
+from services.pdf_generation import build_pdf
 from services.txt_generation import generate_txt_file
 
 import services.ocr_pp as ocr_pp
@@ -285,6 +285,7 @@ def run_dotsocr_job(input_path, output_root, opt, select=None):
     success_count = 0
     failure_count = 0
     messages = []
+    per_page_timings: dict[str, float] = {}
     start_time = time.perf_counter()
 
     try:
@@ -324,21 +325,25 @@ def run_dotsocr_job(input_path, output_root, opt, select=None):
                 with open(json_file, "w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
 
+                pdf_res = build_pdf(
+                    json_file,
+                    image_path.parent,
+                    method="Dots OCR",
+                    lang=lang,
+                    select="Dots OCR",
+                )
+                if pdf_res.get("pdf_success") and pdf_res.get("alto_success"):
+                    yield f"Generated PDF/ALTO: {stem}.pdf"
+                else:
+                    yield f"Generated PDF/ALTO (warnings logged): {stem}.pdf"
+
                 if generate_text_file:
                     generate_txt_file(json_file, out_dir / f"{stem}.txt")
                     yield f"Generated TXT: {stem}.txt"
-                else:
-                    generate_pdf_and_alto(
-                        json_file,
-                        image_path,
-                        out_dir / f"{stem}.pdf",
-                        out_dir / f"{stem}.xml",
-                        lang=lang,
-                    )
-                    yield f"Generated PDF/ALTO: {stem}.pdf"
 
                 success_count += 1
                 elapsed = time.perf_counter() - t0
+                per_page_timings[stem] = round(elapsed, 2)
                 summary_logger.info(
                     f"Successfully processed {image_path.name} in {elapsed:.2f}s"
                 )
@@ -349,6 +354,24 @@ def run_dotsocr_job(input_path, output_root, opt, select=None):
                     f"Failed to process {image_path.name}: {exc}", exc_info=True
                 )
                 yield f"Error processing {image_path.name}: {exc}"
+
+        total_time = time.perf_counter() - start_time
+        if run_opt.get("generate_results_dashboard", True) and success_count > 0:
+            try:
+                from services.results_dashboard import build_ocr_run_dashboard
+                dash_path = build_ocr_run_dashboard(
+                    output_root=output_root,
+                    input_root=input_path,
+                    engine_name="Dots OCR",
+                    total_time_sec=total_time,
+                    per_page_timings=per_page_timings,
+                    auto_open=True,
+                    dashboard_folder_name="HTML_Results_Dashboard",
+                )
+                if dash_path:
+                    yield f"HTML Results Dashboard generated: {dash_path.resolve()}"
+            except Exception as exc:
+                error_logger.warning(f"Error generating HTML results dashboard: {exc}")
 
     finally:
         total_time = time.perf_counter() - start_time

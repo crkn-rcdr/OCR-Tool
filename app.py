@@ -468,11 +468,11 @@ with gr.Blocks() as demo:
         )
 
         generate_text_file = gr.Checkbox(
-            label="Generate TXT instead of PDF/ALTO.",
+            label="Generate Plain Text (.txt)",
             value=False,
             info=(
-                "When enabled, writes one TXT file per image and skips "
-                "searchable PDF and ALTO generation."
+                "When enabled, writes an additional clean .txt file per image "
+                "alongside the searchable PDF and ALTO XML outputs."
             ),
         )
 

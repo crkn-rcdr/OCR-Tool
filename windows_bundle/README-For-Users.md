@@ -29,11 +29,11 @@ Once initialization completes, your web browser will automatically open **`http:
 
 | OCR Method | Best For | Advantages | Outputs Supported |
 | :--- | :--- | :--- | :--- |
-| **PaddleOCR (PP-OCRv6)** *(Recommended Default)* | Historical broadsheet newspapers, microfilms, monographs, legal deeds, and statistical tables. | Ultra-fast GPU inference (1–2 sec/page). Generates exact word-box coordinates, supports multi-column reading order, micro-print upscaling, table ruling suppression, and VLM arbitration. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text. |
-| **Indra OCR (Fast CPU)** | High-throughput document digitizing on standard CPU machines or laptops without dedicated NVIDIA GPUs. | High-speed multi-core CPU execution (~0.5–1.5 sec/page on CPU), zero CUDA requirements, lightweight ONNX runtime. Generates full ALTO XML and Searchable PDFs. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text. |
-| **Dots OCR (7B VLM)** | Severely degraded scans, damaged historical typography, smudged ink, and complex multi-modal layouts. | State-of-the-art vision-language model with sentence-level semantic understanding. Excellent at recovering faint or damaged text where standard OCR produces gibberish. | Formatted Text, Markdown, Audit Log. |
-| **PaddleVL** | Multimodal whole-page layout parsing with complex interleaved tables and ads. | Uses visual context for dense ads and complex visual blocks. | Page Text, Layout Blocks. |
-| **OLM OCR** | Rough historical scans, irregular layouts, and mixed printed/handwritten documents. | Natural reading order synthesis using vision LLM. | Reading-Order Text, Markdown. |
+| **PaddleOCR (PP-OCRv6)** *(Recommended Default)* | Historical broadsheet newspapers, microfilms, monographs, legal deeds, and statistical tables. | Ultra-fast GPU inference (1–2 sec/page). Generates exact word-box coordinates, supports multi-column reading order, micro-print upscaling, table ruling suppression, and VLM arbitration. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **Indra OCR (Fast CPU)** | High-throughput document digitizing on standard CPU machines or laptops without dedicated NVIDIA GPUs. | High-speed multi-core CPU execution (~0.5–1.5 sec/page on CPU), zero CUDA requirements, lightweight ONNX runtime. Generates full ALTO XML and Searchable PDFs. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **Dots OCR (7B VLM)** | Severely degraded scans, damaged historical typography, smudged ink, and complex multi-modal layouts. | State-of-the-art vision-language model with sentence-level semantic understanding. Excellent at recovering faint or damaged text where standard OCR produces gibberish. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **PaddleVL** | Multimodal whole-page layout parsing with complex interleaved tables and ads. | Uses visual context for dense ads and complex visual blocks. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
+| **OLM OCR** | Rough historical scans, irregular layouts, and mixed printed/handwritten documents. | Natural reading order synthesis using vision LLM. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
 
 > [!TIP]
 > **Which engine should I pick?**
@@ -71,11 +71,9 @@ Once initialization completes, your web browser will automatically open **`http:
 
 #### Visual Comparison in the Web Interface
 
-````carousel
-![PP-OCRv6 Options View](images/09_ui_options_ppocr.png)
-<!-- slide -->
-![Indra OCR Options View](images/10_ui_options_indra.png)
-````
+| PP-OCRv6 Options View | Indra OCR Options View |
+| :---: | :---: |
+| ![PP-OCRv6 Options View](images/09_ui_options_ppocr.png) | ![Indra OCR Options View](images/10_ui_options_indra.png) |
 
 - **When `PP-OCRv6` is Selected (Left)**: Full fine-grained controls are exposed, including language detection, $3\times 2$ quadrant tiling strategy, adaptive preprocessing, and VLM post-processing arbitration.
 - **When `Indra OCR` is Selected (Right)**: The UI streamlines to essential controls (Language, Plain Text, and HTML Results Dashboard). Because Indra OCR is a self-contained multi-core ONNX engine with native full-page processing, tiling and pre/post-processing toggles are hidden.

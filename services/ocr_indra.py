@@ -213,21 +213,19 @@ def _process_page_worker_task(task_args: tuple) -> dict:
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
 
+        pdf_res = build_pdf(
+            json_file,
+            image_path.parent,
+            method=method,
+            lang=lang,
+            select=method,
+        )
+        alto_success = bool(pdf_res.get("alto_success"))
+        pdf_success = bool(pdf_res.get("pdf_success"))
+
         if generate_text_file:
             txt_path = out_dir / f"{stem}.txt"
             generate_txt_file(json_file, txt_path)
-            alto_success = False
-            pdf_success = False
-        else:
-            pdf_res = build_pdf(
-                json_file,
-                image_path.parent,
-                method=method,
-                lang=lang,
-                select=method,
-            )
-            alto_success = bool(pdf_res.get("alto_success"))
-            pdf_success = bool(pdf_res.get("pdf_success"))
 
         rec_count = len(payload.get("rec_texts", []))
         elapsed = time.perf_counter() - t0
@@ -341,12 +339,11 @@ def run_indra_job(input_path, output_root, opt, select=None) -> Generator[str, N
                 json.dump(payload, f, indent=2, ensure_ascii=False)
             elapsed_page = time.perf_counter() - t0
             per_page_timings[stem] = round(elapsed_page, 2)
+            build_pdf(json_file, image_path.parent, method=method, lang=lang, select=method)
+            yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {elapsed_page:.2f}s)"
             if generate_text_file:
                 generate_txt_file(json_file, out_dir / f"{stem}.txt")
-                yield f"Generated TXT: {stem}.txt ({len(payload['rec_texts'])} lines in {elapsed_page:.2f}s)"
-            else:
-                build_pdf(json_file, image_path.parent, method=method, lang=lang, select=method)
-                yield f"Generated PDF/ALTO: {stem}.pdf ({len(payload['rec_texts'])} lines in {elapsed_page:.2f}s)"
+                yield f"Generated TXT: {stem}.txt"
             success_count = 1
         else:
             task_args = [

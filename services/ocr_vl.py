@@ -189,6 +189,7 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
     success_count = 0
     failure_count = 0
     messages = []
+    per_page_timings: dict[str, float] = {}
 
     if not RUN_LOCK.acquire(blocking=False):
         yield "Another OCR job is currently running. Please wait until it finishes."
@@ -218,6 +219,7 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                         "fileType": 1,
                     }
 
+                    t_page = time.perf_counter()
                     data = _request_layout_parsing(payload)
                     json_path = out_dir / f"{input_path.stem}.json"  
 
@@ -228,22 +230,23 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
                     success_count += 1
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
-                    yield "\n".join(messages)
-        
+
+                    generate_pdf_and_alto(
+                        json_path,
+                        input_path,
+                        method,
+                        lang,
+                        select,
+                        run_options=run_opt,
+                    )
+                    messages.append(f"Searchable PDF and ALTO XML generated for {input_path.name}")
+
                     if generate_text_file:
                         txt_path = generate_txt_file(json_path)
                         messages.append(f"Text file created: {txt_path}")
-                        yield "\n".join(messages)
-                    else:
-                        generate_pdf_and_alto(
-                            json_path,
-                            input_path,
-                            method,
-                            lang,
-                            select,
-                            run_options=run_opt,
-                        )
-                        yield "\n".join(messages)
+
+                    per_page_timings[input_path.stem] = round(time.perf_counter() - t_page, 2)
+                    yield "\n".join(messages)
            
             except Exception as e: 
                 error_logger.error(
@@ -279,6 +282,7 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
                             "fileType": 1,
                         }
 
+                        t_page = time.perf_counter()
                         data = _request_layout_parsing(payload)
                         json_path = out_dir / f"{img.stem}.json"  
 
@@ -289,22 +293,23 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
 
                         success_count += 1
                         messages.append(f"{img.name} created and saved in {out_dir}")
-                        yield "\n".join(messages)
+
+                        generate_pdf_and_alto(
+                            json_path,
+                            img,
+                            method,
+                            lang,
+                            select,
+                            run_options=run_opt,
+                        )
+                        messages.append(f"Searchable PDF and ALTO XML generated for {img.name}")
 
                         if generate_text_file:
                             txt_path = generate_txt_file(json_path)
                             messages.append(f"Text file created: {txt_path}")
-                            yield "\n".join(messages)
-                        else:
-                            generate_pdf_and_alto(
-                                json_path,
-                                img,
-                                method,
-                                lang,
-                                select,
-                                run_options=run_opt,
-                            )
-                            yield "\n".join(messages)
+
+                        per_page_timings[img.stem] = round(time.perf_counter() - t_page, 2)
+                        yield "\n".join(messages)
 
                 except Exception as e: 
                     error_logger.error(
@@ -333,14 +338,27 @@ def run_paddlevl_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Processing Time: {total_time:.2f} seconds")
         summary_logger.info(f"Average Time per File: {avg_time:.2f} seconds")
 
-        if generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check json and text files at your output folder."
+        if run_opt.get("generate_results_dashboard", True) and success_count > 0:
+            try:
+                from services.results_dashboard import build_ocr_run_dashboard
+                dash_path = build_ocr_run_dashboard(
+                    output_root=output_root,
+                    input_root=input_path,
+                    engine_name=method or "PaddleVL",
+                    total_time_sec=total_time,
+                    per_page_timings=per_page_timings,
+                    auto_open=True,
+                    dashboard_folder_name="HTML_Results_Dashboard",
+                )
+                if dash_path:
+                    messages.append(f"\nHTML Results Dashboard generated: {dash_path.resolve()}")
+            except Exception as exc:
+                error_logger.warning(f"Error generating HTML results dashboard: {exc}")
 
-        elif not generate_text_file and failure_count > 0:
-             yield "OCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
-            
-        elif not generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check pdf and alto files at your output folder"
+        if failure_count > 0:
+            yield "\n".join(messages) + "\n\nOCR partially completed. Some errors occurred during processing. Please review the error report."
+        else:
+            yield "\n".join(messages) + "\n\nOCR Completed, please check generated PDF, ALTO XML, and JSON files in your output folder."
 
     finally:
         RUN_LOCK.release()

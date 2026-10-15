@@ -333,21 +333,20 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 else:
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
 
+                # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
+                generate_pdf_and_alto(
+                    final_json,
+                    input_path,
+                    method,
+                    effective_lang,
+                    select,
+                    run_options=file_opt,
+                )
+                yield "\n".join(messages)
+
                 if generate_text_file:
                     txt_path = generate_txt_file(final_json)
                     messages.append(f"Text file created: {txt_path}")
-                    yield "\n".join(messages)
-
-                else:
-                    # Once single-file OCR is complete, PDF/ALTO will be generated immediately.
-                    generate_pdf_and_alto(
-                        final_json,
-                        input_path,
-                        method,
-                        effective_lang,
-                        select,
-                        run_options=file_opt,
-                    )
                     yield "\n".join(messages)
 
             except Exception as e:
@@ -494,20 +493,20 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                             else:
                                 messages.append(f"{img.name} created and saved in {out_dir}")
 
-                            # Immediately submit background PDF/ALTO or TXT generation
+                            # Immediately submit background PDF/ALTO and optional TXT generation
+                            fut_pdf = post_pool.submit(
+                                build_pdf,
+                                final_json,
+                                folder,
+                                method,
+                                effective_lang,
+                                select,
+                            )
+                            pending_post[fut_pdf] = ("pdf", img.name, final_json)
+
                             if generate_text_file:
-                                fut = post_pool.submit(generate_txt_file, final_json)
-                                pending_post[fut] = ("txt", img.name, final_json)
-                            else:
-                                fut = post_pool.submit(
-                                    build_pdf,
-                                    final_json,
-                                    folder,
-                                    method,
-                                    effective_lang,
-                                    select,
-                                )
-                                pending_post[fut] = ("pdf", img.name, final_json)
+                                fut_txt = post_pool.submit(generate_txt_file, final_json)
+                                pending_post[fut_txt] = ("txt", img.name, final_json)
 
                             # Drain any post-tasks that completed while OCR was running
                             for done_fut in [f for f in pending_post if f.done()]:
@@ -569,17 +568,16 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                             error_logger.error(f"Post-processing error for {item_name}: {exc}")
 
                     if folder_success > 0:
+                        summary_logger.info(f"==========PDF AND ALTO SUMMARY FOR FOLDER: {folder.name} ==========")
+                        summary_logger.info(f"PDF success: {folder_pdf_success}, fail: {folder_pdf_fail}")
+                        summary_logger.info(f"ALTO success: {folder_alto_success}, fail: {folder_alto_fail}")
+                        messages.append(
+                            f"PDF/ALTO completed for folder: {folder.name} (PDF: {folder_pdf_success}/{folder_success}, ALTO: {folder_alto_success}/{folder_success})"
+                        )
                         if generate_text_file:
                             messages.append(f"Text generation completed for folder: {folder.name}")
-                        else:
-                            summary_logger.info(f"==========PDF AND ALTO SUMMARY FOR FOLDER: {folder.name} ==========")
-                            summary_logger.info(f"PDF success: {folder_pdf_success}, fail: {folder_pdf_fail}")
-                            summary_logger.info(f"ALTO success: {folder_alto_success}, fail: {folder_alto_fail}")
-                            messages.append(
-                                f"PDF/ALTO completed for folder: {folder.name} (PDF: {folder_pdf_success}/{folder_success}, ALTO: {folder_alto_success}/{folder_success})"
-                            )
 
-                            # Auto-compare against benchmark if benchmark ALTO/PDF files exist in input folder
+                        # Auto-compare against benchmark if benchmark ALTO/PDF files exist in input folder
                             benchmark_has_eval_files = any(
                                 f.suffix.lower() in {".xml", ".pdf"} for f in folder.glob("*") if f.is_file()
                             )
@@ -640,14 +638,10 @@ def run_ocr_job(input_path, output_root, opt,select=None):
             except Exception as e:
                 error_logger.warning(f"Error generating HTML results dashboard: {e}")
 
-        if generate_text_file and failure_count == 0:
-            yield "\n".join(messages) + "\n\nOCR Completed, please check json and text files at your output folder."
-
-        elif not generate_text_file and failure_count > 0:
-            yield "\n".join(messages) + "\n\nOCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
-            
-        elif not generate_text_file and failure_count == 0:
-            yield "\n".join(messages) + "\n\nOCR Completed, please check pdf and alto files at your output folder."
+        if failure_count > 0:
+            yield "\n".join(messages) + "\n\nOCR partially completed. Some errors occurred during processing. Please review the error report."
+        else:
+            yield "\n".join(messages) + "\n\nOCR Completed, please check generated PDF, ALTO XML, and JSON files in your output folder."
 
     finally:
         RUN_LOCK.release()
