@@ -25,8 +25,6 @@ Once initialization completes, your web browser will automatically open **`http:
 
 ### Step 4: Choose the OCR Method
 
-![OCR Method Selector](images/04_method_selector.png)
-
 | OCR Method | Best For | Advantages & Trade-offs | Outputs Supported |
 | :--- | :--- | :--- | :--- |
 | **PaddleOCR (PP-OCRv6)** *(Recommended Default)* | **Degraded historical heritage reels** (e.g. LAC microfilm reels), dense multi-column broadsheets (8–10 columns), yellowed/faded paper, smudged ink, micro-print ($< 18\text{px}$), and complex bilingual French & Traditional Chinese archives where ABBYY drops words. | **Highest preservation recall.** Takes longer per page (~1–2 sec on GPU, longer with $3\times 2$ quadrant tiling and VLM arbitration), but the extra processing time is well worth it for difficult heritage materials. Generates exact word boxes and multi-column reading order. | **Searchable PDF**, **ALTO XML 4.2**, **JSON**, Plain Text, **HTML Dashboard**. |
