@@ -82,6 +82,12 @@ New-Shortcut `
     -Description "Start the CRKN OCR Tool"
 
 New-Shortcut `
+    -ShortcutPath (Join-Path $publicDesktop "Start CRKN OCR Tool.lnk") `
+    -TargetPath $startCmd `
+    -WorkingDirectory $bundleRoot `
+    -Description "Start the CRKN OCR Tool"
+
+New-Shortcut `
     -ShortcutPath (Join-Path $startMenuFolder "Start CRKN OCR Tool.lnk") `
     -TargetPath $startCmd `
     -WorkingDirectory $bundleRoot `
