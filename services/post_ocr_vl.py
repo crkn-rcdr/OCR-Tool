@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import math
+import os
 import re
 import csv
 from difflib import SequenceMatcher
@@ -15,17 +16,24 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from requests.adapters import HTTPAdapter
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 from PIL import Image
 from spellchecker import SpellChecker
 
+from services.historical_lexicon import ALL_CANADIAN_LEXICON_TOKENS
 from services.ocr_defaults import (
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
     DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_CONCURRENCY,
+    DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_DOTSOCR_URL,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
     DEFAULT_POST_OCR_VL_PADDING_PX,
@@ -180,6 +188,10 @@ class SpellCheckerAdapter:
         if value in self.cache:
             return self.cache[value]
 
+        if value.casefold() in ALL_CANADIAN_LEXICON_TOKENS:
+            self.cache[value] = None
+            return None
+
         try:
             if not self.checker.unknown([value]):
                 self.cache[value] = None
@@ -281,10 +293,14 @@ def apply_post_ocr_vl_check(
         else 0
     )
 
+    backend_choice = str(
+        opt.get("post_ocr_vl_backend") or DEFAULT_POST_OCR_VL_BACKEND
+    ).strip().lower()
+
     metadata: dict[str, Any] = {
         "enabled": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "backend": DEFAULT_POST_OCR_VL_BACKEND,
+        "backend": backend_choice,
         "candidate_mode": opt.get(
             "post_ocr_vl_candidate_mode",
             DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
@@ -340,9 +356,9 @@ def apply_post_ocr_vl_check(
         word_profile.spellchecker.language if word_profile.spellchecker else None
     )
     metadata["word_profile_training_tokens"] = word_profile.training_token_count
-    backend_order = [DEFAULT_POST_OCR_VL_BACKEND]
+    backend_order = [backend_choice]
 
-    include_line_text_fallback = "paddlevl" in backend_order
+    include_line_text_fallback = True
 
     suspicious_word_count = len(
         collect_word_candidates(
@@ -370,8 +386,20 @@ def apply_post_ocr_vl_check(
     metadata["line_text_fallback_candidate_count"] = sum(
         1 for candidate in candidates if candidate.source == "line_text"
     )
+    batch_size = parse_int(
+        opt.get("post_ocr_vl_batch_size"),
+        DEFAULT_POST_OCR_VL_BATCH_SIZE,
+        minimum=1,
+    )
+    concurrency = parse_int(
+        opt.get("post_ocr_vl_concurrency"),
+        DEFAULT_POST_OCR_VL_CONCURRENCY,
+        minimum=1,
+    )
+    metadata["batch_size"] = batch_size
+    metadata["concurrency"] = concurrency
     metadata["line_grouping_active"] = False
-    candidate_batches = group_candidate_batches(candidates)
+    candidate_batches = group_candidate_batches(candidates, batch_size=batch_size)
     metadata["vl_request_count"] = len(candidate_batches)
     metadata["line_group_count"] = sum(
         1 for batch in candidate_batches if should_process_batch_as_line(batch)
@@ -421,151 +449,58 @@ def apply_post_ocr_vl_check(
     saved_tile_count = 0
     processed_count = 0
 
-    with Image.open(image_path) as image:
-        image = image.convert("RGB")
+    with requests.Session() as session:
+        adapter = HTTPAdapter(
+            pool_connections=max(concurrency, 10),
+            pool_maxsize=max(concurrency * 2, 20),
+            max_retries=1,
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
-        for request_index, batch in enumerate(candidate_batches, start=1):
-            if should_process_batch_as_line(batch):
-                processed_count, applied_count, saved_tile_count = process_line_batch(
-                    image=image,
-                    ocr_payload=ocr_payload,
-                    batch=batch,
-                    opt=opt,
-                    metadata=metadata,
-                    progress_path=progress_path,
-                    source_json=str(json_path),
-                    image_path=str(image_path),
-                    tile_dir=tile_dir,
-                    suspicious_word_count=suspicious_word_count,
-                    request_index=request_index,
-                    processed_count=processed_count,
-                    applied_count=applied_count,
-                    saved_tile_count=saved_tile_count,
-                )
-                continue
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            with Image.open(image_path) as image:
+                image = image.convert("RGB")
 
-            candidate = batch[0]
-            position = processed_count + 1
-            record = candidate_record(candidate)
-            write_post_ocr_vl_progress(
-                progress_path,
-                metadata,
-                status="running",
-                source_json=str(json_path),
-                image_path=str(image_path),
-                suspicious_word_count=suspicious_word_count,
-                qualified_word_count=metadata["qualified_count"],
-                total_words_to_check=metadata["candidate_count"],
-                current_position=position,
-                current_word=candidate.text,
-                current_line_index=candidate.line_index,
-                current_word_index=candidate.word_index,
-                current_line_score=candidate.line_score,
-                current_weirdness=candidate.weirdness,
-                last_completed_position=position - 1,
-                current_vl_request=request_index,
-                total_vl_requests=metadata["vl_request_count"],
-                applied_count=applied_count,
-                saved_tile_count=saved_tile_count,
-            )
+                for request_index, batch in enumerate(candidate_batches, start=1):
+                    if should_process_batch_as_line(batch):
+                        processed_count, applied_count, saved_tile_count = process_line_batch(
+                            image=image,
+                            ocr_payload=ocr_payload,
+                            batch=batch,
+                            opt=opt,
+                            metadata=metadata,
+                            progress_path=progress_path,
+                            source_json=str(json_path),
+                            image_path=str(image_path),
+                            tile_dir=tile_dir,
+                            suspicious_word_count=suspicious_word_count,
+                            request_index=request_index,
+                            processed_count=processed_count,
+                            applied_count=applied_count,
+                            saved_tile_count=saved_tile_count,
+                        )
+                        continue
 
-            try:
-                tile, crop_box = crop_word_tile(
-                    image,
-                    candidate.box,
-                    padding_px=metadata["padding_px"],
-                )
-            except Exception as exc:
-                record["error"] = f"Unable to crop word tile: {exc}"
-                metadata["corrections"].append(record)
-                write_post_ocr_vl_progress(
-                    progress_path,
-                    metadata,
-                    status="running",
-                    source_json=str(json_path),
-                    image_path=str(image_path),
-                    suspicious_word_count=suspicious_word_count,
-                    qualified_word_count=metadata["qualified_count"],
-                    total_words_to_check=metadata["candidate_count"],
-                    current_position=position,
-                    current_word=candidate.text,
-                    current_line_index=candidate.line_index,
-                    current_word_index=candidate.word_index,
-                    last_completed_position=position,
-                    current_vl_request=request_index,
-                    total_vl_requests=metadata["vl_request_count"],
-                    applied_count=applied_count,
-                    saved_tile_count=saved_tile_count,
-                    last_error=record["error"],
-                )
-                processed_count += 1
-                continue
-
-            record["crop_box"] = crop_box
-            record["crop_type"] = "word"
-            tile_path = None
-
-            if metadata["save_tiles"]:
-                tile_path = tile_dir / (
-                    f"{candidate.line_index:04d}_{candidate.word_index:03d}_"
-                    f"{safe_filename(candidate.text)}.png"
-                )
-                tile.save(tile_path)
-                record["tile_path"] = str(tile_path)
-                saved_tile_count += 1
-
-            results = []
-            for backend in backend_order:
-                try:
-                    text = run_backend_check(
-                        backend,
-                        tile,
-                        candidate.text,
-                        opt,
+                    processed_count, applied_count, saved_tile_count = process_word_batch(
+                        image=image,
+                        ocr_payload=ocr_payload,
+                        batch=batch,
+                        opt=opt,
+                        metadata=metadata,
+                        progress_path=progress_path,
+                        source_json=str(json_path),
+                        image_path=str(image_path),
+                        tile_dir=tile_dir,
+                        suspicious_word_count=suspicious_word_count,
+                        request_index=request_index,
+                        total_requests=len(candidate_batches),
+                        processed_count=processed_count,
+                        applied_count=applied_count,
+                        saved_tile_count=saved_tile_count,
+                        session=session,
+                        executor=executor if concurrency > 1 else None,
                     )
-                    results.append({"backend": backend, "text": text})
-                except Exception as exc:
-                    results.append({"backend": backend, "error": str(exc)})
-
-            record["backend_results"] = results
-            selected_text, reason = choose_correction(candidate.text, results)
-            record["selected_text"] = selected_text
-            record["reason"] = reason
-
-            if (
-                metadata["apply_corrections"]
-                and selected_text
-                and reason == "accepted"
-            ):
-                apply_candidate_correction(ocr_payload, candidate, selected_text)
-                record["applied"] = True
-                applied_count += 1
-            else:
-                record["applied"] = False
-
-            metadata["corrections"].append(record)
-            processed_count += 1
-            write_post_ocr_vl_progress(
-                progress_path,
-                metadata,
-                status="running",
-                source_json=str(json_path),
-                image_path=str(image_path),
-                suspicious_word_count=suspicious_word_count,
-                qualified_word_count=metadata["qualified_count"],
-                total_words_to_check=metadata["candidate_count"],
-                current_position=position,
-                current_word=candidate.text,
-                current_line_index=candidate.line_index,
-                current_word_index=candidate.word_index,
-                selected_text=record["selected_text"],
-                correction_reason=record["reason"],
-                last_completed_position=position,
-                current_vl_request=request_index,
-                total_vl_requests=metadata["vl_request_count"],
-                applied_count=applied_count,
-                saved_tile_count=saved_tile_count,
-            )
 
     metadata["applied_count"] = applied_count
     metadata["saved_tile_count"] = saved_tile_count
@@ -622,6 +557,104 @@ def get_ocr_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def find_hyphen_continuation_words(
+    ocr_payload: dict[str, Any],
+    word_profile: WordProfile | None,
+    low_confidence_threshold: float,
+) -> set[tuple[int, int]]:
+    """Identify line-start word tokens that complete a preceding line's hyphenated break.
+
+    In multi-column newspaper layouts, words split across line breaks with a hyphen
+    (e.g., `lang-` on line A and `uage` on line B) leave the continuation suffix
+    at the start of line B. Because the suffix is not in a dictionary on its own,
+    it triggers false-alarm spellcheck misses. If joining prefix + suffix forms a
+    valid dictionary word and recognition confidence is high, it is safe to skip.
+    """
+    text_word = ocr_payload.get("text_word") or []
+    text_word_boxes = ocr_payload.get("text_word_boxes") or []
+    rec_scores = ocr_payload.get("rec_scores") or []
+
+    if not word_profile or not word_profile.spellchecker:
+        return set()
+
+    line_entries = []
+    for idx, (words, boxes) in enumerate(zip(text_word, text_word_boxes)):
+        if hasattr(words, "tolist"):
+            words = words.tolist()
+        if hasattr(boxes, "tolist"):
+            boxes = boxes.tolist()
+        if not isinstance(words, (list, tuple)) or not isinstance(boxes, (list, tuple)):
+            continue
+        valid_boxes = [geometry_to_bbox(b) for b in boxes if geometry_to_bbox(b)]
+        if not valid_boxes:
+            continue
+        xs = [b[0] for b in valid_boxes] + [b[2] for b in valid_boxes]
+        ys = [b[1] for b in valid_boxes] + [b[3] for b in valid_boxes]
+        line_entries.append({
+            "line_index": idx,
+            "words": [str(w) for w in words if str(w).strip()],
+            "x0": min(xs),
+            "y0": min(ys),
+            "x1": max(xs),
+            "y1": max(ys),
+            "height": max(ys) - min(ys),
+            "width": max(xs) - min(xs),
+            "score": parse_optional_float(rec_scores[idx] if idx < len(rec_scores) else None),
+        })
+
+    continuation_words = set()
+    min_thresh = max(0.88, low_confidence_threshold)
+
+    for entry_a in line_entries:
+        words_a = entry_a["words"]
+        if not words_a:
+            continue
+        last_w = words_a[-1].strip()
+        if not last_w.endswith(("-", "–", "—")) or len(last_w) < 2:
+            continue
+        prefix = last_w.strip(".,:;!?()[]{}\"'").rstrip("-–—")
+        if not prefix.isalpha():
+            continue
+
+        h_a = max(entry_a["height"], 10)
+        w_a = max(entry_a["width"], 50)
+        best_candidate = None
+        min_dist_y = 999999
+
+        for entry_b in line_entries:
+            if entry_b["line_index"] == entry_a["line_index"]:
+                continue
+            dy = entry_b["y0"] - entry_a["y1"]
+            if dy < -h_a * 0.3 or dy > h_a * 3.0:
+                continue
+            dx_left = abs(entry_b["x0"] - entry_a["x0"])
+            if dx_left > max(150, w_a * 0.35):
+                continue
+            if dy < min_dist_y:
+                min_dist_y = dy
+                best_candidate = entry_b
+
+        if best_candidate and best_candidate["words"]:
+            score_b = best_candidate["score"]
+            if score_b is not None and score_b < min_thresh:
+                continue
+            for w_idx, raw_w in enumerate(best_candidate["words"][:2]):
+                cleaned_w = raw_w.strip(".,:;!?()[]{}\"'")
+                if cleaned_w and cleaned_w.isalpha():
+                    suffix = cleaned_w.lower()
+                    comb = f"{prefix.lower()}{suffix}"
+                    comb_hyphen = f"{prefix.lower()}-{suffix}"
+                    is_valid = (
+                        word_profile.spellchecker.issue_for(comb) is None
+                        or word_profile.spellchecker.issue_for(comb_hyphen) is None
+                    )
+                    if is_valid:
+                        continuation_words.add((best_candidate["line_index"], w_idx))
+                    break
+
+    return continuation_words
+
+
 def collect_word_candidates(
     ocr_payload: dict[str, Any],
     mode: str,
@@ -635,21 +668,61 @@ def collect_word_candidates(
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
     rec_scores = ocr_payload.get("rec_scores") or []
     candidates: list[WordCandidate] = []
-    mode = mode if mode in {"suspicious", "low_confidence", "all"} else "suspicious"
+    mode = mode if mode in {"suspicious", "low_confidence", "invalid_lexical", "all"} else "suspicious"
     if word_profile is None:
         word_profile = build_word_profile(ocr_payload, low_confidence_threshold)
 
+    continuation_words = (
+        find_hyphen_continuation_words(ocr_payload, word_profile, low_confidence_threshold)
+        if mode in {"suspicious", "low_confidence", "invalid_lexical"}
+        else set()
+    )
+
     for line_index, words in enumerate(text_word):
-        if not isinstance(words, list):
+        if hasattr(words, "tolist"):
+            words = words.tolist()
+        elif not isinstance(words, (list, tuple)):
             continue
 
         boxes = text_word_boxes[line_index] if line_index < len(text_word_boxes) else []
-        if not isinstance(boxes, list):
+        if hasattr(boxes, "tolist"):
+            boxes = boxes.tolist()
+        elif not isinstance(boxes, (list, tuple)):
             continue
 
         line_score = parse_optional_float(
             rec_scores[line_index] if line_index < len(rec_scores) else None
         )
+
+        # Line-Level VLM Delegation: heavily degraded lines (<0.78) are delegated
+        # to Dots OCR as a whole line crop rather than inefficient word-by-word checks.
+        if (
+            line_score is not None
+            and line_score < 0.78
+            and len(words) >= 2
+        ):
+            line_box = line_bbox_for_candidates(ocr_payload, line_index, [])
+            if valid_bbox(line_box):
+                rec_texts_list = ocr_payload.get("rec_texts") or []
+                line_text_val = (
+                    str(rec_texts_list[line_index] or "")
+                    if line_index < len(rec_texts_list)
+                    else " ".join(str(w or "") for w in words)
+                )
+                if line_text_val.strip():
+                    candidates.append(
+                        WordCandidate(
+                            line_index=line_index,
+                            word_index=0,
+                            text=line_text_val,
+                            box=line_box,
+                            line_score=line_score,
+                            weirdness=1.0,
+                            reasons=["line-level degraded (<0.78)"],
+                            source="full_line",
+                        )
+                    )
+                    continue
 
         for word_index, word in enumerate(words):
             text = str(word or "")
@@ -674,10 +747,82 @@ def collect_word_candidates(
                 line_score is not None and line_score < low_confidence_threshold
             )
 
+            # In invalid_lexical mode: target words that fail lexical dictionary validation
+            if mode == "invalid_lexical":
+                try:
+                    from services.historical_lexicon import is_valid_historical_word
+                    is_valid = is_valid_historical_word(text)
+                except Exception:
+                    is_valid = True
+                if is_valid and not (low_confidence and weirdness >= 0.75):
+                    continue
+
             if mode == "suspicious" and weirdness < 0.5:
-                continue
+                # Disputed words failing lexical validation qualify for VLM review
+                try:
+                    from services.historical_lexicon import is_valid_historical_word
+                    if not is_valid_historical_word(text) and (line_score is None or line_score < 0.88):
+                        weirdness = 0.8
+                        reasons.append("non-lexical disputed word")
+                    else:
+                        continue
+                except Exception:
+                    continue
+
             if mode == "low_confidence" and not low_confidence:
                 continue
+
+            # Smart-Skip: Avoid sending already-clean, high-confidence words to the VLM
+            if mode in {"suspicious", "low_confidence", "invalid_lexical"}:
+                clean_text = text.strip(".,:;!?()[]{}\"'")
+                is_proper_name = (
+                    (clean_text[:1].isupper() and clean_text[1:].islower())
+                    or bool(re.fullmatch(r"(?:Mc|Mac|O')[A-Z][a-z]+", clean_text))
+                )
+                has_severe_anomaly = any(
+                    r in {"odd glyph", "letter/digit mix", "merged word-box text", "repeated letter"}
+                    for r in reasons
+                )
+                # 1. Skip high-confidence proper nouns (Titlecase or Mc/Mac/O') without severe anomalies
+                if (
+                    line_score is not None
+                    and line_score >= 0.92
+                    and is_proper_name
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 2. Skip high-confidence words that are confirmed valid dictionary words
+                if (
+                    line_score is not None
+                    and line_score >= max(0.88, low_confidence_threshold)
+                    and word_profile is not None
+                    and word_profile.spellchecker is not None
+                    and word_profile.spellchecker.issue_for(clean_text) is None
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 3. Skip high-confidence line-break hyphenated words without severe anomalies
+                is_hyphenated_break = (
+                    clean_text.endswith(("-", "–", "—"))
+                    and len(clean_text) >= 3
+                    and is_alpha_word(clean_text.rstrip("-–—"))
+                )
+                if (
+                    line_score is not None
+                    and line_score >= max(0.88, low_confidence_threshold)
+                    and is_hyphenated_break
+                    and not has_severe_anomaly
+                ):
+                    continue
+
+                # 4. Skip high-confidence line-break continuation suffix words without severe anomalies
+                if (
+                    (line_index, word_index) in continuation_words
+                    and not has_severe_anomaly
+                ):
+                    continue
 
             candidates.append(
                 WordCandidate(
@@ -782,24 +927,16 @@ def collect_line_text_fallback_candidates(
 
 def line_has_usable_word_boxes(ocr_payload: dict[str, Any], line_index: int) -> bool:
     """Return whether a line has usable word boxes for word-level VL checks."""
-    text_word = ocr_payload.get("text_word") or []
     text_word_boxes = ocr_payload.get("text_word_boxes") or []
-    if not isinstance(text_word, list) or line_index >= len(text_word):
-        return False
-    if not isinstance(text_word_boxes, list) or line_index >= len(text_word_boxes):
+    if line_index >= len(text_word_boxes):
         return False
 
-    words = text_word[line_index]
     boxes = text_word_boxes[line_index]
-    if not isinstance(words, list) or not isinstance(boxes, list):
+    if boxes is None or len(boxes) == 0:
         return False
 
-    for word_index, word in enumerate(words):
-        if word_index >= len(boxes):
-            continue
-        if not is_word_token(str(word or "")):
-            continue
-        if valid_bbox(geometry_to_bbox(boxes[word_index])):
+    for box in boxes:
+        if valid_bbox(geometry_to_bbox(box)):
             return True
     return False
 
@@ -817,14 +954,38 @@ def line_text_tokens(text: str) -> list[LineTextToken]:
     ]
 
 
-def group_candidate_batches(candidates: list[WordCandidate]) -> list[list[WordCandidate]]:
+def group_candidate_batches(
+    candidates: list[WordCandidate],
+    batch_size: int = 1,
+) -> list[list[WordCandidate]]:
     """Group suspicious candidates into word or line batches for VL requests."""
-    return [[candidate] for candidate in candidates]
+    if batch_size <= 1:
+        return [[candidate] for candidate in candidates]
+
+    batches: list[list[WordCandidate]] = []
+    current_word_batch: list[WordCandidate] = []
+
+    for candidate in candidates:
+        if candidate.source in {"line_text", "full_line"}:
+            if current_word_batch:
+                batches.append(current_word_batch)
+                current_word_batch = []
+            batches.append([candidate])
+        else:
+            current_word_batch.append(candidate)
+            if len(current_word_batch) >= batch_size:
+                batches.append(current_word_batch)
+                current_word_batch = []
+
+    if current_word_batch:
+        batches.append(current_word_batch)
+
+    return batches
 
 
 def should_process_batch_as_line(batch: list[WordCandidate]) -> bool:
     """Return whether a candidate batch should be checked as one line image."""
-    return any(candidate.source == "line_text" for candidate in batch)
+    return any(candidate.source in {"line_text", "full_line"} for candidate in batch)
 
 
 def process_line_batch(
@@ -923,7 +1084,7 @@ def process_line_batch(
         tile.save(tile_path)
         saved_tile_count += 1
 
-    if len(batch) == 1 and batch[0].source == "line_text":
+    if len(batch) == 1 and batch[0].source in {"line_text", "full_line"}:
         return process_single_line_text_batch(
             tile,
             crop_box,
@@ -942,12 +1103,13 @@ def process_line_batch(
             ocr_payload,
         )
 
-    error = "Grouped line correction is disabled for the PaddleVL-only pipeline."
+    backend_name = str(metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND)
+    error = f"Grouped line correction is disabled for the {backend_name} pipeline."
     for record in records:
         record["crop_box"] = crop_box
         if tile_path is not None:
             record["tile_path"] = str(tile_path)
-        record["backend_results"] = [{"backend": "paddlevl", "error": error}]
+        record["backend_results"] = [{"backend": backend_name, "error": error}]
         record["selected_text"] = None
         record["reason"] = "line_group_disabled"
         record["applied"] = False
@@ -1012,21 +1174,26 @@ def process_single_line_text_batch(
     if tile_path is not None:
         record["tile_path"] = str(tile_path)
 
+    active_backend = metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND
     results = []
-    for backend in [DEFAULT_POST_OCR_VL_BACKEND]:
+    for backend in [active_backend]:
         try:
-            raw_text = run_backend_check(
-                backend,
-                tile,
-                candidate.text,
-                opt,
-            )
-            selected_from_line = extract_line_fallback_candidate_text(
-                raw_text,
-                candidate.text,
-                backend,
-                opt,
-            )
+            if candidate.source == "full_line" and str(backend).lower() in {"dots_ocr", "dotsocr", "dots"}:
+                raw_text = request_dotsocr_line(tile, candidate.text, opt)
+                selected_from_line = raw_text
+            else:
+                raw_text = run_backend_check(
+                    backend,
+                    tile,
+                    candidate.text,
+                    opt,
+                )
+                selected_from_line = extract_line_fallback_candidate_text(
+                    raw_text,
+                    candidate.text,
+                    backend,
+                    opt,
+                )
             results.append(
                 {
                     "backend": backend,
@@ -1041,7 +1208,9 @@ def process_single_line_text_batch(
             results.append({"backend": backend, "error": str(exc)})
 
     record["backend_results"] = results
-    selected_text, reason = choose_correction(candidate.text, results)
+    selected_text, reason = choose_correction(
+        candidate.text, results, is_full_line=(candidate.source == "full_line")
+    )
     record["selected_text"] = selected_text
     record["reason"] = reason
 
@@ -1076,6 +1245,172 @@ def process_single_line_text_batch(
         applied_count=applied_count,
         saved_tile_count=saved_tile_count,
     )
+    return processed_count, applied_count, saved_tile_count
+
+
+def process_word_batch(
+    image: Image.Image,
+    ocr_payload: dict[str, Any],
+    batch: list[WordCandidate],
+    opt: dict,
+    metadata: dict[str, Any],
+    progress_path: Path,
+    source_json: str,
+    image_path: str,
+    tile_dir: Path | None,
+    suspicious_word_count: int,
+    request_index: int,
+    total_requests: int,
+    processed_count: int,
+    applied_count: int,
+    saved_tile_count: int,
+    session: requests.Session | None = None,
+    executor: ThreadPoolExecutor | None = None,
+) -> tuple[int, int, int]:
+    """Process a batch of word candidates using concurrent VLM verification."""
+    active_backend = metadata.get("backend") or DEFAULT_POST_OCR_VL_BACKEND
+    backend_order = [active_backend]
+    start_position = processed_count + 1
+    current_word = ", ".join(candidate.text for candidate in batch)[:160]
+
+    write_post_ocr_vl_progress(
+        progress_path,
+        metadata,
+        status="running",
+        source_json=source_json,
+        image_path=image_path,
+        suspicious_word_count=suspicious_word_count,
+        qualified_word_count=metadata["qualified_count"],
+        total_words_to_check=metadata["candidate_count"],
+        current_position=start_position,
+        current_word=current_word,
+        current_line_index=batch[0].line_index,
+        current_word_index=[candidate.word_index for candidate in batch],
+        current_line_score=batch[0].line_score,
+        current_weirdness=max(candidate.weirdness for candidate in batch),
+        last_completed_position=processed_count,
+        current_vl_request=request_index,
+        total_vl_requests=total_requests,
+        applied_count=applied_count,
+        saved_tile_count=saved_tile_count,
+    )
+
+    crop_tasks: list[tuple[WordCandidate, dict[str, Any], Image.Image, str]] = []
+    crop_failed: list[tuple[WordCandidate, dict[str, Any]]] = []
+
+    for candidate in batch:
+        record = candidate_record(candidate)
+        try:
+            window_box, context_text = get_word_context_window(
+                ocr_payload,
+                candidate,
+                window_words=1,
+            )
+            record["crop_type"] = "word_window" if valid_bbox(window_box) else "word"
+            record["context_text"] = context_text
+
+            tile, crop_box = crop_word_tile(
+                image,
+                candidate.box,
+                padding_px=metadata["padding_px"],
+                window_box=window_box,
+            )
+            record["crop_box"] = crop_box
+
+            if metadata["save_tiles"] and tile_dir is not None:
+                tile_path = tile_dir / (
+                    f"{candidate.line_index:04d}_{candidate.word_index:03d}_"
+                    f"{safe_filename(candidate.text)}.png"
+                )
+                tile.save(tile_path)
+                record["tile_path"] = str(tile_path)
+                saved_tile_count += 1
+
+            crop_tasks.append((candidate, record, tile, context_text))
+        except Exception as exc:
+            record["error"] = f"Unable to crop word tile: {exc}"
+            crop_failed.append((candidate, record))
+
+    verified_results: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
+
+    if crop_tasks:
+        def _check_one(item: tuple[WordCandidate, dict[str, Any], Image.Image, str]):
+            cand, rec, tile_obj, ctx_text = item
+            results = []
+            for backend in backend_order:
+                try:
+                    text = run_backend_check(
+                        backend,
+                        tile_obj,
+                        cand.text,
+                        opt,
+                        session=session,
+                        context_text=ctx_text,
+                    )
+                    results.append({"backend": backend, "text": text})
+                except Exception as exc:
+                    results.append({"backend": backend, "error": str(exc)})
+            return cand, rec, results
+
+        if executor is not None and len(crop_tasks) > 1:
+            verified_results = list(executor.map(_check_one, crop_tasks))
+        else:
+            verified_results = [_check_one(item) for item in crop_tasks]
+
+    all_outcomes: list[tuple[WordCandidate, dict[str, Any], list[dict[str, Any]]]] = []
+    fallback_backend = backend_order[0] if backend_order else "dots_ocr"
+    for cand, rec in crop_failed:
+        all_outcomes.append((cand, rec, [{"backend": fallback_backend, "error": rec.get("error")}]))
+    all_outcomes.extend(verified_results)
+
+    cand_index_map = {id(c): idx for idx, c in enumerate(batch)}
+    all_outcomes.sort(key=lambda item: cand_index_map.get(id(item[0]), 0))
+
+    last_record = None
+    for candidate, record, results in all_outcomes:
+        record["backend_results"] = results
+        selected_text, reason = choose_correction(candidate.text, results)
+        record["selected_text"] = selected_text
+        record["reason"] = reason
+
+        if (
+            metadata["apply_corrections"]
+            and selected_text
+            and reason == "accepted"
+        ):
+            apply_candidate_correction(ocr_payload, candidate, selected_text)
+            record["applied"] = True
+            applied_count += 1
+        else:
+            record["applied"] = False
+
+        metadata["corrections"].append(record)
+        processed_count += 1
+        last_record = record
+
+    if last_record is not None:
+        write_post_ocr_vl_progress(
+            progress_path,
+            metadata,
+            status="running",
+            source_json=source_json,
+            image_path=image_path,
+            suspicious_word_count=suspicious_word_count,
+            qualified_word_count=metadata["qualified_count"],
+            total_words_to_check=metadata["candidate_count"],
+            current_position=processed_count,
+            current_word=batch[-1].text,
+            current_line_index=batch[-1].line_index,
+            current_word_index=batch[-1].word_index,
+            selected_text=last_record.get("selected_text"),
+            correction_reason=last_record.get("reason"),
+            last_completed_position=processed_count,
+            current_vl_request=request_index,
+            total_vl_requests=total_requests,
+            applied_count=applied_count,
+            saved_tile_count=saved_tile_count,
+        )
+
     return processed_count, applied_count, saved_tile_count
 
 
@@ -1254,7 +1589,7 @@ def build_word_profile(
         token_counts=all_token_counts,
         total_ngrams=sum(ngrams.values()),
         vocab_size=len(ngrams),
-        known_words={token for token, count in all_token_counts.items() if count >= 2},
+        known_words={token for token, count in all_token_counts.items() if count >= 2} | {token.lower() for token in ALL_CANADIAN_LEXICON_TOKENS},
         common_words_by_length=group_common_words_by_length(all_token_counts),
         training_token_count=len(training_tokens),
         language=language,
@@ -1573,6 +1908,8 @@ def should_spellcheck_word(
     """Return whether a token should be considered a spellcheck miss."""
     if not is_alpha_word(token):
         return False
+    if raw_text.endswith(("-", "–", "—")):
+        return False
     if not 4 <= len(token) <= 30:
         return False
     if "'" in token:
@@ -1640,16 +1977,59 @@ def is_legitimate_letter_digit_token(text: str) -> bool:
 
 
 
+def get_word_context_window(
+    ocr_payload: dict[str, Any],
+    candidate: WordCandidate,
+    window_words: int = 1,
+) -> tuple[list[float] | None, str]:
+    """Retrieve bounding box and text for a surrounding word window (previous, target, next)."""
+    text_word = ocr_payload.get("text_word") or []
+    text_word_boxes = ocr_payload.get("text_word_boxes") or []
+
+    line_idx = candidate.line_index
+    word_idx = candidate.word_index
+
+    if line_idx >= len(text_word) or line_idx >= len(text_word_boxes):
+        return None, candidate.text
+
+    words = text_word[line_idx]
+    boxes = text_word_boxes[line_idx]
+
+    if hasattr(words, "tolist"):
+        words = words.tolist()
+    if hasattr(boxes, "tolist"):
+        boxes = boxes.tolist()
+
+    if not isinstance(words, (list, tuple)) or not isinstance(boxes, (list, tuple)):
+        return None, candidate.text
+
+    if word_idx >= len(words) or word_idx >= len(boxes):
+        return None, candidate.text
+
+    start_idx = max(0, word_idx - window_words)
+    end_idx = min(len(words), word_idx + window_words + 1)
+
+    window_word_list = [str(w) for w in words[start_idx:end_idx] if str(w).strip()]
+    context_text = " ".join(window_word_list).strip()
+
+    valid_boxes = [geometry_to_bbox(b) for b in boxes[start_idx:end_idx] if geometry_to_bbox(b)]
+    window_box = union_bbox(valid_boxes) if valid_boxes else None
+
+    return window_box, context_text or candidate.text
+
+
 def crop_word_tile(
     image: Image.Image,
     box: list[float],
     padding_px: int,
+    window_box: list[float] | None = None,
 ) -> tuple[Image.Image, list[int]]:
-    """Crop an image tile around one suspicious OCR word candidate."""
-    x0, y0, x1, y1 = box
+    """Crop an image tile around one suspicious OCR word candidate, optionally expanded to a context window."""
+    target_box = window_box if valid_bbox(window_box) else box
+    x0, y0, x1, y1 = target_box
     width = max(1, x1 - x0)
     height = max(1, y1 - y0)
-    contextual_padding_x = max(padding_px, int(width * 0.35))
+    contextual_padding_x = max(padding_px, int(width * (0.15 if window_box else 0.35)))
     contextual_padding_y = max(padding_px, int(height * 0.75))
 
     left = max(0, int(x0 - contextual_padding_x))
@@ -1762,14 +2142,161 @@ def run_backend_check(
     tile: Image.Image,
     original_text: str,
     opt: dict,
+    session: requests.Session | None = None,
+    context_text: str | None = None,
 ) -> str:
     """Dispatch one cropped tile to the selected post-OCR VL backend."""
-    if backend == "paddlevl":
-        return request_paddlevl_word(tile, original_text, opt)
+    norm = str(backend or "").strip().lower()
+    if norm in {"paddlevl", "paddle_vl", "paddleocr_vl"}:
+        return request_paddlevl_word(tile, original_text, opt, session=session)
+    if norm in {"dots_ocr", "dotsocr", "dots"}:
+        return request_dotsocr_word(
+            tile,
+            original_text,
+            opt,
+            session=session,
+            context_text=context_text,
+        )
     raise ValueError(f"Unknown post-OCR VL backend: {backend}")
 
 
-def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> str:
+_OPENAI_MODEL_CACHE: dict[str, str] = {}
+
+
+def resolve_openai_model(
+    base_url: str,
+    requested_model: str,
+    headers: dict | None = None,
+    session: requests.Session | None = None,
+) -> str:
+    """Resolve the active model on an OpenAI-compatible server if requested model is unavailable."""
+    clean_base = base_url.rstrip("/")
+    if clean_base.endswith("/chat/completions"):
+        clean_base = clean_base[:-len("/chat/completions")]
+
+    if clean_base in _OPENAI_MODEL_CACHE:
+        return _OPENAI_MODEL_CACHE[clean_base]
+
+    try:
+        models_url = f"{clean_base}/models"
+        client = session if session is not None else requests
+        resp = client.get(models_url, headers=headers or {}, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            available = [m.get("id") for m in data.get("data", []) if m.get("id")]
+            if requested_model in available:
+                _OPENAI_MODEL_CACHE[clean_base] = requested_model
+                return requested_model
+            if available:
+                chosen = available[0]
+                _OPENAI_MODEL_CACHE[clean_base] = chosen
+                return chosen
+    except Exception:
+        pass
+    return requested_model
+
+
+def request_dotsocr_word(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+    context_text: str | None = None,
+) -> str:
+    """Request a word/token correction from the Dots OCR OpenAI-compatible endpoint."""
+    raw_url = str(
+        opt.get("post_ocr_vl_dotsocr_url")
+        or opt.get("dotsocr_url")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_URL
+    ).rstrip("/")
+    if raw_url.endswith("/chat/completions"):
+        url = raw_url
+    else:
+        url = f"{raw_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    requested_model = str(
+        opt.get("post_ocr_vl_dotsocr_model")
+        or opt.get("dotsocr_model")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_MODEL
+    )
+    model = resolve_openai_model(url, requested_model, headers=headers, session=session)
+
+    b64_img = image_to_base64(tile)
+    if context_text and context_text.strip() and context_text.strip() != original_text.strip():
+        prompt = (
+            f"In this image excerpt showing the context '{context_text.strip()}', "
+            f"read and transcribe the target word '{original_text.strip()}'. "
+            "Return only the accurate target word without explanations, markdown, or punctuation wrappers."
+        )
+    else:
+        prompt = (
+            "Read the text in this image crop accurately. "
+            "Return only the word or text without explanations or markdown formatting."
+        )
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_img}"
+                        },
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 32,
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    client = session if session is not None else requests
+    response = client.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=(10, 60),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+    data = response.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+        raw_text = "\n".join(parts)
+    else:
+        raw_text = str(content or "")
+
+    return clean_vl_text(
+        _extract_best_word_candidate(raw_text, original_text, minimum_score=0.45)
+    )
+
+
+
+def request_paddlevl_word(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+) -> str:
     """Request a word-level correction from the PaddleOCR-VL backend."""
     base_url = str(
         opt.get("post_ocr_vl_paddlevl_url") or DEFAULT_PADDLE_VL_API_URL
@@ -1782,7 +2309,8 @@ def request_paddlevl_word(tile: Image.Image, original_text: str, opt: dict) -> s
         "useLayoutDetection": False,
         "maxNewTokens": 32,
     }
-    response = requests.post(
+    client = session if session is not None else requests
+    response = client.post(
         f"{base_url}/layout-parsing",
         json=payload,
         timeout=(10, 120),
@@ -1833,6 +2361,7 @@ def extract_paddlevl_text(data: Any) -> str:
 def choose_correction(
     original_text: str,
     results: list[dict[str, Any]],
+    is_full_line: bool = False,
 ) -> tuple[str | None, str]:
     """Choose an accepted correction string from one backend response."""
     usable = [
@@ -1840,7 +2369,10 @@ def choose_correction(
         for result in results
         if result.get("text")
     ]
-    usable = [text for text in usable if is_clean_correction(original_text, text)]
+    if is_full_line:
+        usable = [text for text in usable if is_clean_line_correction(original_text, text)]
+    else:
+        usable = [text for text in usable if is_clean_correction(original_text, text)]
     if not usable:
         return None, "no_clean_vl_text"
 
@@ -1871,12 +2403,27 @@ def is_clean_correction(original_text: str, corrected_text: str) -> bool:
     return True
 
 
+def is_clean_line_correction(original_text: str, corrected_text: str) -> bool:
+    """Return whether a proposed full-line correction is safe to apply automatically."""
+    corrected = corrected_text.strip()
+    if not corrected or len(corrected) > 500:
+        return False
+    if not WORD_RE.search(corrected):
+        return False
+    if len(original_text.split()) >= 2 and len(corrected.split()) == 0:
+        return False
+    return True
+
+
 def apply_candidate_correction(
     ocr_payload: dict[str, Any],
     candidate: WordCandidate,
     corrected_text: str,
 ) -> None:
     """Apply one accepted correction to the OCR payload in place."""
+    if candidate.source == "full_line":
+        apply_full_line_correction(ocr_payload, candidate, corrected_text)
+        return
     if candidate.source == "line_text":
         apply_line_text_correction(ocr_payload, candidate, corrected_text)
         return
@@ -1998,6 +2545,8 @@ def write_post_ocr_vl_progress(
         "max_words_enabled": metadata.get("max_words_enabled"),
         "max_words": metadata.get("max_words"),
         "save_tiles": metadata.get("save_tiles"),
+        "concurrency": metadata.get("concurrency"),
+        "batch_size": metadata.get("batch_size"),
         "group_line_candidates": metadata.get("group_line_candidates"),
         "line_grouping_active": metadata.get("line_grouping_active"),
         "vl_request_count": metadata.get("vl_request_count"),
@@ -2132,9 +2681,11 @@ def clean_vl_text(text: Any, model_name: str = None) -> str:
 
 
 def image_to_base64(image: Image.Image) -> str:
-    """Encode a PIL image as a base64 PNG payload for API requests."""
+    """Encode a PIL image as a base64 JPEG payload for API requests."""
     buffer = BytesIO()
-    image.save(buffer, format="PNG")
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.save(buffer, format="JPEG", quality=95)
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
@@ -2330,3 +2881,104 @@ def parse_optional_float(value: Any) -> float | None:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write a JSON payload with the repo standard UTF-8 formatting."""
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+
+def apply_full_line_correction(
+    ocr_payload: dict[str, Any],
+    candidate: WordCandidate,
+    corrected_text: str,
+) -> None:
+    """Apply full-line transcription from VLM to rec_texts and text_word."""
+    rec_texts = ocr_payload.get("rec_texts")
+    if isinstance(rec_texts, list) and candidate.line_index < len(rec_texts):
+        rec_texts[candidate.line_index] = corrected_text
+
+    text_word = ocr_payload.get("text_word")
+    if isinstance(text_word, list) and candidate.line_index < len(text_word):
+        new_words = corrected_text.split()
+        if new_words:
+            text_word[candidate.line_index] = new_words
+
+
+def request_dotsocr_line(
+    tile: Image.Image,
+    original_text: str,
+    opt: dict,
+    session: requests.Session | None = None,
+) -> str:
+    """Request a full line transcription from the Dots OCR OpenAI-compatible endpoint."""
+    raw_url = str(
+        opt.get("post_ocr_vl_dotsocr_url")
+        or opt.get("dotsocr_url")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_URL
+    ).rstrip("/")
+    if raw_url.endswith("/chat/completions"):
+        url = raw_url
+    else:
+        url = f"{raw_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    api_key = opt.get("dotsocr_api_key") or os.getenv("DOTSOCR_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    requested_model = str(
+        opt.get("post_ocr_vl_dotsocr_model")
+        or opt.get("dotsocr_model")
+        or DEFAULT_POST_OCR_VL_DOTSOCR_MODEL
+    )
+    model = resolve_openai_model(url, requested_model, headers=headers, session=session)
+
+    b64_img = image_to_base64(tile)
+    prompt = (
+        "Read and transcribe all text in this cropped image line accurately. "
+        "Maintain the exact wording and capitalization. "
+        "Return only the transcribed line text without explanations or markdown formatting."
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_img}"
+                        },
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 256,
+    }
+
+    client = session if session is not None else requests
+    response = client.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=(10, 60),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+    data = response.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+        raw_text = " ".join(parts)
+    else:
+        raw_text = str(content or "")
+
+    return clean_vl_text(raw_text)

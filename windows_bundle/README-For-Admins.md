@@ -1,104 +1,140 @@
-# Managed Windows Workstation Bundle
+# Managed Windows Workstation Bundle (Administrator Guide)
 
-This folder packages the OCR app for low-tech users on a shared Windows PC.
+This package manages the CRKN OCR preservation pipeline on a shared Windows workstation for library and digitization staff.
 
-## Files
+---
 
-- `Start OCR Tool.cmd`: starts Docker OCR services if available, starts Gradio, opens the browser.
-- `Stop OCR Tool.cmd`: stops the Gradio app and Docker services.
-- `Install For All Users.cmd`: creates Public Desktop and Start Menu shortcuts for every user.
-- `Admin Update OCR Tool.cmd`: pulls repo changes, reinstalls requirements, and pulls Docker images.
+## 📁 Bundle Scripts & Files
 
-## Install For All Users
+| Script (`.cmd` / `.bat`) | PowerShell Backend | Purpose |
+| :--- | :--- | :--- |
+| **`Start OCR Tool`** | `scripts/Start-OcrTool.ps1` | Verifies shared model cache, starts Docker services (if enabled), launches Gradio UI under the local user, and opens the default browser to `http://127.0.0.1:7860`. |
+| **`Stop OCR Tool`** | `scripts/Stop-OcrTool.ps1` | Stops the running Gradio process, removes the PID lock, and stops Docker containers. |
+| **`Install For All Users`** | `scripts/Install-ForAllUsers.ps1` | Creates public shortcuts on `C:\Users\Public\Desktop`, creates Start Menu entries, creates `C:\ProgramData\CRKN OCR Tool`, and applies multi-user NTFS ACLs. |
+| **`Admin Update OCR Tool`** | `scripts/Update-OcrTool.ps1` | Pulls the latest Git commits, upgrades `requirements.txt` packages, and pulls updated Docker images. |
 
-1. Put the repo in a stable path, for example:
+---
 
-   ```text
-   C:\CRKN Projects\paddle_pipeline
-   ```
+## 🛠️ Workstation Setup for All Users
 
-2. Confirm the repo has a working virtual environment:
-
-   ```text
-   venv\Scripts\python.exe
-   ```
-
-   or:
-
-   ```text
-   .venv\Scripts\python.exe
-   ```
-
-3. Right-click `Install For All Users.cmd` and choose **Run as administrator**.
-
-4. Confirm Docker Desktop is installed once on the workstation. Individual OCR
-   users do **not** need to install Docker Desktop again under their own
-   accounts. They only need permission to use the shared Docker Desktop
-   install.
-
-   Each Windows user who needs to start or stop the OCR Docker services must
-   be in the local `docker-users` group.
-
-   Run these commands on the OCR workstation in **Windows PowerShell as
-   Administrator**:
-
-   ```powershell
-   Add-LocalGroupMember -Group "docker-users" -Member "CRKN\JLoitzenbauer"
-   ```
-
-   Add any other OCR users the same way, for example:
-
-   ```powershell
-   Add-LocalGroupMember -Group "docker-users" -Member "CRKN\blapierre"
-   ```
-
-   To confirm membership:
-
-   ```powershell
-   Get-LocalGroupMember -Group "docker-users"
-   ```
-
-   Each added user must sign out of Windows and sign back in before Docker
-   group membership takes effect.
-
-The installer creates:
-
-- `C:\Users\Public\Desktop\CRKN OCR Tool.lnk`
-- Start Menu entries under `CRKN OCR Tool`
-- shared logs under `C:\ProgramData\CRKN OCR Tool\logs`
-
-It grants local `Users` modify access to:
-
-- `C:\ProgramData\CRKN OCR Tool`
-- repo `logs`
-- repo `output`
-- repo `.paddlex`
-
-## Runtime Defaults
-
-The start script sets:
-
+### 1. Repository Location
+The pipeline must reside in a stable, shared local path accessible by all workstation users:
 ```text
-OCR_TOOL_HOST=127.0.0.1
-OCR_TOOL_PORT=7860
-PADDLE_VL_API_URL=http://127.0.0.1:8080
-OLMOCR_API_URL=http://127.0.0.1:8000/v1
-OLMOCR_MODEL=allenai/olmOCR-2-7B-1025-FP8
+C:\CRKN Projects\paddle_pipeline
 ```
 
-The app is intentionally local to the workstation. Other Windows users on the
-same PC can launch it from their own account using the shared shortcut.
-
-## Logs
-
-Wrapper logs:
-
+### 2. Virtual Environment
+Ensure the Python virtual environment is active at:
 ```text
-C:\ProgramData\CRKN OCR Tool\logs
+C:\CRKN Projects\paddle_pipeline\venv\Scripts\python.exe
 ```
 
-App run logs:
+### 3. Run the Installer Once as Administrator
+Right-click **`Install For All Users.cmd`** (or `Install For All Users.bat`) and select **Run as administrator**.
 
-```text
-<repo>\logs
+The installer:
+* Creates **`C:\Users\Public\Desktop\CRKN OCR Tool.lnk`** (visible on every user's desktop).
+* Creates Start Menu shortcuts under `CRKN OCR Tool`.
+* Sets up the shared directory **`C:\ProgramData\CRKN OCR Tool\logs`**.
+* Grants the local `Users` group (`*S-1-5-32-545`) Modify permissions to:
+  * `C:\ProgramData\CRKN OCR Tool`
+  * `C:\CRKN Projects\paddle_pipeline\logs`
+  * `C:\CRKN Projects\paddle_pipeline\output`
+  * `C:\CRKN Projects\paddle_pipeline\.paddlex` (Shared Model Cache)
+
+---
+
+## 👥 Multi-User Configuration (e.g. `JLoitzenbauer`, `blapierre`)
+
+### 1. Docker Desktop Permissions (`docker-users`)
+Docker Desktop is installed **once** on the workstation. Individual staff accounts do **not** need separate Docker installations.
+
+To allow staff accounts (such as `CRKN\JLoitzenbauer`) to use Docker OCR microservices (PaddleVL and OLM OCR), ensure they belong to the local `docker-users` group.
+
+Run in **Windows PowerShell (Admin)**:
+```powershell
+Add-LocalGroupMember -Group "docker-users" -Member "CRKN\JLoitzenbauer"
+Add-LocalGroupMember -Group "docker-users" -Member "CRKN\blapierre"
+Add-LocalGroupMember -Group "docker-users" -Member "CRKN\mzheng"
 ```
+
+To verify membership:
+```powershell
+Get-LocalGroupMember -Group "docker-users"
+```
+
+> [!IMPORTANT]
+> Newly added users must **sign out of Windows and sign back in** for `docker-users` group membership to take effect.
+
+---
+
+### 2. Shared Offline Model Cache (`.paddlex`)
+PaddleX normally caches official models inside `~/.paddlex` (the user's private profile). Because Windows restricts access between different user directories (`C:\Users\<user>`), running under a new user would cause PaddleX to fail or attempt to re-download 500MB+ of model weights from external servers.
+
+To prevent this:
+* Official model weights are stored in the shared project cache:
+  ```text
+  C:\CRKN Projects\paddle_pipeline\.paddlex\official_models
+  ├── PP-DocLayoutV3
+  ├── PP-OCRv6_medium_det
+  ├── PP-OCRv6_medium_rec
+  ├── PP-LCNet_x1_0_doc_ori
+  ├── PP-LCNet_x1_0_textline_ori
+  └── UVDoc
+  ```
+* All startup scripts ([`Start-OcrTool.ps1`](file:///c:/CRKN%20Projects/paddle_pipeline/windows_bundle/scripts/Start-OcrTool.ps1), [`launcher.py`](file:///c:/CRKN%20Projects/paddle_pipeline/launcher.py), and [`engine/paddlex_compat.py`](file:///c:/CRKN%20Projects/paddle_pipeline/engine/paddlex_compat.py)) automatically configure:
+  ```text
+  PADDLE_PDX_CACHE_HOME=C:\CRKN Projects\paddle_pipeline\.paddlex
+  PADDLE_HOME=C:\CRKN Projects\paddle_pipeline\.paddlex
+  ```
+* Any user (including `JLoitzenbauer`) will run OCR completely offline without downloading or encountering permission errors.
+
+---
+
+## ⚡ Automated Benchmarking & CLI Execution
+
+Admins and researchers can run unattended batch jobs and automated ABBYY FineReader comparison benchmarks via the command line:
+
+### 1. Automated Full Benchmark & ABBYY Comparison
+```powershell
+.\venv\Scripts\python.exe tools/run_full_benchmark.py
+```
+* **Input**: `C:\Users\blapierre\Documents\PDF Test`
+* **Output**: `C:\Users\blapierre\Desktop\PDF Test - Final`
+* **Report**: Updates the interactive dashboard at **`compare/index.html`** and writes summary metrics to `compare/comparison_summary.csv`.
+
+### 2. Bulk Microfilm Reel Runner
+```powershell
+.\venv\Scripts\python.exe tools/batch_runner.py `
+  --input "C:\CRKN Projects\Heritage\oocihm.lac_reel_c10143" `
+  --output "C:\CRKN Projects\output\lac_reel_c10143" `
+  --method PP-OCRv6 `
+  --pre-process `
+  --post-process `
+  --format pdf_alto `
+  --resume `
+  --concurrency 8
+```
+
+---
+
+## 📊 Diagnostic Logs
+
+When troubleshooting workstation issues, consult the logs:
+
+1. **Launcher & Service Logs**:
+   ```text
+   C:\ProgramData\CRKN OCR Tool\logs
+   ├── start.log
+   ├── app.stdout.log
+   ├── app.stderr.log
+   ├── docker-compose.stdout.log
+   └── docker-compose.stderr.log
+   ```
+
+2. **OCR Engine Application Logs**:
+   ```text
+   C:\CRKN Projects\paddle_pipeline\logs
+   ├── PP_OCRv6_summary_YYYYMMDD_HHMMSS.log
+   └── PP_OCRv6_error_YYYYMMDD_HHMMSS.log
+   ```

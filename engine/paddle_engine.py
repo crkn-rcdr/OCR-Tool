@@ -180,6 +180,12 @@ class PaddleEngine:
             "text_rec_score_thresh": params["text_rec_score_thresh"],
         }
 
+        rec_batch_size = params["text_recognition_batch_size"]
+        if hasattr(self.pipeline, "paddlex_pipeline") and hasattr(self.pipeline.paddlex_pipeline, "_pipeline"):
+            text_rec_model = getattr(self.pipeline.paddlex_pipeline._pipeline, "text_rec_model", None)
+            if text_rec_model and hasattr(text_rec_model, "batch_sampler") and hasattr(text_rec_model.batch_sampler, "batch_size"):
+                text_rec_model.batch_sampler.batch_size = rec_batch_size
+
         if self.method in PADDLE_OCR_METHODS and hasattr(self.pipeline, "paddlex_pipeline"):
             return self.pipeline.paddlex_pipeline.predict(
                 image_path,

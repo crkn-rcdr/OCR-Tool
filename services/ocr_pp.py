@@ -4,13 +4,14 @@ import copy
 import gc
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from engine import engine
 import traceback
 import time
 
 from services.constants import IMAGE_EXTENSIONS
-from services.pdf_generation import main as generate_pdf_and_alto
+from services.pdf_generation import build_pdf, main as generate_pdf_and_alto
 from services.ocr_logger import OCRLoggerManger, log_run_configuration
 from services.txt_generation import generate_txt_file 
 from services.image_preprocessing import preprocess_image_for_ocr
@@ -20,14 +21,18 @@ from services.tile_ocr import (
     DEFAULT_TILE_OVERLAP_PX,
     DEFAULT_TILE_STRATEGY,
     offset_nested_geometry,
+    scale_nested_geometry,
     tile_grid_for_strategy,
     run_tiled_local_ocr,
     supports_tiled_ocr,
+    should_use_3x2_tiling,
+    normalize_tile_strategy,
 )
 from services.post_ocr_vl import apply_post_ocr_vl_check, supports_post_ocr_vl
 from services.punctuation_cleanup import clean_ocr_json_text_in_place
 from services.word_box_normalization import normalize_ocr_word_boxes_in_payload
-from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+from services.ocr_defaults import DEFAULT_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_DET_MAX_SIDE_LIMIT, SAFE_FALLBACK_TEXT_RECOGNITION_BATCH_SIZE
+from services.language_detection import resolve_effective_language
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 
@@ -59,7 +64,12 @@ GPU_RECOVERY_ERROR_MARKERS = (
 
 def describe_tiling(opt):
     """Return a readable description of the active tiling strategy."""
-    strategy = opt.get("tile_strategy", DEFAULT_TILE_STRATEGY)
+    strategy = normalize_tile_strategy(opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+    if strategy == "none" or not opt.get("tile_source_images", False):
+        return "full-image pass (no tiles)"
+    if strategy == "auto":
+        return "auto-detected 3x2 quadrant tiling"
+
     rows, cols = tile_grid_for_strategy(strategy)
     grid_label = f"{rows}x{cols}"
 
@@ -145,7 +155,7 @@ def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
         return []
 
     base = copy.deepcopy(opt)
-    safe_side_limit = DEFAULT_TEXT_DET_MAX_SIDE_LIMIT
+    safe_side_limit = SAFE_FALLBACK_TEXT_DET_MAX_SIDE_LIMIT
     base_limit = int(base.get("text_det_limit_side_len") or safe_side_limit)
     base_max_side = int(base.get("text_det_max_side_limit") or safe_side_limit)
     base_rec_batch = int(base.get("text_recognition_batch_size") or 1)
@@ -156,7 +166,7 @@ def build_safe_ppocr_retry_options(opt: dict) -> list[tuple[dict, str]]:
     reduced_gpu["device"] = "gpu"
     reduced_gpu["text_det_limit_side_len"] = min(base_limit, safe_side_limit)
     reduced_gpu["text_det_max_side_limit"] = min(base_max_side, safe_side_limit)
-    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, 8)
+    reduced_gpu["text_recognition_batch_size"] = min(base_rec_batch, SAFE_FALLBACK_TEXT_RECOGNITION_BATCH_SIZE)
     if reduced_gpu != base:
         attempts.append(
             (
@@ -283,6 +293,7 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         success_count = 0
         failure_count = 0
         messages = []
+        per_page_timings: dict[str, float] = {}
 
         start_time = time.perf_counter()
 
@@ -300,19 +311,24 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 out_dir = output_base / rel.parent
                 out_dir.mkdir(parents=True, exist_ok=True)
 
+                effective_lang = resolve_effective_language(lang, input_path)
+                file_opt = dict(opt, lang=effective_lang)
+
+                t_page = time.perf_counter()
                 final_json, recovery_note = run_ocr_for_image(
                     image_path=input_path,
                     out_dir=out_dir,
-                    opt=opt,
+                    opt=file_opt,
                     select=select,
                 )
+                per_page_timings[input_path.stem] = round(time.perf_counter() - t_page, 2)
 
                 success_count += 1
                 if recovery_note:
                     messages.append(f"{input_path.name} {recovery_note}")
                 if tile_source_images and supports_tiled_ocr(method, select):
                     messages.append(
-                        f"{input_path.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                        f"{input_path.name} created from {describe_tiling(file_opt)} and saved in {out_dir}"
                     )
                 else:
                     messages.append(f"{input_path.name} created and saved in {out_dir}")
@@ -328,9 +344,9 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                         final_json,
                         input_path,
                         method,
-                        lang,
+                        effective_lang,
                         select,
-                        run_options=opt,
+                        run_options=file_opt,
                     )
                     yield "\n".join(messages)
 
@@ -347,7 +363,12 @@ def run_ocr_job(input_path, output_root, opt,select=None):
 
         elif input_path.is_dir():
             input_base = input_path
-            output_base = output_root / input_path.name
+            out_root_norm = output_root.name.lower().replace("-", " ").replace("_", " ")
+            in_path_norm = input_path.name.lower().replace("-", " ").replace("_", " ")
+            if out_root_norm == in_path_norm or out_root_norm.startswith(in_path_norm):
+                output_base = output_root
+            else:
+                output_base = output_root / input_path.name
 
             # Group by the subfolder where the images are located.
             folders = {}
@@ -356,87 +377,235 @@ def run_ocr_job(input_path, output_root, opt,select=None):
                 if img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS:
                     folders.setdefault(img.parent, []).append(img)
 
-            # OCR for each subfolder
-            for folder, images in folders.items():
+            import re
+
+            def natural_sort_key(s):
+                return [
+                    int(text) if text.isdigit() else text.lower()
+                    for text in re.split(r"(\d+)", str(s))
+                ]
+
+            COLLECTION_PRIORITY = {"newspapers": 0, "annuals": 1, "heritage": 2}
+
+            def folder_sort_key(folder_path):
+                path_str = str(folder_path).lower().replace("\\", "/")
+                priority = 99
+                for name, p in COLLECTION_PRIORITY.items():
+                    if f"/{name}/" in path_str or path_str.endswith(f"/{name}") or f"\\{name}\\" in str(folder_path).lower():
+                        priority = p
+                        break
+                return (priority, natural_sort_key(folder_path))
+
+            sorted_folders = sorted(
+                folders.items(), key=lambda item: folder_sort_key(item[0])
+            )
+
+            # OCR for each subfolder with overlapping prefetch & background PDF/ALTO generation
+            for folder, images in sorted_folders:
+                images = sorted(images, key=lambda p: natural_sort_key(p.name))
                 rel_folder = folder.relative_to(input_base)
-                out_dir = output_base / rel_folder
+                if folder.parent.name.lower() in {"newspapers", "annuals", "heritage"}:
+                    if output_root.name.lower() == folder.parent.name.lower():
+                        out_dir = output_root / folder.name
+                    else:
+                        out_dir = output_root / folder.parent.name / folder.name
+                else:
+                    out_dir = output_base / rel_folder
                 out_dir.mkdir(parents=True, exist_ok=True)
+
+                effective_lang = resolve_effective_language(lang, folder)
+                folder_opt = dict(opt, lang=effective_lang)
+                if not str(folder_opt.get("device") or "").lower().startswith("cpu"):
+                    folder_opt["text_recognition_batch_size"] = max(32, int(folder_opt.get("text_recognition_batch_size") or 32))
 
                 folder_success = 0
                 folder_failure = 0
+                folder_pdf_success = 0
+                folder_pdf_fail = 0
+                folder_alto_success = 0
+                folder_alto_fail = 0
 
-                messages.append(f"Start processing folder: {folder}")
+                messages.append(f"Start processing folder: {folder} (Language: {effective_lang})")
                 yield "\n".join(messages)
 
-                for img in images:
-                    if STOP_FLAG:
-                        return
+                # Initialize background workers for this folder:
+                # 1. prefetch_pool: 4 concurrent CPU workers for image reading & preprocessing across a sliding window
+                # 2. post_pool: 4 concurrent CPU workers for PDF & ALTO generation overlapping next images' OCR
+                PREFETCH_WINDOW = 4
+                with ThreadPoolExecutor(max_workers=4) as post_pool, ThreadPoolExecutor(max_workers=4) as prefetch_pool:
+                    pending_post = {}
+                    prefetch_futures = {}
 
-                    try:
-                        _, recovery_note = run_ocr_for_image(
-                            image_path=img,
-                            out_dir=out_dir,
-                            opt=opt,
-                            select=select,
+                    # Pre-populate prefetch window
+                    for p_idx in range(min(PREFETCH_WINDOW, len(images))):
+                        p_img = images[p_idx]
+                        prefetch_futures[p_img] = prefetch_pool.submit(
+                            preprocess_image_for_ocr, p_img, out_dir, folder_opt
                         )
 
-                        success_count += 1
-                        folder_success += 1
+                    for img_idx, img in enumerate(images):
+                        if STOP_FLAG:
+                            return
 
-                        if recovery_note:
-                            messages.append(f"{img.name} {recovery_note}")
-                        if tile_source_images and supports_tiled_ocr(method, select):
-                            messages.append(
-                                f"{img.name} created from {describe_tiling(opt)} and saved in {out_dir}"
+                        # Maintain 4-worker sliding lookahead window
+                        next_submit_idx = img_idx + PREFETCH_WINDOW
+                        if next_submit_idx < len(images):
+                            next_img = images[next_submit_idx]
+                            prefetch_futures[next_img] = prefetch_pool.submit(
+                                preprocess_image_for_ocr, next_img, out_dir, folder_opt
                             )
-                        else:
-                            messages.append(f"{img.name} created and saved in {out_dir}")
-                        yield "\n".join(messages)
 
-                    except Exception as e:
-                        error_logger.error(
-                            f"Error ocr processing {img.name}: {str(e)}",
-                            exc_info=True
-                        )
-                        summary_logger.info(f"ERROR: OCR processing failed for {img.name}")
+                        preprocessed_res = None
+                        fut = prefetch_futures.pop(img, None)
+                        if fut is not None:
+                            try:
+                                preprocessed_res = fut.result()
+                            except Exception as exc:
+                                error_logger.warning(
+                                    f"Prefetch warning for {img.name}: {exc}; falling back to sync preprocessing"
+                                )
+                                preprocessed_res = None
 
-                        failure_count += 1
-                        folder_failure += 1
-
-                        messages.append(f"Error processing {img.name}: {str(e)}")
-                        yield "\n".join(messages)
-
-                # Once the OCR process in the current subfolder is complete, immediately generate PDF/ALTO.
-                if folder_success > 0:
-                    try:
-                        if generate_text_file:
-                            for json_file in out_dir.glob("*.json"):
-                                txt_path = generate_txt_file(json_file)
-                                messages.append(f"Text file created: {txt_path}")
-                                yield "\n".join(messages)
-                        else:
-                            generate_pdf_and_alto(
-                                out_dir,
-                                folder,
-                                method,
-                                lang,
-                                select,
-                                run_options=opt,
+                        try:
+                            t_page = time.perf_counter()
+                            final_json, recovery_note = run_ocr_for_image(
+                                image_path=img,
+                                out_dir=out_dir,
+                                opt=folder_opt,
+                                select=select,
+                                preprocessed_result=preprocessed_res,
                             )
-                            messages.append(f"PDF/ALTO generated for folder: {folder.name}")
+                            per_page_timings[img.stem] = round(time.perf_counter() - t_page, 2)
+
+                            success_count += 1
+                            folder_success += 1
+
+                            if recovery_note:
+                                messages.append(f"{img.name} {recovery_note}")
+                            effective_strat = normalize_tile_strategy(folder_opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+                            if effective_strat == "auto":
+                                used_tiling = should_use_3x2_tiling(img)
+                                t_desc = "auto-detected 3x2 quadrant tiling" if used_tiling else "auto-detected full-image pass"
+                                messages.append(f"{img.name} created ({t_desc}) and saved in {out_dir}")
+                            elif tile_source_images and supports_tiled_ocr(method, select):
+                                messages.append(
+                                    f"{img.name} created from {describe_tiling(folder_opt)} and saved in {out_dir}"
+                                )
+                            else:
+                                messages.append(f"{img.name} created and saved in {out_dir}")
+
+                            # Immediately submit background PDF/ALTO or TXT generation
+                            if generate_text_file:
+                                fut = post_pool.submit(generate_txt_file, final_json)
+                                pending_post[fut] = ("txt", img.name, final_json)
+                            else:
+                                fut = post_pool.submit(
+                                    build_pdf,
+                                    final_json,
+                                    folder,
+                                    method,
+                                    effective_lang,
+                                    select,
+                                )
+                                pending_post[fut] = ("pdf", img.name, final_json)
+
+                            # Drain any post-tasks that completed while OCR was running
+                            for done_fut in [f for f in pending_post if f.done()]:
+                                task_type, item_name, _ = pending_post.pop(done_fut)
+                                try:
+                                    res = done_fut.result()
+                                    if task_type == "pdf":
+                                        if res.get("pdf_success"):
+                                            folder_pdf_success += 1
+                                        else:
+                                            folder_pdf_fail += 1
+                                            error_logger.error(f"PDF FAIL for {item_name}: {res.get('pdf_error')}")
+                                        if res.get("alto_success"):
+                                            folder_alto_success += 1
+                                        else:
+                                            folder_alto_fail += 1
+                                            error_logger.error(f"ALTO FAIL for {item_name}: {res.get('alto_error')}")
+                                        messages.append(f"PDF/ALTO generated: {item_name}")
+                                    elif task_type == "txt":
+                                        messages.append(f"Text file created: {Path(res).name}")
+                                except Exception as exc:
+                                    error_logger.error(f"Post-processing error for {item_name}: {exc}")
+
                             yield "\n".join(messages)
 
-                    except Exception as e:
-                        error_logger.error(
-                            f"Error generating PDF/ALTO for folder {folder}: {str(e)}",
-                            exc_info=True
-                        )
-                        messages.append(
-                            f"Error generating PDF/ALTO for folder {folder.name}: {str(e)}"
-                        )
-                        yield "\n".join(messages)
+                        except Exception as e:
+                            error_logger.error(
+                                f"Error ocr processing {img.name}: {str(e)}",
+                                exc_info=True
+                            )
+                            summary_logger.info(f"ERROR: OCR processing failed for {img.name}")
 
-                        summary_logger.info(f"ERROR:{folder.name} failed during PDF/ALTO generation")
+                            failure_count += 1
+                            folder_failure += 1
+
+                            messages.append(f"Error processing {img.name}: {str(e)}")
+                            yield "\n".join(messages)
+
+                    # Drain all remaining post-processing tasks for this folder
+                    for fut in as_completed(list(pending_post.keys())):
+                        task_type, item_name, _ = pending_post.pop(fut)
+                        try:
+                            res = fut.result()
+                            if task_type == "pdf":
+                                if res.get("pdf_success"):
+                                    folder_pdf_success += 1
+                                else:
+                                    folder_pdf_fail += 1
+                                    error_logger.error(f"PDF FAIL for {item_name}: {res.get('pdf_error')}")
+                                if res.get("alto_success"):
+                                    folder_alto_success += 1
+                                else:
+                                    folder_alto_fail += 1
+                                    error_logger.error(f"ALTO FAIL for {item_name}: {res.get('alto_error')}")
+                                messages.append(f"PDF/ALTO generated: {item_name}")
+                            elif task_type == "txt":
+                                messages.append(f"Text file created: {Path(res).name}")
+                        except Exception as exc:
+                            error_logger.error(f"Post-processing error for {item_name}: {exc}")
+
+                    if folder_success > 0:
+                        if generate_text_file:
+                            messages.append(f"Text generation completed for folder: {folder.name}")
+                        else:
+                            summary_logger.info(f"==========PDF AND ALTO SUMMARY FOR FOLDER: {folder.name} ==========")
+                            summary_logger.info(f"PDF success: {folder_pdf_success}, fail: {folder_pdf_fail}")
+                            summary_logger.info(f"ALTO success: {folder_alto_success}, fail: {folder_alto_fail}")
+                            messages.append(
+                                f"PDF/ALTO completed for folder: {folder.name} (PDF: {folder_pdf_success}/{folder_success}, ALTO: {folder_alto_success}/{folder_success})"
+                            )
+
+                            # Auto-compare against benchmark if benchmark ALTO/PDF files exist in input folder
+                            benchmark_has_eval_files = any(
+                                f.suffix.lower() in {".xml", ".pdf"} for f in folder.glob("*") if f.is_file()
+                            )
+                            if benchmark_has_eval_files and folder_alto_success > 0:
+                                try:
+                                    from tools.compare_alto import compare_directory_batch
+                                    compare_root = Path(r"C:\CRKN Projects\paddle_pipeline\compare")
+                                    if folder.parent.name.lower() in {"newspapers", "annuals", "heritage"}:
+                                        coll_name = f"{folder.parent.name}/{folder.name}"
+                                    else:
+                                        coll_name = str(rel_folder).replace("\\", "/")
+                                    compared_pages = compare_directory_batch(
+                                        pipeline_dir=out_dir,
+                                        benchmark_dir=folder,
+                                        output_dir=compare_root,
+                                        collection_name=coll_name,
+                                        render_html=True,
+                                        render_image=False,
+                                    )
+                                    if compared_pages > 0:
+                                        messages.append(
+                                            f"Auto-comparison updated for {folder.name} ({compared_pages} pages -> compare/index.html)"
+                                        )
+                                except Exception as exc:
+                                    error_logger.warning(f"Auto-comparison error for {folder.name}: {exc}")
+                        yield "\n".join(messages)
 
         else:
             yield f"Input path is neither a file nor a folder: {input_path}"
@@ -454,43 +623,84 @@ def run_ocr_job(input_path, output_root, opt,select=None):
         summary_logger.info(f"Total Processing Time: {total_time:.2f} seconds")
         summary_logger.info(f"Average Time per File: {avg_time:.2f} seconds")
 
+        if opt.get("generate_results_dashboard", True) and success_count > 0:
+            try:
+                from services.results_dashboard import build_ocr_run_dashboard
+                dash_path = build_ocr_run_dashboard(
+                    output_root=output_root,
+                    input_root=input_path,
+                    engine_name=method or "PaddleOCR",
+                    total_time_sec=total_time,
+                    per_page_timings=per_page_timings,
+                    auto_open=True,
+                    dashboard_folder_name="HTML_Results_Dashboard",
+                )
+                if dash_path:
+                    messages.append(f"\nHTML Results Dashboard generated: {dash_path.resolve()}")
+            except Exception as e:
+                error_logger.warning(f"Error generating HTML results dashboard: {e}")
+
         if generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check json and text files at your output folder."
+            yield "\n".join(messages) + "\n\nOCR Completed, please check json and text files at your output folder."
 
         elif not generate_text_file and failure_count > 0:
-             yield "OCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
+            yield "\n".join(messages) + "\n\nOCR partially completed. Some errors occurred during processing. Please review the error report and check the generated PDF and ALTO files in your output folder."
             
         elif not generate_text_file and failure_count == 0:
-            yield "OCR Completed, please check pdf and alto files at your output folder"
+            yield "\n".join(messages) + "\n\nOCR Completed, please check pdf and alto files at your output folder."
 
     finally:
         RUN_LOCK.release()
 
 
-def run_ocr_for_image(image_path, out_dir, opt, select=None):
+def run_ocr_for_image(image_path, out_dir, opt, select=None, preprocessed_result=None):
     """
     Run OCR for a single image and save the final JSON output.
     """
     final_json = out_dir / f"{image_path.stem}.json"
-    ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
-        image_path=image_path,
-        out_dir=out_dir,
-        opt=opt,
-    )
+    if preprocessed_result is not None:
+        ocr_image_path, preprocess_metadata = preprocessed_result
+    else:
+        ocr_image_path, preprocess_metadata = preprocess_image_for_ocr(
+            image_path=image_path,
+            out_dir=out_dir,
+            opt=opt,
+        )
 
-    if opt.get("tile_source_images", False) and supports_tiled_ocr(opt.get("method"), select):
-        merged_json = run_tiled_local_ocr(ocr_image_path, opt, select=select)
+    current_opt = dict(opt)
+    if preprocess_metadata and preprocess_metadata.get("table_unclip_ratio"):
+        current_opt["text_det_unclip_ratio"] = float(preprocess_metadata["table_unclip_ratio"])
+
+    effective_strat = normalize_tile_strategy(current_opt.get("tile_strategy", DEFAULT_TILE_STRATEGY))
+    if effective_strat == "auto":
+        use_3x2 = should_use_3x2_tiling(ocr_image_path)
+        if use_3x2:
+            current_opt["tile_source_images"] = True
+            current_opt["tile_strategy"] = "grid_3x2"
+            current_opt["tile_rows"] = 3
+            current_opt["tile_cols"] = 2
+            current_opt["tile_overlap_px"] = int(current_opt.get("tile_overlap_px", DEFAULT_TILE_OVERLAP_PX))
+        else:
+            current_opt["tile_source_images"] = False
+            current_opt["tile_strategy"] = "none"
+            current_opt["tile_rows"] = 1
+            current_opt["tile_cols"] = 1
+    elif effective_strat == "none":
+        current_opt["tile_source_images"] = False
+
+    if current_opt.get("tile_source_images", False) and supports_tiled_ocr(current_opt.get("method"), select):
+        merged_json = run_tiled_local_ocr(ocr_image_path, current_opt, select=select)
         normalize_ocr_word_boxes_in_payload(merged_json)
         annotate_preprocessing_payload(merged_json, preprocess_metadata)
         final_json.write_text(
             json.dumps(merged_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
-        maybe_apply_output_text_cleanup(final_json, opt)
+        maybe_apply_post_ocr_vl_check(final_json, out_dir, current_opt, select)
+        maybe_apply_output_text_cleanup(final_json, current_opt)
         return final_json, None
 
-    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, opt)
+    recovery_note = save_local_ocr_results_with_recovery(ocr_image_path, out_dir, current_opt)
 
     json_file = out_dir / f"{ocr_image_path.stem}_res.json"
     if not json_file.exists():
@@ -501,7 +711,7 @@ def run_ocr_for_image(image_path, out_dir, opt, select=None):
             )
         json_file = candidates[0]
 
-    json_file.rename(final_json)
+    json_file.replace(final_json)
     normalize_saved_ocr_json(final_json, preprocess_metadata=preprocess_metadata)
     maybe_apply_post_ocr_vl_check(final_json, out_dir, opt, select)
     maybe_apply_output_text_cleanup(final_json, opt)
@@ -559,6 +769,13 @@ def annotate_preprocessing_payload(
         return False
 
     metadata = dict(preprocess_metadata)
+
+    scale_factor = float(metadata.get("coordinate_scale_factor") or 1.0)
+    if scale_factor != 1.0 and scale_factor > 0:
+        inv_scale = 1.0 / scale_factor
+        scaled_payload = scale_nested_geometry(payload, inv_scale, inv_scale)
+        payload.clear()
+        payload.update(scaled_payload)
 
     offset_x = int(metadata.get("coordinate_offset_x") or 0)
     offset_y = int(metadata.get("coordinate_offset_y") or 0)

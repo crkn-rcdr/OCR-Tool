@@ -12,7 +12,11 @@ from numbers import Number
 
 from PIL import Image
 
-from services.word_box_normalization import merge_apostrophe_word_boxes
+from services.word_box_normalization import (
+    merge_apostrophe_word_boxes,
+    merge_word_boxes_advanced,
+    normalize_ocr_word_boxes_in_payload,
+)
 
 
 ALTO_PROFILE_ABBYY_LIKE = "abbyy_like"
@@ -164,8 +168,23 @@ def extract_paddlevl_lines(data):
     return sort_lines_reading_order(lines)
 
 
-def extract_word_level_lines(ocr_payload):
+def extract_word_level_lines(ocr_payload, lang: str | None = None):
     """Build line structures directly from word-level OCR arrays when available."""
+    if lang is None:
+        lang = ocr_payload.get("detected_language") or ocr_payload.get("lang")
+    if (not lang or lang in {"auto", "None", "none"}) and ocr_payload.get("rec_texts"):
+        try:
+            from services.language_detection import detect_document_language
+            lang = detect_document_language(ocr_payload.get("rec_texts"))
+        except Exception:
+            pass
+    if lang:
+        ocr_payload["detected_language"] = lang
+
+    try:
+        normalize_ocr_word_boxes_in_payload(ocr_payload, lang=lang)
+    except Exception:
+        pass
     rec_texts = ocr_payload.get("rec_texts", [])
     rec_scores = ocr_payload.get("rec_scores", [])
     text_word_lines = ocr_payload.get("text_word") or []
@@ -205,10 +224,12 @@ def extract_word_level_lines(ocr_payload):
                 )
             continue
 
-        words, boxes = merge_apostrophe_word_boxes(
+        words, boxes = merge_word_boxes_advanced(
             words,
             boxes,
             line_text=line_text,
+            line_score=line_score,
+            lang=lang,
         )
         string_items = []
 
@@ -216,14 +237,62 @@ def extract_word_level_lines(ocr_payload):
             if not word_text or not clean_alto_text(word_text):
                 continue
 
-            string_items.append(
-                make_ocr_item(
-                    word_text,
-                    word_box,
-                    score=line_score,
-                    line_index=index,
-                )
+            from services.word_box_normalization import (
+                CJK_CHAR_RE,
+                tokenize_cjk_text,
+                partition_box_for_subwords,
+                partition_box_horizontal,
             )
+
+            clean_w = clean_alto_text(word_text)
+            if CJK_CHAR_RE.search(clean_w):
+                subwords = tokenize_cjk_text(clean_w)
+                if len(subwords) > 1:
+                    part_boxes = partition_box_for_subwords(word_box, subwords)
+                    for sw, sb in zip(subwords, part_boxes):
+                        if not sw or not clean_alto_text(sw):
+                            continue
+                        string_items.append(
+                            make_ocr_item(
+                                sw,
+                                sb,
+                                score=line_score,
+                                line_index=index,
+                            )
+                        )
+                else:
+                    string_items.append(
+                        make_ocr_item(
+                            word_text,
+                            word_box,
+                            score=line_score,
+                            line_index=index,
+                        )
+                    )
+            else:
+                subwords = str(word_text).strip().split()
+                if len(subwords) > 1:
+                    part_boxes = partition_box_horizontal(word_box, subwords)
+                    for sw, sb in zip(subwords, part_boxes):
+                        if not sw or not clean_alto_text(sw):
+                            continue
+                        string_items.append(
+                            make_ocr_item(
+                                sw,
+                                sb,
+                                score=line_score,
+                                line_index=index,
+                            )
+                        )
+                else:
+                    string_items.append(
+                        make_ocr_item(
+                            word_text,
+                            word_box,
+                            score=line_score,
+                            line_index=index,
+                        )
+                    )
 
         if not string_items:
             continue
@@ -265,7 +334,119 @@ def extract_line_level_items(source_payload):
     return items
 
 
-def build_alto_lines(data):
+def clamp_adjacent_alto_lines(lines: list[dict]) -> bool:
+    """Enforce an inter-line boundary check so vertically adjacent lines in the same column never overlap.
+
+    When Line A (above) and Line B (below) in the same column overlap vertically (dilation bleed),
+    clamps their bounding boxes and all child String items at the midpoint of their inter-line overlap.
+    Preserves natural gaps and handwriting descenders when lines do not collide.
+    """
+    if not lines or len(lines) < 2:
+        return False
+
+    line_rects = []
+    for ln in lines:
+        x1, y1, x2, y2 = box_to_rect(ln["box"])
+        line_rects.append([x1, y1, x2, y2])
+
+    centers_y = [(r[1] + r[3]) / 2.0 for r in line_rects]
+    sorted_indices = sorted(range(len(lines)), key=lambda idx: centers_y[idx])
+
+    changed = False
+
+    for _ in range(3):
+        pass_changed = False
+        for k in range(len(sorted_indices)):
+            idx_b = sorted_indices[k]
+            b = line_rects[idx_b]
+            cy_b = (b[1] + b[3]) / 2.0
+            h_b = b[3] - b[1]
+
+            # Find closest predecessor above in same vertical column
+            closest_a = None
+            for p in range(k - 1, -1, -1):
+                idx_a = sorted_indices[p]
+                a = line_rects[idx_a]
+                cy_a = (a[1] + a[3]) / 2.0
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                if (cy_b - cy_a) < 0.35 * min_h:
+                    continue  # side-by-side fragments on same row
+
+                x_ov = min(a[2], b[2]) - max(a[0], b[0])
+                min_w = min(a[2] - a[0], b[2] - b[0])
+
+                if min_w > 0 and (x_ov / min_w >= 0.20 or x_ov >= 24.0):
+                    closest_a = idx_a
+                    break
+
+            if closest_a is not None:
+                a = line_rects[closest_a]
+                h_a = a[3] - a[1]
+                min_h = min(h_a, h_b)
+
+                if a[3] > b[1]:
+                    ov = a[3] - b[1]
+                    if 0 < ov <= 0.70 * min_h:
+                        y_mid = round((a[3] + b[1]) / 2.0, 1)
+                        clamp_bottom_a = max(a[1] + 4.0, min(a[3], y_mid))
+                        clamp_top_b = min(b[3] - 4.0, max(b[1], y_mid))
+
+                        if a[3] != clamp_bottom_a or b[1] != clamp_top_b:
+                            a[3] = clamp_bottom_a
+                            b[1] = clamp_top_b
+
+                            # Update Line A
+                            ln_a = lines[closest_a]
+                            ln_a_box = ln_a["box"]
+                            if isinstance(ln_a_box, list) and len(ln_a_box) == 4 and all(isinstance(v, (int, float)) for v in ln_a_box):
+                                ln_a_box[3] = clamp_bottom_a
+                            elif isinstance(ln_a_box, list) and len(ln_a_box) >= 3 and isinstance(ln_a_box[0], list):
+                                for pt in ln_a_box:
+                                    if len(pt) >= 2 and pt[1] > clamp_bottom_a:
+                                        pt[1] = clamp_bottom_a
+
+                            for s in ln_a.get("strings", []):
+                                s_box = s.get("box")
+                                if isinstance(s_box, list) and len(s_box) == 4 and all(isinstance(v, (int, float)) for v in s_box):
+                                    if s_box[3] > clamp_bottom_a:
+                                        s_box[3] = max(s_box[1] + 1.0, clamp_bottom_a)
+                                elif isinstance(s_box, list) and len(s_box) >= 3 and isinstance(s_box[0], list):
+                                    for pt in s_box:
+                                        if len(pt) >= 2 and pt[1] > clamp_bottom_a:
+                                            pt[1] = clamp_bottom_a
+
+                            # Update Line B
+                            ln_b = lines[idx_b]
+                            ln_b_box = ln_b["box"]
+                            if isinstance(ln_b_box, list) and len(ln_b_box) == 4 and all(isinstance(v, (int, float)) for v in ln_b_box):
+                                ln_b_box[1] = clamp_top_b
+                            elif isinstance(ln_b_box, list) and len(ln_b_box) >= 3 and isinstance(ln_b_box[0], list):
+                                for pt in ln_b_box:
+                                    if len(pt) >= 2 and pt[1] < clamp_top_b:
+                                        pt[1] = clamp_top_b
+
+                            for s in ln_b.get("strings", []):
+                                s_box = s.get("box")
+                                if isinstance(s_box, list) and len(s_box) == 4 and all(isinstance(v, (int, float)) for v in s_box):
+                                    if s_box[1] < clamp_top_b:
+                                        s_box[1] = min(s_box[3] - 1.0, clamp_top_b)
+                                elif isinstance(s_box, list) and len(s_box) >= 3 and isinstance(s_box[0], list):
+                                    for pt in s_box:
+                                        if len(pt) >= 2 and pt[1] < clamp_top_b:
+                                            pt[1] = clamp_top_b
+
+                            pass_changed = True
+                            changed = True
+
+        if not pass_changed:
+            break
+
+    return changed
+
+
+def build_alto_lines(data, lang: str | None = None):
     """Build normalized ALTO-style lines from the available OCR structures."""
     if "result" in data:
         return extract_paddlevl_lines(data)
@@ -282,8 +463,9 @@ def build_alto_lines(data):
 
     source_payload = extract_source_ocr_payload(data)
 
-    word_lines = extract_word_level_lines(source_payload)
+    word_lines = extract_word_level_lines(source_payload, lang=lang)
     if word_lines:
+        clamp_adjacent_alto_lines(word_lines)
         return word_lines
 
     # If we don't have explicit word-level arrays, try to build lines
@@ -369,6 +551,7 @@ def build_alto_lines(data):
         return sort_lines_reading_order(lines)
 
     lines = group_words_into_lines(items)
+    clamp_adjacent_alto_lines(lines)
     return lines
 
 
@@ -393,7 +576,12 @@ def box_sort_key(box):
 
 
 def sort_lines_reading_order(lines):
-    """Sort normalized OCR lines into a consistent reading order."""
+    """Sort normalized OCR lines into a column-aware reading order.
+
+    In multi-column documents (such as newspapers), groups lines by vertical column
+    gutters before sorting top-to-bottom within each column. For single-column text
+    (annual reports, monographs), falls back cleanly to natural top-to-bottom reading order.
+    """
     if len(lines) < 2:
         return list(lines)
 
@@ -404,21 +592,137 @@ def sort_lines_reading_order(lines):
             {
                 "line": line,
                 "rect": (x1, y1, x2, y2),
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "center_x": (x1 + x2) / 2.0,
                 "center_y": (y1 + y2) / 2.0,
+                "width": max(1.0, x2 - x1),
                 "height": max(1.0, y2 - y1),
             }
         )
 
-    heights = sorted(item["height"] for item in structured)
+    # For short snippets (< 8 lines), simple vertical sorting is always best
+    if len(structured) < 8:
+        return _sort_lines_simple_rows(structured)
+
+    page_w = max(s["x2"] for s in structured)
+
+    # 1. Separate full-width banners / running titles (spanning > 55% of page width)
+    banners = []
+    body = []
+    for s in structured:
+        if s["width"] > page_w * 0.55:
+            banners.append(s)
+        else:
+            body.append(s)
+
+    if not body:
+        return _sort_lines_simple_rows(structured)
+
+    # 2. Check if the page contains multiple columns separated by whitespace gutters
+    max_x = int(page_w) + 20
+    occ = [0.0] * max_x
+    for s in body:
+        start_x = max(0, int(s["x1"]))
+        end_x = min(max_x, int(s["x2"]))
+        for x in range(start_x, end_x):
+            occ[x] += 1.0
+
+    k_size = 31
+    smoothed = [0.0] * max_x
+    half_k = k_size // 2
+    for x in range(max_x):
+        w_start = max(0, x - half_k)
+        w_end = min(max_x, x + half_k + 1)
+        smoothed[x] = sum(occ[w_start:w_end]) / float(w_end - w_start)
+
+    max_density = max(smoothed) if smoothed else 0.0
+    gutter_threshold = max_density * 0.08
+
+    columns = []
+    in_col = False
+    col_start = 0
+    min_col_width = max(80, int(page_w * 0.08))
+
+    for x in range(max_x):
+        if smoothed[x] >= gutter_threshold and not in_col:
+            in_col = True
+            col_start = x
+        elif smoothed[x] < gutter_threshold and in_col:
+            in_col = False
+            if (x - col_start) >= min_col_width:
+                columns.append((col_start, x))
+    if in_col and (max_x - col_start) >= min_col_width:
+        columns.append((col_start, max_x))
+
+    # If only 1 column detected, use standard top-to-bottom row sort
+    if len(columns) <= 1:
+        return _sort_lines_simple_rows(structured)
+
+    # 3. Partition body lines into detected columns based on horizontal center
+    col_bins = [[] for _ in range(len(columns))]
+    for s in body:
+        assigned = False
+        for i, (cs, ce) in enumerate(columns):
+            if cs <= s["center_x"] <= ce:
+                col_bins[i].append(s)
+                assigned = True
+                break
+        if not assigned:
+            nearest_idx = min(
+                range(len(columns)),
+                key=lambda idx: abs(s["center_x"] - ((columns[idx][0] + columns[idx][1]) / 2.0)),
+            )
+            col_bins[nearest_idx].append(s)
+
+    # 4. Sort each column top-to-bottom using simple row grouping
+    sorted_col_lines = []
+    for c_lines in col_bins:
+        if c_lines:
+            sorted_col_lines.append(_sort_lines_simple_rows(c_lines))
+
+    # 5. Integrate full-width banners and columns in natural reading order
+    if not banners:
+        ordered = []
+        for c in sorted_col_lines:
+            ordered.extend(c)
+        return ordered
+
+    banners.sort(key=lambda b: b["center_y"])
+    min_body_y = min(s["y1"] for s in body)
+    max_body_y = max(s["y2"] for s in body)
+
+    top_banners = [b["line"] for b in banners if b["center_y"] <= min_body_y + 40]
+    bottom_banners = [b["line"] for b in banners if b["center_y"] >= max_body_y - 40]
+    mid_banners = [b["line"] for b in banners if b["line"] not in top_banners and b["line"] not in bottom_banners]
+
+    ordered = list(top_banners)
+    for c in sorted_col_lines:
+        ordered.extend(c)
+    ordered.extend(mid_banners)
+    ordered.extend(bottom_banners)
+    return ordered
+
+
+def _sort_lines_simple_rows(structured_items):
+    """Sort items by center_y and x1 with small row thresholding."""
+    if not structured_items:
+        return []
+    if len(structured_items) == 1:
+        return [structured_items[0]["line"]]
+
+    heights = sorted(item["height"] for item in structured_items)
     median_h = heights[len(heights) // 2] if heights else 12.0
     line_threshold = max(5.0, median_h * 0.35)
 
-    structured.sort(key=lambda item: (item["center_y"], item["rect"][0]))
+    items = sorted(structured_items, key=lambda item: (item["center_y"], item["rect"][0]))
     rows = []
-    current = [structured[0]]
-    current_y = structured[0]["center_y"]
+    current = [items[0]]
+    current_y = items[0]["center_y"]
 
-    for item in structured[1:]:
+    for item in items[1:]:
         if abs(item["center_y"] - current_y) <= line_threshold:
             current.append(item)
             current_y = sum(entry["center_y"] for entry in current) / len(current)
@@ -927,7 +1231,26 @@ def should_insert_sp(left_item, right_item):
     if left in {"$", "£", "#"}:
         return False
 
+    # In CJK scripts, adjacent characters are not separated by whitespace
+    if _is_cjk_char(left[-1]) and _is_cjk_char(right[0]):
+        return False
+
     return True
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """Return whether a character belongs to CJK script ranges."""
+    if not ch:
+        return False
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF
+        or 0x3400 <= cp <= 0x4DBF
+        or 0x20000 <= cp <= 0x2A6DF
+        or 0xF900 <= cp <= 0xFAFF
+        or 0x3040 <= cp <= 0x30FF
+        or 0xAC00 <= cp <= 0xD7AF
+    )
 
 
 def sp_attrs_between(left_item, right_item, line, scale):
@@ -1071,7 +1394,17 @@ def generate_alto(
     else:
         data = data_payload
 
-    lines = build_alto_lines(data)
+    # Resolve effective language for ALTO:
+    from services.language_detection import detect_document_language, map_lang_to_alto_code
+    eff_lang = lang
+    if not eff_lang or eff_lang in {"auto", "None", "none"}:
+        eff_lang = data.get("detected_language") or data.get("lang")
+    if (not eff_lang or eff_lang in {"auto", "None", "none"}) and data.get("rec_texts"):
+        eff_lang = detect_document_language(data.get("rec_texts"))
+
+    alto_lang = map_lang_to_alto_code(eff_lang)
+
+    lines = build_alto_lines(data, lang=eff_lang)
 
     # Use fileName from JSON if available; otherwise fall back to image name.
     file_name = data.get("fileName", image.name)
@@ -1145,13 +1478,17 @@ def generate_alto(
 
     annotate_block_hyphenation(blocks)
 
+    # Ensure adjacent lines within each text block do not vertically collide
+    for block in blocks:
+        clamp_adjacent_alto_lines(block.get("lines", []))
+
     # Create a TextBlock element for each block and add TextLine/String children.
     for block_index, block in enumerate(blocks, start=1):
         tb_attrs = box_to_alto_attrs(block["box"], scale)
         tb_attrs["ID"] = f"Page1_Block{block_index}"
         tb_attrs["STYLEREFS"] = block_style_id(block)
-        if lang:
-            tb_attrs["LANG"] = lang
+        if alto_lang:
+            tb_attrs["LANG"] = alto_lang
         if profile == ALTO_PROFILE_LEGACY:
             tb_attrs[f"{{{XLINK_NS}}}type"] = "simple"
 
@@ -1170,14 +1507,48 @@ def generate_alto(
                 if clean_alto_text(item.get("text", ""))
             ]
 
+            expanded_items = []
+            for item in string_items:
+                raw_text = clean_alto_text(item["text"])
+                from services.word_box_normalization import (
+                    CJK_CHAR_RE,
+                    tokenize_cjk_text,
+                    partition_box_for_subwords,
+                    partition_box_horizontal,
+                )
+
+                if CJK_CHAR_RE.search(raw_text):
+                    subwords = tokenize_cjk_text(raw_text)
+                    if len(subwords) > 1:
+                        part_boxes = partition_box_for_subwords(item["box"], subwords)
+                        for sw, sb in zip(subwords, part_boxes):
+                            sub_item = dict(item)
+                            sub_item["text"] = sw
+                            sub_item["box"] = sb
+                            expanded_items.append(sub_item)
+                    else:
+                        expanded_items.append(item)
+                else:
+                    subwords = raw_text.split()
+                    if len(subwords) > 1:
+                        part_boxes = partition_box_horizontal(item["box"], subwords)
+                        for sw, sb in zip(subwords, part_boxes):
+                            sub_item = dict(item)
+                            sub_item["text"] = sw
+                            sub_item["box"] = sb
+                            expanded_items.append(sub_item)
+                    else:
+                        expanded_items.append(item)
+            string_items = expanded_items
+
             for string_index, string_item in enumerate(string_items):
                 attrs = {
                     "CONTENT": clean_alto_text(string_item["text"]),
                     **box_to_alto_attrs(string_item["box"], scale),
                 }
 
-                if lang:
-                    attrs["LANG"] = lang
+                if alto_lang:
+                    attrs["LANG"] = alto_lang
 
                 wc = string_item.get("score")
                 if wc is not None:

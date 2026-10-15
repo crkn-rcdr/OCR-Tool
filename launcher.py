@@ -59,6 +59,8 @@ def main() -> None:
     python_cmd = _resolve_python_command(project_dir)
     env = os.environ.copy()
     env.setdefault("OCR_TOOL_PROJECT_DIR", str(project_dir))
+    env.setdefault("PADDLE_PDX_CACHE_HOME", str(project_dir / ".paddlex"))
+    env.setdefault("PADDLE_HOME", str(project_dir / ".paddlex"))
 
     subprocess.run(
         [*python_cmd, str(app_path)],

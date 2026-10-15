@@ -115,52 +115,72 @@ function Wait-DockerHttpReady {
 function Start-DockerServices {
     param(
         [string]$ProjectRoot,
-        [string]$LogFile
+        [string]$LogFile,
+        [switch]$Wait
     )
 
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -eq $docker) {
-        Write-Status "Docker was not found. The app will start, but PaddleVL/OLM OCR services will be unavailable."
+        Write-Status "Docker was not found. The app will run with PaddleOCR and Indra OCR."
         return
     }
 
-    if (-not (Start-DockerDesktopIfNeeded -DockerPath $docker.Source -LogFile $LogFile)) {
+    if (-not (Test-DockerEngineReady -DockerPath $docker.Source)) {
+        $desktopExe = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+        if (Test-Path -LiteralPath $desktopExe) {
+            Write-Status "Starting Docker Desktop in background for optional VLM services..."
+            Start-Process -FilePath $desktopExe -WindowStyle Hidden
+        } else {
+            Write-Status "Docker Desktop was not found at $desktopExe."
+            Add-Content -Path $LogFile -Value "Docker Desktop executable missing: $desktopExe"
+        }
         return
     }
 
     Write-Status "Starting OCR model services with Docker Compose..."
     $dockerOutLog = Join-Path (Split-Path -Parent $LogFile) "docker-compose.stdout.log"
     $dockerErrLog = Join-Path (Split-Path -Parent $LogFile) "docker-compose.stderr.log"
-    $compose = Start-Process `
-        -FilePath $docker.Source `
-        -ArgumentList @("compose", "up", "-d") `
-        -WorkingDirectory $ProjectRoot `
-        -RedirectStandardOutput $dockerOutLog `
-        -RedirectStandardError $dockerErrLog `
-        -WindowStyle Hidden `
-        -Wait `
-        -PassThru
 
-    if ($compose.ExitCode -ne 0) {
-        Write-Status "Docker Compose did not start cleanly. The app will still start, but PaddleVL/OLM OCR may be unavailable."
-        Add-Content -Path $LogFile -Value "docker compose up -d failed with exit code $($compose.ExitCode). See $dockerErrLog"
-        return
-    }
+    if ($Wait) {
+        $compose = Start-Process `
+            -FilePath $docker.Source `
+            -ArgumentList @("compose", "up", "-d") `
+            -WorkingDirectory $ProjectRoot `
+            -RedirectStandardOutput $dockerOutLog `
+            -RedirectStandardError $dockerErrLog `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
 
-    if (-not $SkipOlmOcr) {
-        Wait-DockerHttpReady `
-            -Url "http://127.0.0.1:8000/v1/models" `
-            -ReadyMessage "OLM OCR service is ready." `
-            -TimeoutMessage "OLM OCR did not report healthy yet. OLM OCR may be unavailable." `
-            -Minutes 8 | Out-Null
-    }
+        if ($compose.ExitCode -ne 0) {
+            Write-Status "Docker Compose did not start cleanly. The app is still usable. See $dockerErrLog"
+            Add-Content -Path $LogFile -Value "docker compose up -d failed with exit code $($compose.ExitCode). See $dockerErrLog"
+            return
+        }
 
-    if (-not $SkipPaddleVl) {
-        Wait-DockerHttpReady `
-            -Url "http://127.0.0.1:8080/health" `
-            -ReadyMessage "PaddleOCR-VL service is ready." `
-            -TimeoutMessage "PaddleOCR-VL did not report healthy yet. The app is still usable without post process." `
-            -Minutes 8 | Out-Null
+        if (-not $SkipOlmOcr) {
+            Wait-DockerHttpReady `
+                -Url "http://127.0.0.1:8000/v1/models" `
+                -ReadyMessage "OLM OCR service is ready." `
+                -TimeoutMessage "OLM OCR did not report healthy yet. OLM OCR may be unavailable." `
+                -Minutes 5 | Out-Null
+        }
+
+        if (-not $SkipPaddleVl) {
+            Wait-DockerHttpReady `
+                -Url "http://127.0.0.1:8080/health" `
+                -ReadyMessage "PaddleOCR-VL service is ready." `
+                -TimeoutMessage "PaddleOCR-VL did not report healthy yet. The app is still usable without post process." `
+                -Minutes 5 | Out-Null
+        }
+    } else {
+        Start-Process `
+            -FilePath $docker.Source `
+            -ArgumentList @("compose", "up", "-d") `
+            -WorkingDirectory $ProjectRoot `
+            -RedirectStandardOutput $dockerOutLog `
+            -RedirectStandardError $dockerErrLog `
+            -WindowStyle Hidden
     }
 }
 
@@ -184,21 +204,22 @@ $url = "http://127.0.0.1:$Port"
 Write-Status "Project: $projectRoot"
 Write-Status "URL: $url"
 
-if (-not $SkipDockerServices) {
-    Start-DockerServices -ProjectRoot $projectRoot -LogFile $startLog
-}
-
+# Check if the OCR Tool is already running on the port
 if (Test-HttpReady -Url $url -TimeoutSeconds 2) {
     Write-Status "OCR Tool is already running. Opening browser..."
     Start-Process $url
     exit 0
 }
 
+# Resolve Python environment and prepare environment variables
 $python = Resolve-RepoPython -ProjectRoot $projectRoot
 
 $env:OCR_TOOL_PROJECT_DIR = $projectRoot
 $env:OCR_TOOL_HOST = "127.0.0.1"
 $env:OCR_TOOL_PORT = [string]$Port
+$env:PADDLE_PDX_CACHE_HOME = Join-Path $projectRoot ".paddlex"
+$env:PADDLE_HOME = Join-Path $projectRoot ".paddlex"
+$env:INDRA_OCR_MODEL_DIR = Join-Path $projectRoot "models\indra"
 $env:PADDLE_VL_API_URL = "http://127.0.0.1:8080"
 $env:OLMOCR_API_URL = "http://127.0.0.1:8000/v1"
 if (-not $env:OLMOCR_MODEL) {
@@ -217,6 +238,7 @@ $process = Start-Process `
 
 Set-Content -Path $pidFile -Value $process.Id -Encoding ASCII
 
+# Wait for Gradio web server to be ready
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-Date) -lt $deadline) {
     if ($process.HasExited) {
@@ -225,9 +247,18 @@ while ((Get-Date) -lt $deadline) {
     if (Test-HttpReady -Url $url -TimeoutSeconds 2) {
         Write-Status "OCR Tool is ready. Opening browser..."
         Start-Process $url
-        exit 0
+        break
     }
     Start-Sleep -Seconds 2
 }
 
-throw "OCR Tool did not become ready in time. Check $appErrLog."
+if (-not (Test-HttpReady -Url $url -TimeoutSeconds 2)) {
+    throw "OCR Tool did not become ready in time. Check $appErrLog."
+}
+
+# Optionally start Docker services in background for VLM models
+if (-not $SkipDockerServices) {
+    Start-DockerServices -ProjectRoot $projectRoot -LogFile $startLog
+}
+
+exit 0

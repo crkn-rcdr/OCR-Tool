@@ -14,6 +14,11 @@ from services.ocr_defaults import (
     DEFAULT_PREPROCESSING_STEPS,
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_THRESHOLD,
+    DEFAULT_DOTSOCR_API_URL,
+    DEFAULT_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_DOTSOCR_URL,
     DEFAULT_TEXT_DET_BOX_THRESH,
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN,
     DEFAULT_TEXT_DET_LIMIT_TYPE,
@@ -65,10 +70,18 @@ OPTION_LABELS = {
     "post_ocr_vl_low_confidence_threshold": "Post-OCR VL low confidence threshold",
     "post_ocr_vl_apply_corrections": "Apply post-OCR VL corrections",
     "post_ocr_vl_save_tiles": "Save post-OCR VL tiles",
+    "post_ocr_vl_concurrency": "Post-OCR VL concurrency",
+    "post_ocr_vl_batch_size": "Post-OCR VL batch size",
+    "post_ocr_vl_backend": "Post-OCR VL arbiter backend",
     "post_ocr_vl_paddlevl_url": "Post-OCR PaddleVL URL",
+    "post_ocr_vl_dotsocr_url": "Post-OCR Dots OCR URL",
+    "post_ocr_vl_dotsocr_model": "Post-OCR Dots OCR model",
     "olmocr_url": "OLM OCR API URL",
     "olmocr_model": "OLM OCR model",
     "olmocr_max_tokens": "OLM OCR max tokens",
+    "dotsocr_url": "Dots OCR API URL",
+    "dotsocr_model": "Dots OCR model",
+    "dotsocr_max_tokens": "Dots OCR max tokens",
 }
 
 OPTION_ORDER = [
@@ -98,6 +111,7 @@ OPTION_ORDER = [
     "text_rec_score_thresh",
     "text_recognition_batch_size",
     "post_ocr_vl_enabled",
+    "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
     "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
@@ -105,10 +119,17 @@ OPTION_ORDER = [
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
+    "post_ocr_vl_concurrency",
+    "post_ocr_vl_batch_size",
     "post_ocr_vl_paddlevl_url",
+    "post_ocr_vl_dotsocr_url",
+    "post_ocr_vl_dotsocr_model",
     "olmocr_url",
     "olmocr_model",
     "olmocr_max_tokens",
+    "dotsocr_url",
+    "dotsocr_model",
+    "dotsocr_max_tokens",
 ]
 
 TILE_STRATEGY_LABELS = {
@@ -131,6 +152,7 @@ TILE_DETAIL_KEYS = {
     *DOCLAYOUT_TILE_KEYS,
 }
 POST_OCR_VL_DETAIL_KEYS = {
+    "post_ocr_vl_backend",
     "post_ocr_vl_candidate_mode",
     "post_ocr_vl_max_words_enabled",
     "post_ocr_vl_max_words",
@@ -138,7 +160,11 @@ POST_OCR_VL_DETAIL_KEYS = {
     "post_ocr_vl_low_confidence_threshold",
     "post_ocr_vl_apply_corrections",
     "post_ocr_vl_save_tiles",
+    "post_ocr_vl_concurrency",
+    "post_ocr_vl_batch_size",
     "post_ocr_vl_paddlevl_url",
+    "post_ocr_vl_dotsocr_url",
+    "post_ocr_vl_dotsocr_model",
 }
 
 DOCLAYOUT_DEFAULT_OPTIONS = {
@@ -195,13 +221,29 @@ def option_applies_to_strategy(key, opt):
         )
 
     if key == "post_ocr_vl_paddlevl_url":
-        return method in PADDLE_OCR_METHODS and bool(opt.get("post_ocr_vl_enabled"))
+        backend = str(opt.get("post_ocr_vl_backend") or DEFAULT_POST_OCR_VL_BACKEND).lower()
+        return (
+            method in PADDLE_OCR_METHODS
+            and bool(opt.get("post_ocr_vl_enabled"))
+            and backend in {"paddlevl", "paddle_vl", "paddleocr_vl"}
+        )
+
+    if key in {"post_ocr_vl_dotsocr_url", "post_ocr_vl_dotsocr_model"}:
+        backend = str(opt.get("post_ocr_vl_backend") or DEFAULT_POST_OCR_VL_BACKEND).lower()
+        return (
+            method in PADDLE_OCR_METHODS
+            and bool(opt.get("post_ocr_vl_enabled"))
+            and backend in {"dots_ocr", "dotsocr", "dots"}
+        )
 
     if key in POST_OCR_VL_DETAIL_KEYS:
         return method in PADDLE_OCR_METHODS and bool(opt.get("post_ocr_vl_enabled"))
 
     if key in {"olmocr_url", "olmocr_model", "olmocr_max_tokens"}:
         return method == "OLMOCR"
+
+    if key in {"dotsocr_url", "dotsocr_model", "dotsocr_max_tokens"}:
+        return method == "DotsOCR"
 
     if key == "tile_source_images":
         return True
@@ -333,6 +375,9 @@ def models_for_run(opt, select=None):
         models.append("OCR pipeline: olmOCR vLLM API service")
         models.append(f"OLM OCR model: {opt.get('olmocr_model') or DEFAULT_OLMOCR_MODEL}")
         models.append(f"OLM OCR API URL: {opt.get('olmocr_url') or DEFAULT_OLMOCR_API_URL}")
+    elif effective_method == "IndraOCR":
+        models.append("OCR pipeline: Indra OCR (datalab-to/indra - Fast CPU ONNX)")
+        models.append("Models: LineNet detection, CTC recognition, Reading order & layout")
     elif method:
         models.append(f"Primary pipeline: {method}")
 

@@ -1,6 +1,15 @@
 from functools import lru_cache
 import importlib
+import os
+from pathlib import Path
 import sys
+
+# Ensure all users (including non-admin domain users) share the pre-cached model weights
+if "PADDLE_PDX_CACHE_HOME" not in os.environ:
+    _shared_paddlex = Path(__file__).resolve().parent.parent / ".paddlex"
+    if _shared_paddlex.exists():
+        os.environ["PADDLE_PDX_CACHE_HOME"] = str(_shared_paddlex)
+        os.environ["PADDLE_HOME"] = str(_shared_paddlex)
 
 
 def apply_headless_opencv_patch():

@@ -9,7 +9,9 @@ from services.ocr_defaults import (
     DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_CONCURRENCY,
     DEFAULT_POST_OCR_VL_ENABLED,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
@@ -234,6 +236,18 @@ def parse_args() -> argparse.Namespace:
         help="Do not save the cropped word tiles.",
     )
     parser.add_argument(
+        "--post-ocr-vl-concurrency",
+        type=int,
+        default=DEFAULT_POST_OCR_VL_CONCURRENCY,
+        help="Concurrency level for post-OCR VL verification requests.",
+    )
+    parser.add_argument(
+        "--post-ocr-vl-batch-size",
+        type=int,
+        default=DEFAULT_POST_OCR_VL_BATCH_SIZE,
+        help="Batch size for grouped word crops sent to post-OCR VL.",
+    )
+    parser.add_argument(
         "--post-ocr-vl-paddlevl-url",
         default=DEFAULT_PADDLE_VL_API_URL,
         help="PaddleVL service URL for post-OCR word checks.",
@@ -305,6 +319,8 @@ def build_options(args: argparse.Namespace) -> dict:
             ),
             "post_ocr_vl_apply_corrections": args.post_ocr_vl_apply_corrections,
             "post_ocr_vl_save_tiles": args.post_ocr_vl_save_tiles,
+            "post_ocr_vl_concurrency": max(1, args.post_ocr_vl_concurrency),
+            "post_ocr_vl_batch_size": max(1, args.post_ocr_vl_batch_size),
             "post_ocr_vl_paddlevl_url": args.post_ocr_vl_paddlevl_url,
         }
     )

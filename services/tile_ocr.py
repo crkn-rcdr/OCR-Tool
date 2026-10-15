@@ -30,12 +30,14 @@ TILE_GRID_SIZE = 3
 DEFAULT_TILE_ROWS = 3
 DEFAULT_TILE_COLS = 1
 DEFAULT_DOCLAYOUT_MODEL = "PP-DocLayoutV3"
+TILE_STRATEGY_AUTO = "auto"
+TILE_STRATEGY_NONE = "none"
 TILE_STRATEGY_GRID = "grid"
 TILE_STRATEGY_GRID_3X2 = "grid_3x2"
 TILE_STRATEGY_DOCLAYOUT_V3 = "doclayout_v3"
 TILE_STRATEGY_GRID_DOCLAYOUT_V3 = "grid_doclayout_v3"
 TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3 = "grid_3x2_doclayout_v3"
-DEFAULT_TILE_STRATEGY = TILE_STRATEGY_GRID_DOCLAYOUT_V3
+DEFAULT_TILE_STRATEGY = TILE_STRATEGY_AUTO
 GRID_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_GRID_3X2,
@@ -47,6 +49,8 @@ GRID_DOCLAYOUT_TILE_STRATEGIES = {
     TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3,
 }
 SUPPORTED_TILE_STRATEGIES = {
+    TILE_STRATEGY_AUTO,
+    TILE_STRATEGY_NONE,
     TILE_STRATEGY_GRID,
     TILE_STRATEGY_GRID_3X2,
     TILE_STRATEGY_DOCLAYOUT_V3,
@@ -333,11 +337,33 @@ def resolve_tile_grid(
     return rows, cols
 
 
+def should_use_3x2_tiling(image_path_or_size: tuple[int, int] | Path | str) -> bool:
+    """Auto-detect whether to use 3x2 quadrant tiling based on image scale and format.
+
+    Broadsheet newspapers (>= 18 Megapixels or max dimension >= 4,500px and min dimension >= 3,200px)
+    contain dense multi-column micro-classifieds where 3x2 quadrant tiling yields +5% to +10% word recall.
+    Standard books, annuals, tabloids, and pamphlets (< 18 Megapixels) fit natively inside
+    Paddle's detector limits and run 4-5x faster without tiling.
+    """
+    try:
+        if isinstance(image_path_or_size, (tuple, list)):
+            w, h = int(image_path_or_size[0]), int(image_path_or_size[1])
+        else:
+            with Image.open(image_path_or_size) as img:
+                w, h = img.size
+        megapixels = (w * h) / 1_000_000.0
+        return megapixels >= 18.0 or (max(w, h) >= 4500 and min(w, h) >= 3200)
+    except Exception:
+        return False
+
+
 def tile_grid_for_strategy(strategy: str | None) -> tuple[int, int]:
     """Return the default grid dimensions for a named tile strategy."""
     strategy = normalize_tile_strategy(strategy)
-    if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3}:
+    if strategy in {TILE_STRATEGY_GRID_3X2, TILE_STRATEGY_GRID_3X2_DOCLAYOUT_V3, TILE_STRATEGY_AUTO}:
         return 3, 2
+    if strategy in {TILE_STRATEGY_NONE, "no_tiles", "notiles"}:
+        return 1, 1
     return DEFAULT_TILE_ROWS, DEFAULT_TILE_COLS
 
 
@@ -349,7 +375,7 @@ def grid_strategy_for_shape(rows: int, cols: int) -> str:
 def resolve_tile_strategy(opt: dict) -> str:
     """Resolve the effective tile strategy from an OCR options dict."""
     strategy = normalize_tile_strategy(opt.get("tile_strategy"))
-    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_GRID
+    return strategy if strategy in SUPPORTED_TILE_STRATEGIES else TILE_STRATEGY_AUTO
 
 
 def normalize_tile_strategy(value: Any) -> str:
@@ -357,6 +383,16 @@ def normalize_tile_strategy(value: Any) -> str:
     strategy = str(value or DEFAULT_TILE_STRATEGY)
     strategy = strategy.strip().lower().replace("-", "_").replace(" ", "_")
     strategy_aliases = {
+        "auto": TILE_STRATEGY_AUTO,
+        "auto_detect": TILE_STRATEGY_AUTO,
+        "autodetect": TILE_STRATEGY_AUTO,
+        "automatic": TILE_STRATEGY_AUTO,
+        "none": TILE_STRATEGY_NONE,
+        "no_tiles": TILE_STRATEGY_NONE,
+        "notiles": TILE_STRATEGY_NONE,
+        "no_tile": TILE_STRATEGY_NONE,
+        "off": TILE_STRATEGY_NONE,
+        "disabled": TILE_STRATEGY_NONE,
         "pp_doclayoutv3": TILE_STRATEGY_DOCLAYOUT_V3,
         "pp_doclayout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
         "pp_doc_layout_v3": TILE_STRATEGY_DOCLAYOUT_V3,
@@ -2008,7 +2044,31 @@ def merge_adjacent_word_fragments(entries: list[dict[str, Any]], seam_x: list[fl
             touches_seam = touches_vertical_seam(cur_bbox, nxt_bbox, seam_x, char_w)
             overlap_text = overlapping_fragment_text(cur_text, nxt_text, cur_bbox, nxt_bbox)
 
-            if overlap_text is not None:
+            splice_res = splice_overlapping_seam_fragments(
+                cur_text,
+                nxt_text,
+                cur_bbox,
+                nxt_bbox,
+                cur_text_words,
+                cur_text_word_boxes,
+                s["entry"].get("text_word"),
+                s["entry"].get("text_word_boxes"),
+                touches_seam,
+            )
+
+            if splice_res is not None:
+                cur_text, cur_bbox, cur_text_words, cur_text_word_boxes = splice_res
+                cur_changed = True
+
+                if cur_score is None:
+                    cur_score = s["entry"].get("score")
+                elif s["entry"].get("score") is not None:
+                    cur_score = (cur_score + s["entry"].get("score")) / 2.0
+
+                if cur_angle is None and "angle" in s["entry"]:
+                    cur_angle = s["entry"].get("angle")
+
+            elif overlap_text is not None:
                 if overlap_text != cur_text:
                     cur_text = overlap_text
                     cur_bbox[2] = max(cur_bbox[2], nxt_bbox[2])
@@ -2159,18 +2219,123 @@ def touches_vertical_seam(
     char_w: float,
 ) -> bool:
     """Return whether a bounding box touches a vertical tile seam."""
-    if seam_x is None:
+    if seam_x is None or not seam_x:
         return True
 
-    if not seam_x:
-        return False
-
     eps = max(2.0, char_w * 0.35)
+    max_overlap = 250.0
     return any(
-        abs(left_bbox[2] - sx) <= eps
-        or abs(right_bbox[0] - sx) <= eps
+        (left_bbox[0] - eps <= sx <= right_bbox[2] + eps)
+        and (right_bbox[0] - max_overlap <= sx <= left_bbox[2] + max_overlap)
+        or abs(left_bbox[2] - sx) <= max_overlap
+        or abs(right_bbox[0] - sx) <= max_overlap
         for sx in seam_x
     )
+
+
+def reconstruct_spliced_text(
+    cur_text: str,
+    nxt_text: str,
+    cur_words: list[str],
+    nxt_words: list[str],
+    i_cut: int,
+    j_cut: int,
+) -> str:
+    """Reconstruct a unified text string across spliced OCR line fragments."""
+    import re
+
+    w2_target = nxt_words[j_cut]
+    m_nxt = list(re.finditer(re.escape(w2_target), nxt_text))
+    if m_nxt:
+        match_idx = min(
+            len(m_nxt) - 1,
+            max(0, int(round((j_cut / max(1, len(nxt_words) - 1)) * (len(m_nxt) - 1)))),
+        )
+        suffix = nxt_text[m_nxt[match_idx].end() :].lstrip()
+        sep = " " if suffix and not cur_text.endswith((" ", "-", "—")) else ""
+        return f"{cur_text}{sep}{suffix}"
+    return " ".join(cur_words[: i_cut + 1] + nxt_words[j_cut + 1 :])
+
+
+def splice_overlapping_seam_fragments(
+    cur_text: str,
+    nxt_text: str,
+    cur_bbox: list[float],
+    nxt_bbox: list[float],
+    cur_words: list[str] | None,
+    cur_boxes: list[list[float]] | None,
+    nxt_words: list[str] | None,
+    nxt_boxes: list[list[float]] | None,
+    touches_seam: bool,
+) -> tuple[str, list[float], list[str], list[list[float]]] | None:
+    """Splice two line fragments that overlap horizontally across a vertical seam."""
+    if not touches_seam:
+        return None
+
+    # Must have horizontal overlap
+    if cur_bbox[2] <= nxt_bbox[0]:
+        return None
+
+    w1 = list(cur_words) if cur_words else []
+    b1 = [list(b) for b in cur_boxes] if cur_boxes else []
+    w2 = list(nxt_words) if nxt_words else []
+    b2 = [list(b) for b in nxt_boxes] if nxt_boxes else []
+
+    if not w1 or not b1:
+        syn_w, syn_b = synthesize_word_boxes_for_text(cur_text, cur_bbox)
+        w1, b1 = syn_w, syn_b
+
+    if not w2 or not b2:
+        syn_w, syn_b = synthesize_word_boxes_for_text(nxt_text, nxt_bbox)
+        w2, b2 = syn_w, syn_b
+
+    if not w1 or not w2 or not b1 or not b2:
+        return None
+
+    matches = []
+    for i, (word1, box1) in enumerate(zip(w1, b1)):
+        norm1 = normalize_for_dedupe(word1)
+        for j, (word2, box2) in enumerate(zip(w2, b2)):
+            norm2 = normalize_for_dedupe(word2)
+            x_ov = max(0.0, min(box1[2], box2[2]) - max(box1[0], box2[0]))
+            y_ov = max(0.0, min(box1[3], box2[3]) - max(box1[1], box2[1]))
+            inter = x_ov * y_ov
+            a1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+            a2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+            union = a1 + a2 - inter
+            iou = inter / union if union > 0 else 0.0
+
+            is_match = False
+            if norm1 and norm2:
+                if norm1 == norm2 and (iou >= 0.20 or x_ov >= 0.35 * min(box1[2] - box1[0], box2[2] - box2[0])):
+                    is_match = True
+                elif iou >= 0.40:
+                    is_match = True
+            elif iou >= 0.50:
+                is_match = True
+
+            if is_match:
+                matches.append((i, j, iou, norm1 == norm2))
+
+    if not matches:
+        return None
+
+    exact_matches = [m for m in matches if m[3]]
+    best = exact_matches[-1] if exact_matches else matches[-1]
+    i_cut, j_cut = best[0], best[1]
+
+    merged_words = w1[: i_cut + 1] + w2[j_cut + 1 :]
+    merged_boxes = b1[: i_cut + 1] + b2[j_cut + 1 :]
+
+    merged_bbox = [
+        min(cur_bbox[0], nxt_bbox[0]),
+        min(cur_bbox[1], nxt_bbox[1]),
+        max(cur_bbox[2], nxt_bbox[2]),
+        max(cur_bbox[3], nxt_bbox[3]),
+    ]
+
+    merged_text = reconstruct_spliced_text(cur_text, nxt_text, w1, w2, i_cut, j_cut)
+    return merged_text, merged_bbox, merged_words, merged_boxes
 
 
 def should_merge_across_seam(
@@ -2185,7 +2350,7 @@ def should_merge_across_seam(
     if not left_text or not right_text or left_text.endswith(" "):
         return False
 
-    if gap < 0:
+    if gap < -max(8.0, char_w * 0.65):
         return False
 
     if seam_x is not None and not touches_seam:
@@ -2200,6 +2365,28 @@ def seam_separator(left_text: str, right_text: str, gap: float, char_w: float) -
         return ""
 
     return "" if gap <= max(1.0, char_w * 0.25) else " "
+
+
+def synthesize_word_boxes_for_text(text: str, bbox: list[float]) -> tuple[list[str], list[list[int]]]:
+    """Synthesize word tokens and bounding boxes across a merged line bounding box."""
+    import re
+    tokens = [m.group(0) for m in re.finditer(r"\S+", str(text or ""))]
+    if not tokens:
+        return [], []
+    total_chars = max(1, len(text))
+    x0, y0, x1, y1 = bbox
+    total_w = max(1.0, x1 - x0)
+    char_w = total_w / total_chars
+
+    words = []
+    boxes = []
+    for m in re.finditer(r"\S+", text):
+        w_text = m.group(0)
+        bx0 = round(x0 + m.start() * char_w)
+        bx1 = round(x0 + m.end() * char_w)
+        words.append(w_text)
+        boxes.append([int(bx0), int(round(y0)), int(bx1), int(round(y1))])
+    return words, boxes
 
 
 def finalize_merge_entry(
@@ -2226,10 +2413,13 @@ def finalize_merge_entry(
 
     if angle is not None:
         new_entry["angle"] = angle
-    if text_words is not None:
+    if text_words is not None and text_word_boxes is not None and len(text_words) > 0 and len(text_word_boxes) > 0:
         new_entry["text_word"] = text_words
-    if text_word_boxes is not None:
         new_entry["text_word_boxes"] = text_word_boxes
+    else:
+        syn_words, syn_boxes = synthesize_word_boxes_for_text(text, bbox)
+        new_entry["text_word"] = syn_words
+        new_entry["text_word_boxes"] = syn_boxes
 
     return new_entry
 
@@ -2437,6 +2627,71 @@ def looks_like_point_sequence(value: Any) -> bool:
             for point in value
         )
     )
+
+
+def scale_nested_geometry(
+    value: Any,
+    scale_x: float,
+    scale_y: float,
+    key: str | None = None,
+) -> Any:
+    """Scale nested geometry values by scale_x and scale_y."""
+    if scale_x == 1.0 and scale_y == 1.0:
+        return value
+
+    if isinstance(value, dict):
+        updated = {}
+        for child_key, child_value in value.items():
+            if should_offset_key(child_key):
+                updated[child_key] = scale_geometry_value(
+                    child_value,
+                    scale_x,
+                    scale_y,
+                )
+            else:
+                updated[child_key] = scale_nested_geometry(
+                    child_value,
+                    scale_x,
+                    scale_y,
+                    key=child_key,
+                )
+        return updated
+
+    if isinstance(value, list):
+        if key and should_offset_key(key):
+            return scale_geometry_value(value, scale_x, scale_y)
+
+        return [
+            scale_nested_geometry(item, scale_x, scale_y, key=key)
+            for item in value
+        ]
+
+    return value
+
+
+def scale_geometry_value(value: Any, scale_x: float, scale_y: float) -> Any:
+    """Scale one geometry-shaped value by the supplied scaling factors."""
+    if looks_like_bbox(value):
+        return [
+            round(value[0] * scale_x, 2),
+            round(value[1] * scale_y, 2),
+            round(value[2] * scale_x, 2),
+            round(value[3] * scale_y, 2),
+        ]
+
+    if looks_like_point_sequence(value):
+        return [
+            [round(point[0] * scale_x, 2), round(point[1] * scale_y, 2)]
+            for point in value
+        ]
+
+    if isinstance(value, dict):
+        return scale_nested_geometry(value, scale_x, scale_y)
+
+    if isinstance(value, list):
+        return [scale_geometry_value(item, scale_x, scale_y) for item in value]
+
+    return value
 
 
 def geometry_to_bbox(geometry: Any) -> list[float]:

@@ -12,16 +12,25 @@ from pathlib import Path
 from services.ocr_pp import run_ocr_job,stop_ocr
 from services.ocr_vl import run_paddlevl_job
 from services.ocr_olm import run_olmocr_job
+from services.ocr_dots import run_dotsocr_job
+from services.ocr_indra import run_indra_job
 from services.ocr_defaults import (
     DEFAULT_CLEAN_PUNCTUATION_ISSUES,
     DEFAULT_DOCLAYOUT_PADDING_PX,
+    DEFAULT_DOTSOCR_API_URL,
+    DEFAULT_DOTSOCR_MODEL,
     DEFAULT_IGNORE_BLACK_BORDER,
     DEFAULT_OCR_VERSION,
     DEFAULT_OLMOCR_API_URL,
     DEFAULT_OLMOCR_MODEL,
     DEFAULT_PADDLE_VL_API_URL,
     DEFAULT_POST_OCR_VL_APPLY_CORRECTIONS,
+    DEFAULT_POST_OCR_VL_BACKEND,
+    DEFAULT_POST_OCR_VL_BATCH_SIZE,
     DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
+    DEFAULT_POST_OCR_VL_CONCURRENCY,
+    DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+    DEFAULT_POST_OCR_VL_DOTSOCR_URL,
     DEFAULT_POST_OCR_VL_ENABLED,
     DEFAULT_POST_OCR_VL_LOW_CONFIDENCE_THRESHOLD,
     DEFAULT_POST_OCR_VL_MAX_WORDS,
@@ -38,14 +47,18 @@ from services.ocr_defaults import (
     DEFAULT_TEXT_REC_SCORE_THRESH,
     DEFAULT_TEXT_RECOGNITION_BATCH_SIZE,
     DEFAULT_TILE_OVERLAP_PX,
+    DEFAULT_TILE_SOURCE_IMAGES,
+    DEFAULT_TILE_STRATEGY,
 )
-from services.tile_ocr import tile_grid_for_strategy
+from services.tile_ocr import tile_grid_for_strategy, normalize_tile_strategy
 
 PADDLE_OCR_METHODS = {"PP-OCRv6"}
 OCR_METHOD_CHOICES = [
     ("PaddleOCR (PP-OCRv6)", "PP-OCRv6"),
+    ("Indra OCR (Fast CPU)", "IndraOCR"),
     ("PaddleVL", "PaddleVL"),
     ("OLM OCR", "OLMOCR"),
+    ("Dots OCR (BHL #1)", "DotsOCR"),
 ]
 
 APP_CSS = """
@@ -62,104 +75,86 @@ APP_CSS = """
 """
 
 BEST_PREPROCESSING_STEPS = list(DEFAULT_PREPROCESSING_STEPS)
-BEST_TILE_STRATEGY = "grid_3x2_doclayout_v3"
+BEST_TILE_STRATEGY = "auto"
+
+TILE_STRATEGY_CHOICES = [
+    ("Auto-Detect (3x2 on broadsheets, full-image on books)", "auto"),
+    ("3x2 Grid (Always tile 6 quadrants)", "grid_3x2"),
+    ("No Tiling (Full-image single pass)", "none"),
+    ("3x1 Grid (3 horizontal tiles)", "grid"),
+    ("PP-DocLayout-V3 (Adaptive block crops)", "doclayout_v3"),
+]
+DEFAULT_TILE_STRATEGY_UI = "auto"
 
 PRE_PROCESS_INFO = (
-    "Crops the detected black scan border, runs OCR on that page crop, "
-    "offsets OCR geometry back to the original image coordinates, and applies "
-    "background flattening to even newspaper page shading. The OCR-facing PNG "
-    "is saved under _preprocessed/."
+    "Crops detected scan borders, auto-deskews, and flattens uneven lighting. "
+    "Automatically detects degraded microfilm to apply adaptive CLAHE and stroke reconnection, "
+    "suppresses table grid borders to preserve tabular cell text, and applies adaptive upscaling "
+    "for micro-print when needed."
 )
 POST_PROCESS_INFO = (
-    "Cleans conservative punctuation artifacts in the saved OCR JSON. For "
-    "PP-OCRv6, it also sends suspicious word crops to PaddleVL at "
-    f"{DEFAULT_PADDLE_VL_API_URL}, applies only accepted corrections, and "
-    "writes the post-OCR review artifacts beside the OCR output. This is "
-    "disabled for standalone PaddleVL and OLM OCR."
+    "Cleans conservative punctuation artifacts, consolidates legal abbreviations (&c.), "
+    "fixes archaic long-s print, and verifies suspicious text or faded lines against "
+    "Dots OCR VLM and historical Canadian dictionaries."
 )
 
-# Define the list of supported languages for the dropdown menu
+# Define the list of supported languages for the dropdown menu,
+# prioritized by the official Canadiana 54-language census and Indigenous Canadian archives.
 LANGUAGE_CHOICES = [
-    ("Abkhazian", "abq"),
-    ("Afrikaans", "af"),
-    ("Old English", "ang"),
-    ("Arabic", "ar"),
-    ("Avar", "ava"),
-    ("Azerbaijani", "az"),
-    ("Belarusian", "be"),
-    ("Bulgarian", "bg"),
-    ("Haryanvi", "bgc"),
-    ("Bihari", "bh"),
-    ("Bhojpuri", "bho"),
-    ("Bosnian", "bs"),
-    ("Simplified Chinese", "ch"),
-    ("Chechen", "che"),
-    ("Traditional Chinese", "chinese_cht"),
-    ("Czech", "cs"),
-    ("Welsh", "cy"),
-    ("Danish", "da"),
-    ("Dargwa", "dar"),
-    ("German", "de"),
-    ("English", "en"),
-    ("Spanish", "es"),
-    ("Estonian", "et"),
-    ("Persian", "fa"),
-    ("French", "fr"),
-    ("Irish", "ga"),
-    ("Konkani", "gom"),
-    ("Hindi", "hi"),
-    ("Croatian", "hr"),
-    ("Hungarian", "hu"),
-    ("Indonesian", "id"),
-    ("Ingush", "inh"),
-    ("Icelandic", "is"),
-    ("Italian", "it"),
-    ("Japanese", "japan"),
-    ("Georgian", "ka"),
-    ("Kabardian", "kbd"),
-    ("Korean", "korean"),
-    ("Kurdish", "ku"),
-    ("Latin", "la"),
-    ("Lak", "lbe"),
-    ("Lezgin", "lez"),
-    ("Lithuanian", "lt"),
-    ("Latvian", "lv"),
-    ("Magahi", "mah"),
-    ("Maithili", "mai"),
-    ("Maori", "mi"),
-    ("Mongolian", "mn"),
-    ("Marathi", "mr"),
-    ("Malay", "ms"),
-    ("Maltese", "mt"),
-    ("Nepali", "ne"),
-    ("Newari", "new"),
-    ("Dutch", "nl"),
-    ("Norwegian", "no"),
-    ("Occitan", "oc"),
-    ("Pali", "pi"),
-    ("Polish", "pl"),
-    ("Portuguese", "pt"),
-    ("Romanian", "ro"),
-    ("Serbian (Cyrillic)", "rs_cyrillic"),
-    ("Serbian (Latin)", "rs_latin"),
-    ("Russian", "ru"),
-    ("Sanskrit", "sa"),
-    ("Sadri", "sck"),
-    ("Slovak", "sk"),
-    ("Slovenian", "sl"),
-    ("Albanian", "sq"),
-    ("Swedish", "sv"),
-    ("Swahili", "sw"),
-    ("Tabasaran", "tab"),
-    ("Tamil", "ta"),
-    ("Telugu", "te"),
-    ("Tagalog", "tl"),
-    ("Turkish", "tr"),
-    ("Uyghur", "ug"),
-    ("Ukrainian", "uk"),
-    ("Urdu", "ur"),
-    ("Uzbek", "uz"),
-    ("Vietnamese", "vi"),
+    # Automatic Detection
+    ("Auto-detect Script & Collection (Recommended)", "auto"),
+    # Top Canadiana Collections (Census Volume)
+    ("English (287,983 docs)", "en"),
+    ("French / Français (87,877 docs)", "fr"),
+    ("Traditional Chinese / 繁體中文 - e.g. 大漢公報 (23,006 docs)", "chinese_cht"),
+    ("German / Deutsch - e.g. Berliner Journal (5,540 docs)", "de"),
+    ("Yiddish / ייִדיש (5,516 docs)", "yi"),
+    ("Ukrainian / Українська - Prairie Press (3,245 docs)", "uk"),
+    ("Italian / Italiano - e.g. Il Cittadino Canadese (1,747 docs)", "it"),
+    ("Finnish / Suomi (606 docs)", "fi"),
+    ("Latin / Latina - Church & Parish Records (546 docs)", "la"),
+    ("Icelandic / Íslenska - Gimli Colony (459 docs)", "is"),
+    ("Hungarian / Magyar (383 docs)", "hu"),
+    # Indigenous Languages of Canada (Spellcheck safely bypassed)
+    ("Cree / ᓀᐦᐃᔭᐍᐏᐣ - Syllabics (257 docs)", "cr"),
+    ("Chinook Jargon (210 docs)", "chn"),
+    ("Mi'kmaq (86 docs)", "mic"),
+    ("Ojibwa / Anishinaabemowin (80 docs)", "oj"),
+    ("Mohawk / Kanienʼkéha (50 docs)", "moh"),
+    ("Inuktitut / ᐃᓄᒃᑎᑐᑦ (20 docs)", "iu"),
+    ("Tsimshian / Sm'algya̱x (11 docs)", "tsi"),
+    ("Siksika / Blackfoot (3 docs)", "bla"),
+    ("Chipewyan / Dënesųłı̨në (3 docs)", "chp"),
+    ("Delaware / Lenape (3 docs)", "del"),
+    ("Haida / X̱aad Kíl (2 docs)", "hai"),
+    ("Slave / Athapascan (1 doc)", "den"),
+    # Other Canadiana Archive & Diaspora Languages
+    ("Dutch / Nederlands (108 docs)", "nl"),
+    ("Spanish / Español (76 docs)", "es"),
+    ("Swedish / Svenska (32 docs)", "sv"),
+    ("Greek, Modern / Ελληνικά (31 docs)", "el"),
+    ("Russian / Русский - Doukhobor Records (28 docs)", "ru"),
+    ("Gaelic / Scottish Gaelic / Gàidhlig (23 docs)", "gd"),
+    ("Danish / Dansk (17 docs)", "da"),
+    ("Norwegian / Norsk (13 docs)", "no"),
+    ("Hebrew / עברית (12 docs)", "he"),
+    ("Polish / Polski (8 docs)", "pl"),
+    ("Irish / Gaeilge (4 docs)", "ga"),
+    ("Hindi / हिन्दी (4 docs)", "hi"),
+    ("Welsh / Cymraeg (3 docs)", "cy"),
+    ("Portuguese / Português (3 docs)", "pt"),
+    ("Bengali / বাংলা (2 docs)", "bn"),
+    ("Romanian / Română (1 doc)", "ro"),
+    # Additional Asian & International Scripts Supported by PP-OCRv6
+    ("Simplified Chinese / 简体中文", "ch"),
+    ("Japanese / 日本語", "japan"),
+    ("Korean / 한국어", "korean"),
+    ("Arabic / العربية", "ar"),
+    ("Persian / Farsi / فارسی", "fa"),
+    ("Vietnamese / Tiếng Việt", "vi"),
+    ("Turkish / Türkçe", "tr"),
+    ("Czech / Čeština", "cs"),
+    ("Slovak / Slovenčina", "sk"),
 ]
 
 
@@ -262,10 +257,12 @@ def build_paddle_options(
     }
 
 
-def build_post_ocr_vl_options(post_process_enabled):
+def build_post_ocr_vl_options(post_process_enabled, arbiter_backend=None):
+    backend = arbiter_backend or DEFAULT_POST_OCR_VL_BACKEND
     return {
         "post_ocr_vl_enabled": bool(post_process_enabled)
         and bool(DEFAULT_POST_OCR_VL_ENABLED),
+        "post_ocr_vl_backend": backend,
         "post_ocr_vl_candidate_mode": DEFAULT_POST_OCR_VL_CANDIDATE_MODE,
         "post_ocr_vl_max_words_enabled": False,
         "post_ocr_vl_max_words": int(DEFAULT_POST_OCR_VL_MAX_WORDS),
@@ -278,6 +275,10 @@ def build_post_ocr_vl_options(post_process_enabled):
         ),
         "post_ocr_vl_save_tiles": bool(DEFAULT_POST_OCR_VL_SAVE_TILES),
         "post_ocr_vl_paddlevl_url": DEFAULT_PADDLE_VL_API_URL,
+        "post_ocr_vl_dotsocr_url": DEFAULT_POST_OCR_VL_DOTSOCR_URL,
+        "post_ocr_vl_dotsocr_model": DEFAULT_POST_OCR_VL_DOTSOCR_MODEL,
+        "post_ocr_vl_concurrency": int(DEFAULT_POST_OCR_VL_CONCURRENCY),
+        "post_ocr_vl_batch_size": int(DEFAULT_POST_OCR_VL_BATCH_SIZE),
     }
 
 
@@ -286,12 +287,32 @@ def processing_supported(method):
     return method in PADDLE_OCR_METHODS
 
 
-def processing_control_updates(method, pre_value=True, post_value=True):
-    """Keep pre/post unavailable for standalone VL-style OCR methods."""
-    enabled = processing_supported(method)
+def update_options_for_method(method, post_val=True):
+    """Update visibility and interactivity of options based on selected OCR method.
+
+    Only shows options that are relevant to the selected model:
+    - PP-OCRv6: language, tiling, pre-process, post-process, (post-ocr arbiter if post-process checked)
+    - IndraOCR: language (for ALTO metadata)
+    - PaddleVL: language
+    - OLMOCR & DotsOCR: vision-prompt based, no language flag
+    - All methods: TXT output, HTML results dashboard
+    """
+    method = method or "PP-OCRv6"
+    is_paddle = method in PADDLE_OCR_METHODS
+    is_vl_only = method in {"OLMOCR", "DotsOCR"}
+
+    lang_visible = not is_vl_only
+    tile_visible = is_paddle
+    pre_visible = is_paddle
+    post_visible = is_paddle
+    backend_visible = is_paddle and bool(post_val)
+
     return [
-        gr.update(value=bool(pre_value) if enabled else False, interactive=enabled),
-        gr.update(value=bool(post_value) if enabled else False, interactive=enabled),
+        gr.update(visible=lang_visible),
+        gr.update(visible=tile_visible),
+        gr.update(visible=pre_visible, interactive=is_paddle),
+        gr.update(visible=post_visible, interactive=is_paddle),
+        gr.update(visible=backend_visible, interactive=backend_visible),
     ]
 
 
@@ -303,6 +324,9 @@ def submit_config(
     generate_text_file,
     pre_process_enabled,
     post_process_enabled,
+    post_ocr_backend=None,
+    tile_strategy="auto",
+    generate_results_dashboard=True,
 ):
     """
     Validate user input and start the OCR processing pipeline.
@@ -322,9 +346,11 @@ def submit_config(
 
     input_path = Path(image_input_folder)
     output_root = Path(output_folder)
-    tile_strategy = BEST_TILE_STRATEGY
-    tile_rows, tile_cols = tile_grid_for_strategy(tile_strategy)
-    tile_source_images = method in PADDLE_OCR_METHODS
+    effective_tile_strat = normalize_tile_strategy(tile_strategy or BEST_TILE_STRATEGY)
+    tile_rows, tile_cols = tile_grid_for_strategy(effective_tile_strat)
+    tile_source_images = (
+        (effective_tile_strat != "none") if method in PADDLE_OCR_METHODS else False
+    )
     
     opt = {
         "method": method,
@@ -332,6 +358,7 @@ def submit_config(
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "generate_text_file": bool(generate_text_file),
+        "generate_results_dashboard": bool(generate_results_dashboard),
         "clean_punctuation_issues": bool(post_process_enabled)
         and bool(DEFAULT_CLEAN_PUNCTUATION_ISSUES),
         "preprocessing_steps": (
@@ -340,7 +367,7 @@ def submit_config(
         "ignore_black_border": bool(pre_process_enabled)
         and bool(DEFAULT_IGNORE_BLACK_BORDER),
         "tile_source_images": tile_source_images,
-        "tile_strategy": tile_strategy,
+        "tile_strategy": effective_tile_strat,
         "tile_rows": tile_rows,
         "tile_cols": tile_cols,
         "tile_overlap_px": int(DEFAULT_TILE_OVERLAP_PX),
@@ -351,6 +378,9 @@ def submit_config(
         "olmocr_url": DEFAULT_OLMOCR_API_URL,
         "olmocr_model": DEFAULT_OLMOCR_MODEL,
         "olmocr_max_tokens": 8192,
+        "dotsocr_url": DEFAULT_DOTSOCR_API_URL,
+        "dotsocr_model": DEFAULT_DOTSOCR_MODEL,
+        "dotsocr_max_tokens": 8192,
     }
 
     yield "Preparing OCR models... OCR will start after initialization is complete."
@@ -370,21 +400,28 @@ def submit_config(
         paddle_options.pop("text_det_max_side_limit", None)
 
     opt.update(paddle_options)
-    opt.update(build_post_ocr_vl_options(post_process_enabled))
+    opt.update(build_post_ocr_vl_options(post_process_enabled, post_ocr_backend))
     if method in PADDLE_OCR_METHODS:
         iterator = run_ocr_job(input_path, output_root, opt)
     elif method == "PaddleVL":
         iterator = run_paddlevl_job(input_path, output_root, opt)
     elif method == "OLMOCR":
         iterator = run_olmocr_job(input_path, output_root, opt)
+    elif method == "DotsOCR":
+        iterator = run_dotsocr_job(input_path, output_root, opt)
+    elif method == "IndraOCR":
+        iterator = run_indra_job(input_path, output_root, opt)
     else:
         yield f"Unsupported OCR method: {method}"
         return
 
+    last_message = ""
     for message in iterator:
+        last_message = message
         yield message
 
-    yield " OCR Completed, please check pdf and alto files at your output folder"
+    if not last_message:
+        yield "OCR Completed, please check pdf and alto files at your output folder."
 
 # Create the main Gradio application interface.
 with gr.Blocks() as demo:
@@ -417,7 +454,17 @@ with gr.Blocks() as demo:
         language_dropdown = gr.Dropdown(
             choices=LANGUAGE_CHOICES,
             label="Select Language",
-            value=None,
+            value="auto",
+        )
+
+        tile_strategy_dropdown = gr.Dropdown(
+            choices=TILE_STRATEGY_CHOICES,
+            value=DEFAULT_TILE_STRATEGY_UI,
+            label="Image Tiling Strategy",
+            info=(
+                "Auto-Detect (Recommended) automatically applies 3x2 quadrant tiling for large broadsheets (30+ MP) "
+                "to maximize fine-print word recall, and fast full-image pass for standard books/pamphlets."
+            ),
         )
 
         generate_text_file = gr.Checkbox(
@@ -426,6 +473,16 @@ with gr.Blocks() as demo:
             info=(
                 "When enabled, writes one TXT file per image and skips "
                 "searchable PDF and ALTO generation."
+            ),
+        )
+
+        generate_results_dashboard = gr.Checkbox(
+            label="Generate HTML results dashboard",
+            value=True,
+            info=(
+                "When enabled, builds an interactive standalone HTML results dashboard "
+                "with bounding boxes color-coded by confidence, word counts, and navigation, "
+                "and opens it in a new browser tab upon completion."
             ),
         )
 
@@ -439,6 +496,16 @@ with gr.Blocks() as demo:
             label="post process",
             value=True,
             info=POST_PROCESS_INFO,
+        )
+
+        post_ocr_backend = gr.Dropdown(
+            choices=[
+                ("Dots OCR (BHL #1 - Recommended)", "dots_ocr"),
+                ("PaddleVL", "paddlevl"),
+            ],
+            value=DEFAULT_POST_OCR_VL_BACKEND,
+            label="Post-OCR VLM Arbiter",
+            info="Vision-language model used for word-level arbitration and spellcheck verification.",
         )
         
     # OCR action buttons.      
@@ -457,10 +524,13 @@ with gr.Blocks() as demo:
         output_folder,
         output_folder_btn,
         language_dropdown,
+        tile_strategy_dropdown,
         method_radio,
         generate_text_file,
+        generate_results_dashboard,
         pre_process,
         post_process,
+        post_ocr_backend,
     ]
 
     # Open a folder selection dialog for the input folder.
@@ -478,9 +548,24 @@ with gr.Blocks() as demo:
     )
 
     method_radio.change(
-        fn=processing_control_updates,
-        inputs=[method_radio, pre_process, post_process],
-        outputs=[pre_process, post_process],
+        fn=update_options_for_method,
+        inputs=[method_radio, post_process],
+        outputs=[
+            language_dropdown,
+            tile_strategy_dropdown,
+            pre_process,
+            post_process,
+            post_ocr_backend,
+        ],
+    )
+
+    post_process.change(
+        fn=lambda post_val, method_val: gr.update(
+            visible=bool(post_val) and processing_supported(method_val),
+            interactive=bool(post_val) and processing_supported(method_val),
+        ),
+        inputs=[post_process, method_radio],
+        outputs=[post_ocr_backend],
     )
 
 
@@ -495,21 +580,26 @@ with gr.Blocks() as demo:
 
     def after_run(method, pre_value, post_value):
         """
-        Re-enable UI components after OCR processing completes.
+        Re-enable UI components after OCR processing completes while preserving model-specific visibility.
         """
-        pre_update, post_update = processing_control_updates(
-            method,
-            pre_value,
-            post_value,
+        lang_up, tile_up, pre_up, post_up, backend_up = update_options_for_method(
+            method, post_value
         )
         return [
-            *[
-                gr.update(interactive=True)
-                for _ in ui_components[:-2]
-            ],
-            pre_update,
-            post_update,
-            gr.update(interactive=False)
+            gr.update(interactive=True),                              # submit_btn
+            gr.update(interactive=True),                              # image_input_folder
+            gr.update(interactive=True),                              # image_input_btn
+            gr.update(interactive=True),                              # output_folder
+            gr.update(interactive=True),                              # output_folder_btn
+            gr.update(interactive=True, visible=lang_up["visible"]),  # language_dropdown
+            gr.update(interactive=True, visible=tile_up["visible"]),  # tile_strategy_dropdown
+            gr.update(interactive=True),                              # method_radio
+            gr.update(interactive=True),                              # generate_text_file
+            gr.update(interactive=True),                              # generate_results_dashboard
+            pre_up,                                                   # pre_process
+            post_up,                                                  # post_process
+            backend_up,                                               # post_ocr_backend
+            gr.update(interactive=False),                             # stop_btn
         ]
 
     def stop_clicked():
@@ -536,6 +626,9 @@ with gr.Blocks() as demo:
         generate_text_file,
         pre_process,
         post_process,
+        post_ocr_backend,
+        tile_strategy_dropdown,
+        generate_results_dashboard,
     ],
     outputs=output
     ).then(

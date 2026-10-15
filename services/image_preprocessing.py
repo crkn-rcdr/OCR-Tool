@@ -139,6 +139,74 @@ def preprocessing_enabled(opt: dict | None) -> bool:
     )
 
 
+def detect_microfilm_degradation(gray: np.ndarray) -> tuple[bool, dict[str, Any]]:
+    """Analyze image contrast, edge gradient, and background unevenness to auto-detect degraded microfilm.
+
+    Historical microfilms typically feature:
+    1. Soft, blurry letter strokes (Laplacian variance < 75) and compressed dynamic range with faded gray ink (p5 > 50).
+    2. Strong optical vignette / dark border gradient (corner brightness < 35% of page center).
+    3. Severe uneven background illumination across page quadrants (quadrant background std > 5.0).
+    """
+    height, width = gray.shape[:2]
+    sample = gray[
+        int(height * 0.1) : int(height * 0.9),
+        int(width * 0.1) : int(width * 0.9),
+    ]
+    if sample.size == 0:
+        return False, {}
+
+    p5, p95 = np.percentile(sample, [5, 95])
+    contrast_range = float(p95 - p5)
+    lap_var = float(cv2.Laplacian(sample, cv2.CV_64F).var())
+    std = float(sample.std())
+
+    # Check optical vignetting / dark border fade (prominent in microfilm negative reels)
+    cw = max(50, int(width * 0.05))
+    ch = max(50, int(height * 0.05))
+    corners = [
+        gray[0:ch, 0:cw],
+        gray[0:ch, width - cw : width],
+        gray[height - ch : height, 0:cw],
+        gray[height - ch : height, width - cw : width],
+    ]
+    corner_avg = float(np.mean([float(c.mean()) for c in corners]))
+    center_area = gray[int(height * 0.25) : int(height * 0.75), int(width * 0.25) : int(width * 0.75)]
+    center_avg = float(center_area.mean()) if center_area.size > 0 else 128.0
+    vignette_ratio = corner_avg / max(1.0, center_avg)
+
+    # Check quadrant background variance
+    qh, qw = sample.shape[0] // 2, sample.shape[1] // 2
+    quadrants = [
+        float(sample[:qh, :qw].mean()),
+        float(sample[:qh, qw:].mean()),
+        float(sample[qh:, :qw].mean()),
+        float(sample[qh:, qw:].mean()),
+    ]
+    quadrant_std = float(np.std(quadrants))
+
+    # Microfilm signature:
+    # 1. Soft stroke edges (lap_var < 75.0) combined with faded ink (p5 > 50.0)
+    # 2. Or very low sharpness (lap_var < 60.0) and compressed contrast (range < 140.0)
+    # 3. Or severe negative microfilm vignette (vignette_ratio < 0.25) with background gradient
+    is_microfilm = bool(
+        (lap_var < 75.0 and p5 > 50.0)
+        or (lap_var < 60.0 and contrast_range < 140.0)
+        or (vignette_ratio < 0.25 and quadrant_std > 5.0)
+    )
+
+    details = {
+        "laplacian_variance": round(lap_var, 1),
+        "percentile_5": round(float(p5), 1),
+        "percentile_95": round(float(p95), 1),
+        "contrast_range": round(contrast_range, 1),
+        "std_dev": round(std, 1),
+        "vignette_ratio": round(vignette_ratio, 3),
+        "quadrant_std": round(quadrant_std, 2),
+        "is_microfilm": is_microfilm,
+    }
+    return is_microfilm, details
+
+
 def preprocess_image_for_ocr(
     image_path: Path,
     out_dir: Path,
@@ -155,8 +223,6 @@ def preprocess_image_for_ocr(
     ignore_black_border = bool(
         (opt or {}).get("ignore_black_border", DEFAULT_IGNORE_BLACK_BORDER)
     )
-    if not preprocessing_steps and not ignore_black_border:
-        return image_path, None
 
     image_path = Path(image_path)
     out_dir = Path(out_dir)
@@ -177,11 +243,61 @@ def preprocess_image_for_ocr(
         steps.append("crop_black_border")
         details.update(border_details)
 
-    processed, step_details = apply_preprocessing_steps(gray, preprocessing_steps)
-    details.update(step_details)
-    details["steps"] = [*steps, *step_details.get("steps", [])]
+    # Auto-deskew: correct slight page skew (0.35 deg to 5.0 deg) to keep line baselines horizontal
+    skew_angle = estimate_skew_angle(gray)
+    if 0.35 <= abs(skew_angle) <= MAX_CONSERVATIVE_DESKEW_DEGREES:
+        gray = rotate_keep_size(gray, skew_angle)
+        steps.append("auto_deskew")
+        details["auto_deskew_angle_degrees"] = round(float(skew_angle), 4)
 
-    step_suffix = "_".join(preprocessing_steps)
+    # Auto-suppress heavy table and form ruling lines that slice into text bounding boxes
+    gray, lines_suppressed = suppress_ruling_lines_if_present(gray)
+    if lines_suppressed:
+        steps.append("suppress_ruling_lines")
+        details["table_ruling_lines_suppressed"] = True
+
+    # Auto-detect degraded microfilm and dynamically apply background flattening + CLAHE + stroke reconnection
+    is_microfilm, microfilm_details = detect_microfilm_degradation(gray)
+    details["microfilm_detection"] = microfilm_details
+    effective_steps = list(preprocessing_steps)
+    if is_microfilm:
+        if "background_flatten" not in effective_steps:
+            effective_steps.insert(0, "background_flatten")
+            details["auto_microfilm_flatten_applied"] = True
+        if "contrast" not in effective_steps:
+            effective_steps.append("contrast")
+            details["auto_microfilm_clahe_applied"] = True
+
+    processed, step_details = apply_preprocessing_steps(gray, effective_steps)
+    if is_microfilm:
+        processed = reconnect_broken_strokes(processed)
+        step_details.setdefault("steps", []).append("stroke_reconnect")
+        details["auto_stroke_reconnect_applied"] = True
+
+    # Adaptive micro-print upscaling: if character heights are tiny (< 18px),
+    # upscale 1.5x with bicubic interpolation so DBNet & SVTR see optimal training dimensions
+    median_h = estimate_median_character_height(gray)
+    details["median_character_height_px"] = round(median_h, 1)
+    if median_h < 18.0 and max(original_height, original_width) <= 6000:
+        new_w = int(round(processed.shape[1] * 1.5))
+        new_h = int(round(processed.shape[0] * 1.5))
+        processed = cv2.resize(processed, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        details["coordinate_scale_factor"] = 1.5
+        details["micro_print_upscaling_applied"] = True
+        step_details.setdefault("steps", []).append("micro_print_upscale")
+
+    if lines_suppressed:
+        details["table_unclip_ratio"] = 1.25
+
+    details.update(step_details)
+    all_applied_steps = [*steps, *step_details.get("steps", [])]
+    details["steps"] = all_applied_steps
+
+    # If no preprocessing transformations were required, pass through the original image
+    if not all_applied_steps and not effective_steps and not details.get("micro_print_upscaling_applied"):
+        return image_path, None
+
+    step_suffix = "_".join(effective_steps)
     if ignore_black_border and step_suffix:
         suffix = f"black_border_{step_suffix}"
     elif ignore_black_border:
@@ -198,8 +314,8 @@ def preprocess_image_for_ocr(
     metadata = {
         "enabled": True,
         "preset": preset,
-        "preprocessing_steps": preprocessing_steps,
-        "label": preprocessing_steps_label(preprocessing_steps),
+        "preprocessing_steps": effective_steps,
+        "label": preprocessing_steps_label(effective_steps),
         "ignore_black_border": ignore_black_border,
         "original_input_path": str(image_path),
         "ocr_input_path": str(output_path),
@@ -312,6 +428,50 @@ def detect_page_bbox_from_black_border(gray: np.ndarray) -> tuple[int, int, int,
     right = min(width, x1 + 1 + padding)
     bottom = min(height, y1 + 1 + padding)
 
+    # Safety safeguard: Verify that cropped margins are genuinely dark scan/carrier borders,
+    # preventing internal column gutters, tables, or ruling lines from cutting off text columns.
+    if right < width:
+        margin_right = gray[:, right:width]
+        if margin_right.size > 0 and (margin_right.mean() > 70 or (margin_right > 80).mean() > 0.15):
+            outer_w = max(5, int(width * 0.015))
+            outer_right = gray[:, width - outer_w:width]
+            if outer_right.mean() > 70 or (outer_right > 80).mean() > 0.15:
+                right = width
+            else:
+                col_bright = (gray > 80).mean(axis=0)
+                new_right = width
+                for x in range(width - 1, right, -1):
+                    if col_bright[x] >= 0.20:
+                        new_right = min(width, x + padding)
+                        break
+                right = max(right, new_right)
+
+    if left > 0:
+        margin_left = gray[:, 0:left]
+        if margin_left.size > 0 and (margin_left.mean() > 70 or (margin_left > 80).mean() > 0.15):
+            outer_w = max(5, int(width * 0.015))
+            outer_left = gray[:, 0:outer_w]
+            if outer_left.mean() > 70 or (outer_left > 80).mean() > 0.15:
+                left = 0
+            else:
+                col_bright = (gray > 80).mean(axis=0)
+                new_left = 0
+                for x in range(0, left):
+                    if col_bright[x] >= 0.20:
+                        new_left = max(0, x - padding)
+                        break
+                left = min(left, new_left)
+
+    if top > 0:
+        margin_top = gray[0:top, :]
+        if margin_top.size > 0 and (margin_top.mean() > 70 or (margin_top > 80).mean() > 0.15):
+            top = 0
+
+    if bottom < height:
+        margin_bot = gray[bottom:height, :]
+        if margin_bot.size > 0 and (margin_bot.mean() > 70 or (margin_bot > 80).mean() > 0.15):
+            bottom = height
+
     if (right - left) < width * 0.4 or (bottom - top) < height * 0.4:
         return None
 
@@ -359,6 +519,14 @@ def apply_clahe(gray: np.ndarray) -> np.ndarray:
     """Boost local contrast with CLAHE while preserving grayscale output."""
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     return clahe.apply(gray)
+
+
+def reconnect_broken_strokes(gray: np.ndarray) -> np.ndarray:
+    """Subtle morphological closing on inverted grayscale to bridge 1-pixel stroke fractures."""
+    inv = 255 - gray
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    closed_inv = cv2.morphologyEx(inv, cv2.MORPH_CLOSE, kernel)
+    return 255 - closed_inv
 
 
 def background_flatten(gray: np.ndarray) -> np.ndarray:
@@ -453,3 +621,62 @@ def odd_between(value: int, minimum: int, maximum: int) -> int:
     if value % 2 == 0:
         value += 1
     return min(value, maximum if maximum % 2 == 1 else maximum - 1)
+
+
+
+def suppress_ruling_lines_if_present(gray: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Detect and suppress heavy table/form grid lines that fragment text bounding boxes."""
+    h, w = gray.shape[:2]
+    margin_y = int(h * 0.04)
+    margin_x = int(w * 0.04)
+    inner = gray[margin_y : h - margin_y, margin_x : w - margin_x]
+    if inner.size == 0:
+        return gray, False
+
+    thresh = cv2.adaptiveThreshold(
+        inner, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
+    )
+    h_len = max(30, inner.shape[1] // 25)
+    h_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1)))
+
+    v_len = max(30, inner.shape[0] // 30)
+    v_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
+
+    # Forms and tables have substantial grid intersections (>= 15 grid points)
+    grid_intersections = cv2.bitwise_and(h_lines, v_lines)
+    if cv2.countNonZero(grid_intersections) >= 15:
+        table_grid = cv2.bitwise_or(h_lines, v_lines)
+        dilated = cv2.dilate(table_grid, np.ones((3, 3), np.uint8), iterations=1)
+        inner_cleaned = cv2.inpaint(inner, dilated, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+        result = gray.copy()
+        result[margin_y : h - margin_y, margin_x : w - margin_x] = inner_cleaned
+        return result, True
+
+    return gray, False
+
+
+def estimate_median_character_height(gray: np.ndarray) -> float:
+    """Fast estimation of median text character height on the page in pixels."""
+    h, w = gray.shape[:2]
+    ch = min(1200, h)
+    cw = min(1200, w)
+    cy, cx = h // 2, w // 2
+    crop = gray[cy - ch // 2 : cy + ch // 2, cx - cw // 2 : cx + cw // 2]
+    if crop.size == 0:
+        return 24.0
+
+    _, thresh = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
+
+    heights = []
+    for i in range(1, min(num_labels, 500)):
+        comp_w = stats[i, cv2.CC_STAT_WIDTH]
+        comp_h = stats[i, cv2.CC_STAT_HEIGHT]
+        comp_area = stats[i, cv2.CC_STAT_AREA]
+        if 8 <= comp_h <= 65 and 4 <= comp_w <= 65 and 20 <= comp_area <= 2200:
+            if max(comp_w, comp_h) / max(1, min(comp_w, comp_h)) <= 3.2:
+                heights.append(comp_h)
+
+    if len(heights) >= 20:
+        return float(np.median(heights))
+    return 24.0
